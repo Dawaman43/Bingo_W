@@ -17,11 +17,12 @@ function App() {
       {/* Public routes */}
       <Route path="/" element={<Home />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/forget-password" element={<ForgetPassword />} />
 
       {/* Protected routes group */}
       <Route element={<ProtectedRoute />}>
         <Route path="/logout" element={<Logout />} />
-        <Route path="/forget-password" element={<ForgetPassword />} />
+       
 
         {/* Cashier */}
         <Route path="/cashier-report" element={<CashierReport />} />
