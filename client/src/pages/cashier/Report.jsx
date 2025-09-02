@@ -1,7 +1,7 @@
 import React from "react";
 
-function Report() {
+function CashierReport() {
   return <div>Report</div>;
 }
 
-export default Report;
+export default CashierReport;
