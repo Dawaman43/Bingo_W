@@ -1,7 +1,8 @@
-import express from 'express';
-import 'dotenv/config';
-import connectDB from './configs/db.js';
-import cors from 'cors';
+import express from "express";
+import "dotenv/config";
+import connectDB from "./configs/db.js";
+import cors from "cors";
+import authRoutes from "./routes/authRoutes.js";
 
 // Initialize express
 const app = express();
@@ -10,19 +11,20 @@ const app = express();
 await connectDB();
 
 // Middleware
-app.use(cors({
-  origin: 'http://localhost:5173', // Frontend origin
-  credentials: true                // Allow credentials 
-}));
-
-
+app.use(
+  cors({
+    origin: "http://localhost:5173", // Frontend origin
+    credentials: true, // Allow credentials
+  })
+);
 
 app.use(express.json());
 
-
 // Test route
-app.get('/', (req, res) => res.send("Server is running"));
 
+app.get("/", (req, res) => res.send("Server is running"));
+
+app.use("/api/auth", authRoutes);
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
