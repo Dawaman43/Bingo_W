@@ -1,8 +1,13 @@
 import express from 'express';
 import 'dotenv/config';
+import connectDB from './configs/db.js';
 
 // Initialize express
 const app = express();
+
+// Connect to database
+await connectDB();
+
 
 
 app.use(express.json());
