@@ -10,24 +10,33 @@ function Login() {
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const data = await loginUser({ email, password });
-      //console.log("Login response:", data);
+  e.preventDefault();
+  try {
+    const data = await loginUser({ email, password });
+    
+    if (data?.success) {
+      toast.success("Login successful!");
 
-      if (data?.success) {
-        toast.success("Login successful! ");
-
-        // 👇 navigate to admin dashboard
+      const role = (data.user?.role || "").toLowerCase(); // use the user object from backend
+      if (role === "admin") {
         navigate("/admin-dashboard");
+      } else if (role === "cashier") {
+        navigate("/cashier");
+      } else if (role === "moderator") {
+        navigate("/moderator");
       } else {
-        toast.error(data?.message || "Invalid credentials");
+        navigate("/"); // fallback
       }
-    } catch (err) {
-      console.error(err);
-      toast.error("Something went wrong. Please try again.");
+
+    } else {
+      toast.error(data?.message || "Invalid credentials");
     }
-  };
+  } catch (err) {
+    console.error(err);
+    toast.error("Something went wrong. Please try again.");
+  }
+};
+
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
