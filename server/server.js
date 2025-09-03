@@ -3,6 +3,7 @@ import "dotenv/config";
 import connectDB from "./configs/db.js";
 import cors from "cors";
 import authRoutes from "./routes/authRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 // Initialize express
 const app = express();
@@ -24,7 +25,9 @@ app.use(express.json());
 
 app.get("/", (req, res) => res.send("Server is running"));
 
+//Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
