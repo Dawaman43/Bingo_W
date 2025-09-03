@@ -1,16 +1,22 @@
 import React, { useState } from "react";
+import { useAuth } from "../../context/AuthContext";
 
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const { loginUser } = useAuth();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    console.log("Login submitted:", { email, password });
+    const data = await loginUser({ email, password });
+    console.log("Login response:", data);
+  };
+
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    console.log("Login submitted:", { email, password });
-    // TODO: connect to your backend login API
-  };
+
 
   const handleResetSubmit = (e) => {
     e.preventDefault();

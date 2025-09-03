@@ -52,7 +52,7 @@ export const login = async (req, res, next) => {
         .json({ message: "Email and password are required" });
     }
 
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email }).select("+password");
 
     if (!existingUser) {
       return res
