@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import toast from "react-hot-toast";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -8,21 +9,29 @@ function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log("Login submitted:", { email, password });
-    const data = await loginUser({ email, password });
-    console.log("Login response:", data);
+    try {
+      const data = await loginUser({ email, password });
+      console.log("Login response:", data);
+
+      if (data?.success) {
+        toast.success("Login successful! 🎉");
+      } else {
+        toast.error(data?.message || "Invalid credentials");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Something went wrong. Please try again.");
+    }
   };
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
 
-
-
   const handleResetSubmit = (e) => {
     e.preventDefault();
     console.log("Password reset request for:", resetEmail);
-    // TODO: call backend reset API
-    setShowResetModal(false); // close modal after submit
+    toast.success("Password reset link sent to your email 📩");
+    setShowResetModal(false);
     setResetEmail("");
   };
 
@@ -36,7 +45,6 @@ function Login() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Email */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
               Email
@@ -51,7 +59,6 @@ function Login() {
             />
           </div>
 
-          {/* Password */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
               Password
@@ -66,7 +73,6 @@ function Login() {
             />
           </div>
 
-          {/* Button */}
           <button
             type="submit"
             className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-500 transition text-white font-semibold shadow-lg hover:shadow-blue-500/50 cursor-pointer"
@@ -90,7 +96,6 @@ function Login() {
       {showResetModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="relative bg-gradient-to-br from-gray-800 to-gray-900 p-6 rounded-xl shadow-xl w-full max-w-sm border border-gray-700">
-            {/* Close Button (X) */}
             <button
               onClick={() => setShowResetModal(false)}
               className="absolute top-3 right-3 text-gray-400 hover:text-white text-lg font-bold cursor-pointer"

@@ -1,8 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import Home from "./pages/Home";
+import { Toaster } from "react-hot-toast";
 import Login from "./pages/auth/Login";
 import SelectCard from "./pages/cashier/SelectCard";
-
 import AddUser from "./pages/admin/AddUser";
 import Control from "./pages/moderator/Control";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -12,10 +12,12 @@ import CashierReport from "./pages/cashier/Report";
 
 function App() {
   return (
-    <Routes>
-      {/* Public routes */}
-      <Route path="/" element={<Home />} />
-      <Route path="/login" element={<Login />} />
+    <>
+      <Toaster position="top-right" />
+      <Routes>
+        {/* Public routes */}
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
 
 
       {/* Protected routes group */}
@@ -36,6 +38,7 @@ function App() {
         <Route path="/control" element={<Control />} />
       </Route>
     </Routes>
+    </>
   );
 }
 
