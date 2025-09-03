@@ -3,7 +3,7 @@ import Home from "./pages/Home";
 import Login from "./pages/auth/Login";
 import Logout from "./pages/auth/Logout";
 import SelectCard from "./pages/cashier/SelectCard";
-import ForgetPassword from "./pages/auth/ForgetPassword";
+
 import AddUser from "./pages/admin/AddUser";
 import Control from "./pages/moderator/Control";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -22,7 +22,7 @@ function App() {
       {/* Protected routes group */}
       <Route element={<ProtectedRoute />}>
         <Route path="/logout" element={<Logout />} />
-       
+
 
         {/* Cashier */}
         <Route path="/cashier-report" element={<CashierReport />} />
