@@ -1,5 +1,6 @@
 import User from "../models/User.js";
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 
 export const adminRegister = async (req, res, next) => {
   try {
@@ -37,6 +38,57 @@ export const adminRegister = async (req, res, next) => {
     });
   } catch (error) {
     console.error("Error registering admin:", error);
+    next(error);
+  }
+};
+
+export const login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Email and password are required" });
+    }
+
+    const existingUser = await User.findOne({ email });
+
+    if (!existingUser) {
+      return res
+        .status(404)
+        .json({ message: "Can't find user with the provided email" });
+    }
+
+    const isMatch = await bcrypt.compare(password, existingUser.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const payload = {
+      id: existingUser._id,
+      name: existingUser.name,
+      email: existingUser.email,
+      role: existingUser.role,
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET_KEY, {
+      expiresIn: "7d",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "User logged in successfully",
+      user: {
+        id: existingUser._id,
+        name: existingUser.name,
+        email: existingUser.email,
+        role: existingUser.role,
+      },
+      token,
+    });
+  } catch (error) {
+    console.error("Error logging in user:", error);
     next(error);
   }
 };
