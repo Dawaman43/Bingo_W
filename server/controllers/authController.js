@@ -60,6 +60,12 @@ export const login = async (req, res, next) => {
         .json({ message: "Can't find user with the provided email" });
     }
 
+    if (!existingUser.password) {
+      return res
+        .status(500)
+        .json({ message: "Password not set for this user" });
+    }
+
     const isMatch = await bcrypt.compare(password, existingUser.password);
     if (!isMatch) {
       return res.status(401).json({ message: "Invalid credentials" });
