@@ -1,6 +1,6 @@
-
+// context/AuthContext.jsx
 import { createContext, useContext, useState } from "react";
-import { login as loginService } from "../services/auth"
+import { login as loginService, logout as logoutService } from "../services/auth";
 
 const AuthContext = createContext();
 
@@ -21,7 +21,12 @@ export const AuthProvider = ({ children }) => {
   };
 
   // handle logout
-  const logoutUser = () => {
+  const logoutUser = async () => {
+    try {
+      await logoutService(); // call backend
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
     sessionStorage.removeItem("token");
     setUser(null);
   };

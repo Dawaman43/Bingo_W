@@ -9,3 +9,9 @@ export const login = async (data) => {
   return res.data; // <-- The key change: const res = just the data
 };
 
+// Logout
+export const logout = async () => {
+  const res = await API.post('/auth/logout');
+  return res.data;
+};
+
