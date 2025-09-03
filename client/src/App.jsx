@@ -1,7 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import Home from "./pages/Home";
 import Login from "./pages/auth/Login";
-import Logout from "./pages/auth/Logout";
 import SelectCard from "./pages/cashier/SelectCard";
 
 import AddUser from "./pages/admin/AddUser";
@@ -21,7 +20,7 @@ function App() {
 
       {/* Protected routes group */}
       <Route element={<ProtectedRoute />}>
-        <Route path="/logout" element={<Logout />} />
+        
 
 
         {/* Cashier */}
