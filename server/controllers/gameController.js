@@ -1,6 +1,6 @@
-const Game = require("../models/Game");
+import Game from "../models/Game.js";
 
-const createGame = async (req, res) => {
+export const createGame = async (req, res) => {
   try {
     const { betAmount, selectedCards, houseFeePercentage } = req.body;
 
@@ -35,7 +35,7 @@ const createGame = async (req, res) => {
   }
 };
 
-const getAllGames = async (req, res) => {
+export const getAllGames = async (req, res) => {
   try {
     const games = await Game.find().sort({ createdAt: -1 });
     res.status(200).json({ data: games });
@@ -44,7 +44,7 @@ const getAllGames = async (req, res) => {
   }
 };
 
-const getGameById = async (req, res) => {
+export const getGameById = async (req, res) => {
   try {
     const game = await Game.findById(req.params.id);
     if (!game) return res.status(404).json({ message: "Game not found" });
@@ -52,10 +52,4 @@ const getGameById = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: "Server error" });
   }
-};
-
-module.exports = {
-  createGame,
-  getAllGames,
-  getGameById,
 };

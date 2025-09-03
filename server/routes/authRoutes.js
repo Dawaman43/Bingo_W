@@ -10,6 +10,6 @@ route.post("/login", login);
 route.post("/logout", verifyToken, logout);
 
 //admin register
-route.post("/admin-register", verifyToken, isAdmin, adminRegister);
+route.post("/admin-register", adminRegister);
 
 export default route;
