@@ -22,16 +22,19 @@ const Home = () => {
             title="Admin"
             description="Login as admin"
             link="/login"
+            role="admin"
           />
           <Card
             title="Cashier"
             description="Manages games and daily operations"
             link="/login"
+            role="cashier"
           />
           <Card
             title="Moderator"
             description="Moderates the platform"
             link="/login"
+            role="moderator"
           />
         </div>
       </div>

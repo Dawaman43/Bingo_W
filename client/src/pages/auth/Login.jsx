@@ -1,33 +1,39 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import toast from "react-hot-toast";
-import { useNavigate } from "react-router-dom";
+import { useNavigate,useLocation } from "react-router-dom";
 
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const { loginUser } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const selectedRole = location.state?.role; // e.g., "admin"
 
   const handleSubmit = async (e) => {
   e.preventDefault();
   try {
     const data = await loginUser({ email, password });
-    
-    if (data?.success) {
-      toast.success("Login successful!");
 
-      const role = (data.user?.role || "").toLowerCase(); // use the user object from backend
-      if (role === "admin") {
-        navigate("/admin-dashboard");
-      } else if (role === "cashier") {
-        navigate("/cashier");
-      } else if (role === "moderator") {
-        navigate("/moderator");
-      } else {
-        navigate("/"); // fallback
+    if (data?.success) {
+      const userRole = (data.user?.role || "").toLowerCase();
+
+      // Check if logged-in role matches the selected card
+      if (selectedRole && selectedRole !== userRole) {
+        toast.error(
+          `Access denied! You cannot login as ${selectedRole}. Your role is ${userRole}.`
+        );
+        return; // stop further navigation
       }
 
+      toast.success("Login successful!");
+
+      // Navigate based on user role
+      if (userRole === "admin") navigate("/admin-dashboard");
+      else if (userRole === "cashier") navigate("/cashier");
+      else if (userRole === "moderator") navigate("/moderator");
+      else navigate("/");
     } else {
       toast.error(data?.message || "Invalid credentials");
     }
@@ -36,6 +42,7 @@ function Login() {
     toast.error("Something went wrong. Please try again.");
   }
 };
+
 
 
   const [showResetModal, setShowResetModal] = useState(false);
