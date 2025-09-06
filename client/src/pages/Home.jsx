@@ -9,7 +9,7 @@ const Home = () => {
         {/* Title + description */}
         <div className="text-center mb-12">
           <h1 className="text-5xl font-extrabold mb-4 text-blue-400 drop-shadow-lg">
-            Welcome to Dagi Bingo
+            Welcome to Joker Bingo
           </h1>
           <p className="text-gray-300 text-lg max-w-2xl mx-auto">
             Choose your role to get started. Click any card below to explore the pages.
