@@ -29,7 +29,7 @@ export default function Sidebar({ isOpen, toggleSidebar }) {
           <Home size={20} /> Dashboard
         </Link>
         <Link
-          to="/admin/add-user"
+          to="/add-user"
           className="flex items-center gap-3 p-2 rounded hover:bg-gray-800 transition"
           onClick={toggleSidebar}
         >
