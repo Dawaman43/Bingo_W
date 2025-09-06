@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import axios from "axios";
 import { toast } from "react-hot-toast";
-import { FaArrowLeft } from "react-icons/fa"; 
-import { useNavigate } from "react-router-dom"; 
+import { FaArrowLeft } from "react-icons/fa";
+import { useNavigate } from "react-router-dom";
+import { addUser } from "../../services/admin";  // use the axios instance you created
 
 const AddUserPage = () => {
   const navigate = useNavigate();
@@ -25,14 +25,17 @@ const AddUserPage = () => {
   };
 
   // handle submit
-  const handleSubmit = async (e) => {
+   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const res = await axios.post("/api/add-users", formData); // <-- backend route
+      const res = await addUser(formData); //  use service
       toast.success("User added successfully!");
       setFormData({ name: "", email: "", password: "", role: "cashier" });
+
+      // optional: redirect after success
+      setTimeout(() => navigate("/admin-dashboard"), 1500);
     } catch (err) {
       console.error(err);
       toast.error(err.response?.data?.message || "Error adding user");
@@ -46,7 +49,7 @@ const AddUserPage = () => {
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md relative">
         {/* Back to Dashboard */}
         <button
-          onClick={() => navigate("/admin-dashboard")} // change path as needed
+          onClick={() => navigate("/admin-dashboard")}
           className="absolute top-4 left-4 flex items-center gap-2 text-blue-600 hover:text-blue-800 cursor-pointer"
         >
           <FaArrowLeft /> Back to Dashboard
@@ -107,6 +110,7 @@ const AddUserPage = () => {
             >
               <option value="cashier">Cashier</option>
               <option value="moderator">Moderator</option>
+              <option value="admin">Admin</option>
             </select>
           </div>
 
