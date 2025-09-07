@@ -44,3 +44,49 @@ export const addUser = async (req, res, next) => {
     next(error);
   }
 };
+
+//  Get all users (only cashier and moderator)
+export const getUsers = async (req, res, next) => {
+  try {
+    const users = await User.find(
+      { role: { $in: ["cashier", "moderator"] } }, // filter only cashier & moderator
+      "-password" // exclude password field
+    ).sort({ createdAt: -1 }); // newest first
+
+    return res.status(200).json({
+      success: true,
+      count: users.length,
+      users,
+    });
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    next(error);
+  }
+};
+
+// Delete user by ID
+export const deleteUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // prevent deleting admin
+    if (user.role === "admin") {
+      return res.status(403).json({ message: "Cannot delete an admin" });
+    }
+
+    await User.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    next(error);
+  }
+};
