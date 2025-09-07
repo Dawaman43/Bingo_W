@@ -1,5 +1,5 @@
 import { Home, UserPlus, X } from "lucide-react";
-import { Link } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 
 export default function Sidebar({ isOpen, toggleSidebar }) {
   return (
@@ -21,20 +21,30 @@ export default function Sidebar({ isOpen, toggleSidebar }) {
 
       {/* Navigation */}
       <nav className="flex flex-col gap-4 flex-1">
-        <Link
-          to="/admin/dashboard"
-          className="flex items-center gap-3 p-2 rounded hover:bg-gray-800 transition"
+        <NavLink
+          to="/admin-dashboard"
+          className={({ isActive }) =>
+            `flex items-center gap-3 p-2 rounded transition ${
+              isActive ? "bg-blue-600 text-white" : "hover:bg-gray-800"
+            }`
+          }
           onClick={toggleSidebar}
+          end
         >
           <Home size={20} /> Dashboard
-        </Link>
-        <Link
+        </NavLink>
+
+        <NavLink
           to="/add-user"
-          className="flex items-center gap-3 p-2 rounded hover:bg-gray-800 transition"
+          className={({ isActive }) =>
+            `flex items-center gap-3 p-2 rounded transition ${
+              isActive ? "bg-blue-600 text-white" : "hover:bg-gray-800"
+            }`
+          }
           onClick={toggleSidebar}
         >
           <UserPlus size={20} /> Add User
-        </Link>
+        </NavLink>
       </nav>
     </div>
   );
