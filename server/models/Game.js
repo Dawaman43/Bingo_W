@@ -33,6 +33,10 @@ const gameSchema = new mongoose.Schema(
       cardId: { type: Number },
       prize: { type: Number },
     },
+    // NEW FIELDS
+    moderatorWinnerCardId: { type: Number, default: null }, // moderator chosen card for next game
+    jackpotEnabled: { type: Boolean, default: true }, // allow turning jackpot on/off
+
     status: { type: String, enum: ["active", "completed"], default: "active" },
   },
   { timestamps: true }
