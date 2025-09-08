@@ -31,7 +31,7 @@ app.get("/", (req, res) => res.send("Server is running"));
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/games", gameRoutes);
-app.use("/api/sound", soundRoutes);
+app.use("/api/sounds", soundRoutes);
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

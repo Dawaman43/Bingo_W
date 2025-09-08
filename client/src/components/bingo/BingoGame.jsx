@@ -30,53 +30,47 @@ const BingoGame = () => {
   const [speed, setSpeed] = useState(4);
   const [isPlaying, setIsPlaying] = useState(false);
   const [cardId, setCardId] = useState("");
+  const [manualNumber, setManualNumber] = useState("");
   const [jackpotAmount, setJackpotAmount] = useState(0);
   const [isJackpotActive, setIsJackpotActive] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
-  const [timer, setTimer] = useState(4);
-  const [manualNumber, setManualNumber] = useState("");
   const [winningPattern, setWinningPattern] = useState("line");
   const [winningCards, setWinningCards] = useState([]);
   const [lockedCards, setLockedCards] = useState([]);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCallingNumber, setIsCallingNumber] = useState(false);
+  const [callError, setCallError] = useState(null);
   const canvasRef = useRef(null);
   const autoIntervalRef = useRef(null);
 
-  // Preload all audio files with SoundService
   useEffect(() => {
     SoundService.preloadSounds(language);
   }, [language]);
 
-  // Fetch game data
   useEffect(() => {
     const gameId =
       searchParams.get("id") || sessionStorage.getItem("currentGameId");
     if (!gameId) {
-      console.error("No gameId found in URL or sessionStorage");
-      setGameData(null);
+      setCallError("No game ID found");
       return;
     }
-    console.log("Fetching game with ID:", gameId);
     sessionStorage.setItem("currentGameId", gameId);
 
     const loadGame = async () => {
       try {
         const fetchedGame = await fetchGame(gameId);
-        console.log("Fetched game:", fetchedGame);
         await fetchBingoCards(gameId);
         await updateJackpotDisplay();
       } catch (error) {
-        console.error("Error fetching game data:", error.message, error);
+        setCallError(error.message || "Failed to load game");
         setGameData(null);
       }
     };
     loadGame();
-  }, [searchParams]);
+  }, [searchParams, fetchGame]);
 
-  // Update local states when game changes
   useEffect(() => {
     if (game) {
       setGameData(game);
@@ -86,8 +80,8 @@ const BingoGame = () => {
       setIsGameOver(game.status === "completed");
       const cards =
         game.selectedCards?.map((card) => ({
-          id: card.id,
-          cardNumber: card.id,
+          cardId: card.cardId,
+          cardNumber: card.cardId,
           numbers: {
             B: card.numbers.slice(0, 5).map(Number),
             I: card.numbers.slice(5, 10).map(Number),
@@ -102,7 +96,7 @@ const BingoGame = () => {
             G: new Array(5).fill(false),
             O: new Array(5).fill(false),
           },
-          isWinner: game.winner?.cardId === card.id,
+          isWinner: game.winner?.cardId === card.cardId,
           eligibleForWin: false,
           eligibleAtNumber: null,
         })) || [];
@@ -111,40 +105,41 @@ const BingoGame = () => {
     }
   }, [game]);
 
-  // Auto call logic
   useEffect(() => {
-    if (isAutoCall && !isGameOver && gameData?._id && isPlaying) {
-      console.log("Starting auto-call interval with gameId:", gameData._id);
+    if (
+      isAutoCall &&
+      !isGameOver &&
+      gameData?._id &&
+      isPlaying &&
+      !isCallingNumber
+    ) {
       autoIntervalRef.current = setInterval(() => {
         handleCallNumber();
       }, speed * 1000);
     } else {
-      console.log(
-        "Clearing auto-call interval. isAutoCall:",
-        isAutoCall,
-        "isGameOver:",
-        isGameOver,
-        "gameId:",
-        gameData?._id,
-        "isPlaying:",
-        isPlaying
-      );
       clearInterval(autoIntervalRef.current);
     }
     return () => clearInterval(autoIntervalRef.current);
-  }, [isAutoCall, speed, isGameOver, gameData?._id, isPlaying]);
+  }, [
+    isAutoCall,
+    speed,
+    isGameOver,
+    gameData?._id,
+    isPlaying,
+    isCallingNumber,
+  ]);
 
   const fetchBingoCards = async (gameId) => {
-    if (!gameId || gameId === "undefined") {
-      console.error("fetchBingoCards: Invalid gameId:", gameId);
+    if (!gameId) {
+      setCallError("Invalid game ID for fetching cards");
       return;
     }
     try {
       const cards = await gameService.getAllCards();
       const gameCards = cards.filter((card) => card.gameId === gameId);
       const formattedCards = gameCards.map((card) => ({
-        id: card.card_number,
-        cardNumber: card.card_number,
+        cardId: card.cardId,
+        cardNumber: card.cardId,
         numbers: {
           B: card.numbers.slice(0, 5).map(Number),
           I: card.numbers.slice(5, 10).map(Number),
@@ -166,10 +161,7 @@ const BingoGame = () => {
       formattedCards.forEach((card) => (card.markedPositions.N[2] = true));
       setBingoCards(formattedCards);
     } catch (error) {
-      console.error(
-        "Error fetching cards:",
-        error.response?.data || error.message
-      );
+      setCallError(error.message || "Failed to fetch cards");
     }
   };
 
@@ -179,56 +171,74 @@ const BingoGame = () => {
       const latestGame = games[games.length - 1];
       setJackpotAmount(latestGame?.potentialJackpot || 0);
     } catch (error) {
-      console.error(
-        "Error fetching jackpot:",
-        error.response?.data || error.message
-      );
+      setCallError(error.message || "Failed to fetch jackpot");
     }
   };
 
-  const handleCallNumber = async () => {
+  const handleCallNumber = async (manualNum = null) => {
     if (
-      calledNumbers.length >= 75 ||
       isGameOver ||
       isCallingNumber ||
-      !isPlaying
+      !isPlaying ||
+      calledNumbers.length >= 75
     ) {
-      console.warn(
-        "Cannot call number: game is over, number is being called, or game is paused"
+      setCallError(
+        "Cannot call number: Game is over, paused, or all numbers called"
       );
       return;
     }
+
     if (!gameData?._id) {
-      console.error(
-        "Cannot call number: gameId is undefined. Ensure game is loaded."
-      );
+      setCallError("Game ID is missing");
       setIsAutoCall(false);
       return;
     }
+
     setIsCallingNumber(true);
+    setCallError(null);
+
     try {
-      const response = await callNumber(gameData._id, {});
-      console.log("Call number response:", response);
-      const { calledNumber, game } = response;
+      let payload = {};
+      if (manualNum) {
+        const num = parseInt(manualNum, 10);
+        if (isNaN(num) || num < 1 || num > 75 || calledNumbers.includes(num)) {
+          throw new Error("Invalid or already called number");
+        }
+        payload = { number: num };
+      }
+
+      const response = await callNumber(gameData._id, payload);
+      const calledNumber = response.calledNumber;
+
       setCalledNumbers((prev) => [...prev, calledNumber]);
       setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
       setCurrentNumber(calledNumber);
+
       SoundService.playSound(`number_${calledNumber}`);
-      bingoCards.forEach((card) => {
-        for (const letter in card.numbers) {
-          const col = card.numbers[letter];
-          const index = col.indexOf(calledNumber);
-          if (index !== -1) {
-            card.markedPositions[letter][index] = true;
+
+      setBingoCards((prevCards) =>
+        prevCards.map((card) => {
+          const newCard = { ...card };
+          for (const letter in card.numbers) {
+            const col = card.numbers[letter];
+            const index = col.indexOf(calledNumber);
+            if (index !== -1) {
+              newCard.markedPositions[letter][index] = true;
+            }
           }
-        }
-      });
-    } catch (error) {
-      console.error(
-        "Error calling number:",
-        error.response?.data || error.message
+          return newCard;
+        })
       );
-      setIsAutoCall(false);
+
+      if (manualNum) setManualNumber("");
+    } catch (error) {
+      setCallError(error.message || "Failed to call number");
+      if (
+        error.message.includes("Invalid number") ||
+        error.message.includes("Game is over")
+      ) {
+        setIsAutoCall(false);
+      }
     } finally {
       setIsCallingNumber(false);
     }
@@ -238,16 +248,14 @@ const BingoGame = () => {
     const willPause = isPlaying;
     setIsPlaying((prev) => !prev);
     if (!willPause) {
-      setIsAutoCall(false); // Stop auto-call when pausing
+      setIsAutoCall(false);
     }
-    const soundKey = willPause ? "game_pause" : "game_start";
-    console.log(`Playing sound: ${soundKey}`);
-    SoundService.playSound(soundKey);
+    SoundService.playSound(willPause ? "game_pause" : "game_start");
   };
 
   const handleFinish = async () => {
     if (!gameData?._id) {
-      console.error("Cannot finish game: gameId is undefined");
+      setCallError("Cannot finish game: Game ID is missing");
       return;
     }
     setIsGameOver(true);
@@ -256,17 +264,12 @@ const BingoGame = () => {
     try {
       await finishGame(gameData._id);
       SoundService.playSound("game_finish");
-      console.log("Game finished successfully");
     } catch (error) {
-      console.error(
-        "Error finishing game:",
-        error.response?.data || error.message
-      );
+      setCallError(error.message || "Failed to finish game");
     }
   };
 
   const handleShuffle = () => {
-    console.log("Shuffle button clicked");
     SoundService.playSound("shuffle");
   };
 
@@ -279,7 +282,7 @@ const BingoGame = () => {
 
   const handleCheckCard = async (cardId) => {
     if (!gameData?._id || !cardId) {
-      console.warn("Cannot check card: invalid gameId or cardId");
+      setCallError("Invalid game ID or card ID");
       return;
     }
     try {
@@ -293,45 +296,16 @@ const BingoGame = () => {
         SoundService.playSound("you_didnt_win");
       }
     } catch (error) {
-      console.error(
-        "Error checking card:",
-        error.response?.data || error.message
-      );
+      setCallError(error.message || "Failed to check card");
     }
   };
 
   const handleManualCall = async () => {
     if (!manualNumber || isGameOver || !gameData?._id || !isPlaying) {
-      console.warn(
-        "Cannot call manual number: invalid input, game is over, gameId is missing, or game is paused"
-      );
+      setCallError("Cannot call number: Invalid input, game over, or paused");
       return;
     }
-    try {
-      const response = await callNumber(gameData._id, {
-        number: parseInt(manualNumber),
-      });
-      const { calledNumber, game } = response;
-      setCalledNumbers((prev) => [...prev, calledNumber]);
-      setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
-      setCurrentNumber(calledNumber);
-      SoundService.playSound(`number_${calledNumber}`);
-      bingoCards.forEach((card) => {
-        for (const letter in card.numbers) {
-          const col = card.numbers[letter];
-          const index = col.indexOf(calledNumber);
-          if (index !== -1) {
-            card.markedPositions[letter][index] = true;
-          }
-        }
-      });
-      setManualNumber("");
-    } catch (error) {
-      console.error(
-        "Error calling manual number:",
-        error.response?.data || error.message
-      );
-    }
+    await handleCallNumber(manualNumber);
   };
 
   const handleToggleFullscreen = () => {
@@ -366,13 +340,13 @@ const BingoGame = () => {
     </span>
   ));
 
-  if (error) {
+  if (error || callError) {
     return (
       <div className="text-[#f0e14a] text-center p-5">
-        Error loading game: {error}
+        {error || callError}
         <button
           className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base mt-4"
-          onClick={() => (window.location.href = "/create-game")}
+          onClick={() => (window.location.href = "/select-card")}
         >
           Create New Game
         </button>
@@ -383,7 +357,7 @@ const BingoGame = () => {
   if (!gameData || !gameData._id) {
     return (
       <div className="text-[#f0e14a] text-center p-5">
-        {error ? `Error loading game: ${error}` : "Loading game..."}
+        Loading game...
         <button
           className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base mt-4"
           onClick={() => (window.location.href = "/create-game")}
@@ -396,7 +370,6 @@ const BingoGame = () => {
 
   return (
     <div className="w-full h-full bg-[#1a2b5f] flex flex-col items-center p-5 relative">
-      {/* Top Bar */}
       <div className="flex justify-between items-center w-full max-w-[1000px]">
         <button
           className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
@@ -420,7 +393,6 @@ const BingoGame = () => {
           </span>
         </button>
       </div>
-      {/* Title & Last Called */}
       <div className="w-full flex justify-between px-16 items-center my-12 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-5xl font-black text-[#f0e14a] text-center">
           CLASSIC BINGO
@@ -432,7 +404,6 @@ const BingoGame = () => {
           {recentNumbers}
         </div>
       </div>
-      {/* Game Info */}
       <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full">
         <div className="text-[#f0e14a] text-3xl font-bold mr-2.5">
           GAME {gameData.gameNumber}
@@ -441,13 +412,10 @@ const BingoGame = () => {
           Called {calledNumbers.length}/75
         </div>
       </div>
-      {/* Bingo Board */}
       <div className="grid grid-cols-16 gap-1 mb-5 w-full max-w-[1000px]">
         {generateBoard()}
       </div>
-      {/* Controls & Number Display */}
       <div className="w-full flex justify-between gap-4 max-w-[1000px] max-md:flex-col">
-        {/* Controls */}
         <div className="flex-1">
           <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full max-w-[1000px]">
             <button
@@ -466,7 +434,7 @@ const BingoGame = () => {
             </button>
             <button
               className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
-              onClick={handleCallNumber}
+              onClick={() => handleCallNumber()}
               disabled={
                 !gameData?._id || isCallingNumber || !isPlaying || isGameOver
               }
@@ -497,7 +465,6 @@ const BingoGame = () => {
               </button>
             )}
           </div>
-          {/* Card ID Input */}
           <div className="flex gap-2.5 mt-2.5 w-full max-w-[1000px] justify-center">
             <input
               type="text"
@@ -515,7 +482,6 @@ const BingoGame = () => {
               Check
             </button>
           </div>
-          {/* Manual Number Call */}
           {user?.role === "moderator" && (
             <div className="flex gap-2.5 mt-2.5 w-full max-w-[1000px] justify-center">
               <input
@@ -523,20 +489,20 @@ const BingoGame = () => {
                 className="p-2.5 bg-[#e9a64c] border-none rounded text-base text-black w-52"
                 value={manualNumber}
                 onChange={(e) => setManualNumber(e.target.value)}
-                placeholder="Manual Number"
+                placeholder="Manual Number (1-75)"
                 disabled={!isPlaying || isGameOver}
+                min="1"
+                max="75"
               />
               <button
                 className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
                 onClick={handleManualCall}
-                disabled={!isPlaying || isGameOver}
+                disabled={!isPlaying || isGameOver || !manualNumber}
               >
                 Call Manual
               </button>
             </div>
           )}
-
-          {/* Speed Slider */}
           <div className="flex justify-center items-center gap-2.5 mt-5 mb-5">
             <span>Speed:</span>
             <input
@@ -551,15 +517,12 @@ const BingoGame = () => {
             <span>{speed}s</span>
           </div>
         </div>
-        {/* Current Number Display */}
         <div className="flex-1 aspect-square flex justify-center items-start">
           <p className="w-[70%] aspect-square flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_20px_white] rounded-full text-6xl font-black text-black">
             {currentNumber || "-"}
           </p>
         </div>
       </div>
-
-      {/* Jackpot Display */}
       {isJackpotActive && (
         <div className="fixed bottom-5 left-[8.5%] -translate-x-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-20">
           <div className="text-3xl font-bold text-[#e9a64c] uppercase mb-2">
@@ -573,8 +536,6 @@ const BingoGame = () => {
           </button>
         </div>
       )}
-
-      {/* Winner Modal */}
       {isWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner!</h2>
@@ -590,8 +551,6 @@ const BingoGame = () => {
           </button>
         </div>
       )}
-
-      {/* Settings Panel */}
       {isSettingsOpen && (
         <div
           className="fixed top-0 left-0 w-[300px] h-full bg-[#0f1a4a] z-50 transition-left duration-300 overflow-y-auto shadow-[0_0_15px_rgba(0,0,0,0.5)]"
@@ -616,8 +575,6 @@ const BingoGame = () => {
           onClick={() => setIsSettingsOpen(false)}
         ></div>
       )}
-
-      {/* Canvas for card display */}
       <canvas ref={canvasRef} style={{ display: "none" }}></canvas>
     </div>
   );
