@@ -10,8 +10,8 @@ const userSchema = new mongoose.Schema(
       enum: ["admin", "cashier", "moderator"],
       default: "cashier",
     },
-    resetToken: String,
-    resetTokenExpires: Date,
+    otp: String,
+    otpExpiry: Date,
   },
   { timestamps: true }
 );

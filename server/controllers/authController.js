@@ -1,6 +1,7 @@
 import User from "../models/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { sendEmail } from "../utils/email.js";
 
 export const adminRegister = async (req, res, next) => {
   try {
@@ -109,5 +110,53 @@ export const logout = async (req, res, next) => {
   } catch (error) {
     console.error("Error logging in user:", error);
     next(error);
+  }
+};
+
+
+export const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Save OTP with 5 min expiry
+    user.otp = otp;
+    user.otpExpiry = Date.now() + 5 * 60 * 1000;
+    await user.save();
+
+    // Send email
+    await sendEmail(email, "Password Reset OTP", `Your OTP is: ${otp}`);
+
+    res.json({ message: "OTP sent to email" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    const user = await User.findOne({ email });
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.otp !== otp) return res.status(400).json({ message: "Invalid OTP" });
+    if (user.otpExpiry < Date.now()) return res.status(400).json({ message: "OTP expired" });
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+
+    // Clear OTP
+    user.otp = null;
+    user.otpExpiry = null;
+    await user.save();
+
+    res.json({ message: "Password reset successful" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };

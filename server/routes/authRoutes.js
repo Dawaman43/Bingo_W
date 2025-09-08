@@ -1,8 +1,11 @@
 import express from "express";
-import { adminRegister, login, logout } from "../controllers/authController.js";
+import { adminRegister, forgotPassword, login, logout, resetPassword } from "../controllers/authController.js";
 import { isAdmin, verifyToken } from "../middlewares/auth.js";
 
 const route = express.Router();
+
+route.post("/forgot-password", forgotPassword);
+route.post("/reset-password", resetPassword);
 
 route.post("/login", login);
 
