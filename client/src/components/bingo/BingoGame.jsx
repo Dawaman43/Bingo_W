@@ -3,8 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { LanguageContext } from "../../context/LanguageProvider";
 import { useBingoGame } from "../../hooks/useBingoGame";
-import gameService from "../../services/gameService";
-import SoundService from "../../services/soundService";
+import gameService from "../../services/game";
+import SoundService from "../../services/sound";
 
 const BingoGame = () => {
   const { user } = useAuth();
