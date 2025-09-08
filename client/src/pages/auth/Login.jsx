@@ -32,7 +32,7 @@ function Login() {
         // Navigate based on user role
         if (userRole === "admin") navigate("/admin-dashboard");
         else if (userRole === "cashier") navigate("/select-card");
-        else if (userRole === "moderator") navigate("/moderator");
+        else if (userRole === "moderator") navigate("/control");
         else navigate("/");
       } else {
         toast.error(data?.message || "Invalid credentials");
