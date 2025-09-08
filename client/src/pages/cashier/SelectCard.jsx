@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import gameService from "../../services/gameService";
+import gameService from "../../services/game";
 
 const SelectCard = () => {
   const navigate = useNavigate();
@@ -121,12 +121,19 @@ const SelectCard = () => {
 
     setLoading(true);
     try {
-      const gameData = await gameService.createGame({
+      // Log the payload being sent
+      const payload = {
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
         pattern: "single_line",
-        selectedCards: selectedCards.map((id) => ({ id })), // <-- send objects
-      });
+        selectedCards: selectedCards.map((id) => ({ id })), // Send objects
+      };
+      console.log(
+        "Sending payload to createGame:",
+        JSON.stringify(payload, null, 2)
+      );
+
+      const gameData = await gameService.createGame(payload);
 
       console.log("gameData:", gameData);
 
@@ -138,8 +145,24 @@ const SelectCard = () => {
       showAlert("Game started successfully!", "success");
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
     } catch (error) {
-      console.error("Error starting game:", error);
-      showAlert(`Error starting game: ${error.message || error}`, "error");
+      // Log the full error details
+      console.error("Error starting game:", {
+        message: error.message,
+        response: error.response
+          ? {
+              status: error.response.status,
+              data: error.response.data,
+              headers: error.response.headers,
+            }
+          : "No response data",
+        config: error.config,
+      });
+      showAlert(
+        `Error starting game: ${
+          error.response?.data?.message || error.message || "Unknown error"
+        }`,
+        "error"
+      );
     } finally {
       setLoading(false);
     }

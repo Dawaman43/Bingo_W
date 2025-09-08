@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import Card from "./models/Card.js";
 
-dotenv.config(); // Load .env variables
+dotenv.config();
 
 const cards = [
   {
@@ -2259,18 +2259,18 @@ const cards = [
 
 const seedCards = async () => {
   try {
-    // 1️⃣ Connect to MongoDB Atlas
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    const conn = await mongoose.connect(process.env.MONGODB_URI);
     console.log("MongoDB connected!");
+    console.log("Seeding database:", conn.connection.db.databaseName); // <- log the DB name
 
-    // 2️⃣ Insert cards
+    // Optional: clear existing cards
+    await Card.deleteMany({});
+
     const inserted = await Card.insertMany(cards);
-    console.log(`Inserted ${inserted.length} cards`);
+    console.log(
+      `Inserted ${inserted.length} cards into ${conn.connection.db.databaseName}`
+    );
 
-    // 3️⃣ Disconnect
     await mongoose.disconnect();
     console.log("MongoDB disconnected");
   } catch (err) {

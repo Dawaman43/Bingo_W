@@ -9,6 +9,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Dashboard from "./pages/admin/Dashboard";
 import AdminReport from "./pages/admin/Report";
 import CashierReport from "./pages/cashier/Report";
+import BingoGame from "./components/bingo/BingoGame";
 
 function App() {
   return (
@@ -19,25 +20,22 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
 
+        {/* Protected routes group */}
+        <Route element={<ProtectedRoute />}>
+          {/* Cashier */}
+          <Route path="/cashier-report" element={<CashierReport />} />
+          <Route path="/select-card" element={<SelectCard />} />
+          <Route path="/bingo-game" element={<BingoGame />} />
 
-      {/* Protected routes group */}
-      <Route element={<ProtectedRoute />}>
-        
+          {/* Admin */}
+          <Route path="/add-user" element={<AddUser />} />
+          <Route path="/admin-dashboard" element={<Dashboard />} />
+          <Route path="/admin-report" element={<AdminReport />} />
 
-
-        {/* Cashier */}
-        <Route path="/cashier-report" element={<CashierReport />} />
-        <Route path="/select-card" element={<SelectCard />} />
-
-        {/* Admin */}
-        <Route path="/add-user" element={<AddUser />} />
-        <Route path="/admin-dashboard" element={<Dashboard />} />
-        <Route path="/admin-report" element={<AdminReport />} />
-
-        {/* Moderator */}
-        <Route path="/control" element={<Control />} />
-      </Route>
-    </Routes>
+          {/* Moderator */}
+          <Route path="/control" element={<Control />} />
+        </Route>
+      </Routes>
     </>
   );
 }

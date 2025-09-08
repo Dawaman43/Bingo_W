@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import toast from "react-hot-toast";
-import { useNavigate,useLocation } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -12,38 +12,36 @@ function Login() {
   const selectedRole = location.state?.role; // e.g., "admin"
 
   const handleSubmit = async (e) => {
-  e.preventDefault();
-  try {
-    const data = await loginUser({ email, password });
+    e.preventDefault();
+    try {
+      const data = await loginUser({ email, password });
 
-    if (data?.success) {
-      const userRole = (data.user?.role || "").toLowerCase();
+      if (data?.success) {
+        const userRole = (data.user?.role || "").toLowerCase();
 
-      // Check if logged-in role matches the selected card
-      if (selectedRole && selectedRole !== userRole) {
-        toast.error(
-          `Access denied! You cannot login as ${selectedRole}. Your role is ${userRole}.`
-        );
-        return; // stop further navigation
+        // Check if logged-in role matches the selected card
+        if (selectedRole && selectedRole !== userRole) {
+          toast.error(
+            `Access denied! You cannot login as ${selectedRole}. Your role is ${userRole}.`
+          );
+          return; // stop further navigation
+        }
+
+        toast.success("Login successful!");
+
+        // Navigate based on user role
+        if (userRole === "admin") navigate("/admin-dashboard");
+        else if (userRole === "cashier") navigate("/select-card");
+        else if (userRole === "moderator") navigate("/moderator");
+        else navigate("/");
+      } else {
+        toast.error(data?.message || "Invalid credentials");
       }
-
-      toast.success("Login successful!");
-
-      // Navigate based on user role
-      if (userRole === "admin") navigate("/admin-dashboard");
-      else if (userRole === "cashier") navigate("/cashier");
-      else if (userRole === "moderator") navigate("/moderator");
-      else navigate("/");
-    } else {
-      toast.error(data?.message || "Invalid credentials");
+    } catch (err) {
+      console.error(err);
+      toast.error("Something went wrong. Please try again.");
     }
-  } catch (err) {
-    console.error(err);
-    toast.error("Something went wrong. Please try again.");
-  }
-};
-
-
+  };
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
