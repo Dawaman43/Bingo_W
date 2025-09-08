@@ -158,17 +158,33 @@ export const callNumber = async (req, res, next) => {
       return res.status(400).json({ message: "Game not active or not found" });
     }
 
-    const calledNumber = number
-      ? parseInt(number, 10)
-      : Math.floor(Math.random() * 75) + 1;
-    if (isNaN(calledNumber) || calledNumber < 1 || calledNumber > 75) {
-      console.log("Error: Invalid number:", number);
-      return res.status(400).json({ message: "Invalid number" });
-    }
-
-    if (game.calledNumbers.includes(calledNumber)) {
-      console.log("Error: Number already called:", calledNumber);
-      return res.status(400).json({ message: "Number already called" });
+    let calledNumber;
+    if (number) {
+      // Manual call: parse and validate strictly
+      calledNumber = parseInt(number, 10);
+      if (isNaN(calledNumber) || calledNumber < 1 || calledNumber > 75) {
+        console.log("Error: Invalid number:", number);
+        return res.status(400).json({ message: "Invalid number" });
+      }
+      if (game.calledNumbers.includes(calledNumber)) {
+        console.log("Error: Number already called:", calledNumber);
+        return res.status(400).json({ message: "Number already called" });
+      }
+    } else {
+      // Auto call: generate a unique random number
+      const availableNumbers = Array.from(
+        { length: 75 },
+        (_, i) => i + 1
+      ).filter((n) => !game.calledNumbers.includes(n));
+      if (availableNumbers.length === 0) {
+        console.log(
+          "Error: All numbers already called for game ID:",
+          req.params.id
+        );
+        return res.status(400).json({ message: "All numbers already called" });
+      }
+      calledNumber =
+        availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
     }
 
     game.calledNumbers.push(calledNumber);

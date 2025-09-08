@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import gameService from "../services/game";
 
 export const useBingoGame = () => {
   const [game, setGame] = useState(null);
   const [error, setError] = useState(null);
 
-  const fetchGame = async (id) => {
+  const fetchGame = useCallback(async (id) => {
     if (!id) {
       setError("Invalid game ID");
       throw new Error("Invalid game ID");
@@ -21,9 +21,9 @@ export const useBingoGame = () => {
       );
       throw error;
     }
-  };
+  }, []);
 
-  const callNumber = async (gameId, data = {}) => {
+  const callNumber = useCallback(async (gameId, data = {}) => {
     if (!gameId) {
       setError("Invalid game ID");
       throw new Error("Invalid game ID");
@@ -39,9 +39,9 @@ export const useBingoGame = () => {
       );
       throw error;
     }
-  };
+  }, []);
 
-  const checkBingo = async (gameId, cardId) => {
+  const checkBingo = useCallback(async (gameId, cardId) => {
     if (!gameId || !cardId) {
       setError("Invalid game ID or card ID");
       throw new Error("Invalid game ID or card ID");
@@ -57,9 +57,9 @@ export const useBingoGame = () => {
       );
       throw error;
     }
-  };
+  }, []);
 
-  const selectWinner = async (gameId, data) => {
+  const selectWinner = useCallback(async (gameId, data) => {
     if (!gameId) {
       setError("Invalid game ID");
       throw new Error("Invalid game ID");
@@ -77,9 +77,9 @@ export const useBingoGame = () => {
       );
       throw error;
     }
-  };
+  }, []);
 
-  const finishGame = async (gameId) => {
+  const finishGame = useCallback(async (gameId) => {
     if (!gameId) {
       setError("Invalid game ID");
       throw new Error("Invalid game ID");
@@ -95,7 +95,7 @@ export const useBingoGame = () => {
       );
       throw error;
     }
-  };
+  }, []);
 
   return {
     game,

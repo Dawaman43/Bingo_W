@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useContext } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { LanguageContext } from "../../context/LanguageProvider";
 import { useBingoGame } from "../../hooks/useBingoGame";
@@ -7,6 +7,7 @@ import gameService from "../../services/game";
 import SoundService from "../../services/sound";
 
 const BingoGame = () => {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { language, translations, toggleLanguage } =
     useContext(LanguageContext);
@@ -35,6 +36,8 @@ const BingoGame = () => {
   const [isJackpotActive, setIsJackpotActive] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
+  const [isGameFinishedModalOpen, setIsGameFinishedModalOpen] = useState(false);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   const [winningPattern, setWinningPattern] = useState("line");
   const [winningCards, setWinningCards] = useState([]);
   const [lockedCards, setLockedCards] = useState([]);
@@ -54,6 +57,7 @@ const BingoGame = () => {
       searchParams.get("id") || sessionStorage.getItem("currentGameId");
     if (!gameId) {
       setCallError("No game ID found");
+      setIsErrorModalOpen(true);
       return;
     }
     sessionStorage.setItem("currentGameId", gameId);
@@ -65,6 +69,7 @@ const BingoGame = () => {
         await updateJackpotDisplay();
       } catch (error) {
         setCallError(error.message || "Failed to load game");
+        setIsErrorModalOpen(true);
         setGameData(null);
       }
     };
@@ -132,6 +137,7 @@ const BingoGame = () => {
   const fetchBingoCards = async (gameId) => {
     if (!gameId) {
       setCallError("Invalid game ID for fetching cards");
+      setIsErrorModalOpen(true);
       return;
     }
     try {
@@ -162,6 +168,7 @@ const BingoGame = () => {
       setBingoCards(formattedCards);
     } catch (error) {
       setCallError(error.message || "Failed to fetch cards");
+      setIsErrorModalOpen(true);
     }
   };
 
@@ -172,6 +179,7 @@ const BingoGame = () => {
       setJackpotAmount(latestGame?.potentialJackpot || 0);
     } catch (error) {
       setCallError(error.message || "Failed to fetch jackpot");
+      setIsErrorModalOpen(true);
     }
   };
 
@@ -182,14 +190,20 @@ const BingoGame = () => {
       !isPlaying ||
       calledNumbers.length >= 75
     ) {
-      setCallError(
-        "Cannot call number: Game is over, paused, or all numbers called"
-      );
+      if (calledNumbers.length >= 75) {
+        setIsGameFinishedModalOpen(true);
+        setIsAutoCall(false);
+        await handleFinish();
+        return;
+      }
+      setCallError("Cannot call number: Game is over or paused");
+      setIsErrorModalOpen(true);
       return;
     }
 
     if (!gameData?._id) {
       setCallError("Game ID is missing");
+      setIsErrorModalOpen(true);
       setIsAutoCall(false);
       return;
     }
@@ -233,11 +247,17 @@ const BingoGame = () => {
       if (manualNum) setManualNumber("");
     } catch (error) {
       setCallError(error.message || "Failed to call number");
+      setIsErrorModalOpen(true);
       if (
         error.message.includes("Invalid number") ||
-        error.message.includes("Game is over")
+        error.message.includes("Game is over") ||
+        error.message === "All numbers already called"
       ) {
         setIsAutoCall(false);
+        if (error.message === "All numbers already called") {
+          setIsGameFinishedModalOpen(true);
+          await handleFinish();
+        }
       }
     } finally {
       setIsCallingNumber(false);
@@ -256,6 +276,7 @@ const BingoGame = () => {
   const handleFinish = async () => {
     if (!gameData?._id) {
       setCallError("Cannot finish game: Game ID is missing");
+      setIsErrorModalOpen(true);
       return;
     }
     setIsGameOver(true);
@@ -264,8 +285,10 @@ const BingoGame = () => {
     try {
       await finishGame(gameData._id);
       SoundService.playSound("game_finish");
+      setIsGameFinishedModalOpen(true);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
+      setIsErrorModalOpen(true);
     }
   };
 
@@ -283,6 +306,7 @@ const BingoGame = () => {
   const handleCheckCard = async (cardId) => {
     if (!gameData?._id || !cardId) {
       setCallError("Invalid game ID or card ID");
+      setIsErrorModalOpen(true);
       return;
     }
     try {
@@ -297,12 +321,14 @@ const BingoGame = () => {
       }
     } catch (error) {
       setCallError(error.message || "Failed to check card");
+      setIsErrorModalOpen(true);
     }
   };
 
   const handleManualCall = async () => {
     if (!manualNumber || isGameOver || !gameData?._id || !isPlaying) {
       setCallError("Cannot call number: Invalid input, game over, or paused");
+      setIsErrorModalOpen(true);
       return;
     }
     await handleCallNumber(manualNumber);
@@ -340,40 +366,12 @@ const BingoGame = () => {
     </span>
   ));
 
-  if (error || callError) {
-    return (
-      <div className="text-[#f0e14a] text-center p-5">
-        {error || callError}
-        <button
-          className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base mt-4"
-          onClick={() => (window.location.href = "/select-card")}
-        >
-          Create New Game
-        </button>
-      </div>
-    );
-  }
-
-  if (!gameData || !gameData._id) {
-    return (
-      <div className="text-[#f0e14a] text-center p-5">
-        Loading game...
-        <button
-          className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base mt-4"
-          onClick={() => (window.location.href = "/create-game")}
-        >
-          Create New Game
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="w-full h-full bg-[#1a2b5f] flex flex-col items-center p-5 relative">
       <div className="flex justify-between items-center w-full max-w-[1000px]">
         <button
           className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
-          onClick={() => (window.location.href = "CashierLSelectCard.html")}
+          onClick={() => navigate("/select-card")}
         >
           ↩️
         </button>
@@ -406,7 +404,7 @@ const BingoGame = () => {
       </div>
       <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full">
         <div className="text-[#f0e14a] text-3xl font-bold mr-2.5">
-          GAME {gameData.gameNumber}
+          GAME {gameData?.gameNumber || "Loading..."}
         </div>
         <div className="bg-[#f0e14a] text-black px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap">
           Called {calledNumbers.length}/75
@@ -472,12 +470,12 @@ const BingoGame = () => {
               value={cardId}
               onChange={(e) => setCardId(e.target.value)}
               placeholder="Enter Card ID"
-              disabled={!isPlaying || isGameOver}
+              disabled={!gameData?._id}
             />
             <button
               className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCheckCard(cardId)}
-              disabled={!isPlaying || isGameOver}
+              disabled={!gameData?._id || !cardId}
             >
               Check
             </button>
@@ -542,10 +540,56 @@ const BingoGame = () => {
           <div className="w-60 aspect-square my-2 mx-auto">
             <canvas ref={canvasRef}></canvas>
           </div>
-          <p className="mb-4 text-lg">Card won!</p>
+          <p className="mb-4 text-lg text-white">Card {winningCards[0]} won!</p>
           <button
             className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
             onClick={() => setIsWinnerModalOpen(false)}
+          >
+            Close
+          </button>
+        </div>
+      )}
+      {isGameFinishedModalOpen && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Game Finished!</h2>
+          <p className="mb-4 text-lg text-white">
+            All numbers have been called. The game is over.
+          </p>
+          <div className="flex gap-2.5 justify-center">
+            <button
+              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={() => setIsGameFinishedModalOpen(false)}
+            >
+              Close
+            </button>
+            <button
+              className="bg-[#e9744c] text-white border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0854c]"
+              onClick={() => {
+                setIsGameFinishedModalOpen(false);
+                window.location.href = "/select-card";
+              }}
+            >
+              Start New Game
+            </button>
+          </div>
+        </div>
+      )}
+      {isErrorModalOpen && callError && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#e9744c] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[#e9744c] mb-4 text-2xl">Error</h2>
+          <p className="mb-4 text-lg text-white">{callError}</p>
+          <button
+            className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+            onClick={() => {
+              setIsErrorModalOpen(false);
+              setCallError(null);
+              if (
+                callError.includes("No game ID found") ||
+                callError.includes("Failed to load game")
+              ) {
+                window.location.href = "/create-game";
+              }
+            }}
           >
             Close
           </button>
