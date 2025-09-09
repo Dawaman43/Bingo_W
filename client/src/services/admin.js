@@ -1,19 +1,24 @@
-import API from './axios';
+import API from "./axios";
 
-// Add User
-export const addUser = async (data) => {
-  const res = await API.post('/admin/add-user', data);
-  return res.data; // return only the data
+const getAuthHeader = () => {
+  const token = localStorage.getItem("token");
+  return { headers: { Authorization: `Bearer ${token}` } };
 };
 
-// Get all users (cashier + moderator)
+//admin can Get all users
 export const getUsers = async () => {
-  const res = await API.get('/admin/users');
+  const res = await API.get("/admin/users", getAuthHeader());
   return res.data;
 };
 
-//  Delete user by ID
+// admin can Delete user by ID
 export const deleteUser = async (id) => {
-  const res = await API.delete(`/admin/users/${id}`);
+  const res = await API.delete(`/admin/users/${id}`, getAuthHeader());
+  return res.data;
+};
+
+//admin can Add new user
+export const addUser = async (data) => {
+  const res = await API.post("/admin/add-user", data, getAuthHeader());
   return res.data;
 };
