@@ -5,14 +5,56 @@ import Result from "../models/Result.js";
 import Card from "../models/Card.js";
 import Counter from "../models/Counter.js";
 
-// Utility function to get sequential game number
+// ----------------- Utils -----------------
 const getNextGameNumber = async () => {
   const counter = await Counter.findByIdAndUpdate(
     "gameNumber",
     { $inc: { seq: 1 } },
-    { new: true, upsert: true } // create if not exists
+    { new: true, upsert: true }
   );
   return counter.seq;
+};
+
+const getNumbersForPattern = (cardNumbers, pattern) => {
+  const grid = [];
+  for (let i = 0; i < 5; i++) grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
+  const numbers = [];
+
+  if (pattern === "single_line") {
+    // pick first line (row, column, or diagonal) that can win
+    const lines = [
+      ...grid, // rows
+      [0, 1, 2, 3, 4].map((i) => grid[i][0]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][1]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][2]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][3]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][4]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][i]), // diagonal
+      [0, 1, 2, 3, 4].map((i) => grid[i][4 - i]), // anti-diagonal
+    ];
+    const firstLine = lines.find((line) => line.some((n) => n !== "FREE"));
+    numbers.push(...firstLine.filter((n) => n !== "FREE"));
+  } else if (pattern === "double_line") {
+    // pick first two lines
+    const lines = [
+      ...grid, // rows
+      [0, 1, 2, 3, 4].map((i) => grid[i][0]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][1]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][2]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][3]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][4]),
+      [0, 1, 2, 3, 4].map((i) => grid[i][i]), // diagonal
+      [0, 1, 2, 3, 4].map((i) => grid[i][4 - i]), // anti-diagonal
+    ];
+    numbers.push(
+      ...lines[0].filter((n) => n !== "FREE"),
+      ...lines[1].filter((n) => n !== "FREE")
+    );
+  } else if (pattern === "full_house") {
+    numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
+  }
+
+  return numbers;
 };
 
 export const createGame = async (req, res, next) => {
@@ -26,7 +68,10 @@ export const createGame = async (req, res, next) => {
       pattern,
       betAmount = 10,
       houseFeePercentage = 15,
+      moderatorWinnerCardId,
+      jackpotEnabled = true,
     } = req.body;
+
     if (!selectedCards || selectedCards.length === 0)
       return res
         .status(400)
@@ -55,8 +100,26 @@ export const createGame = async (req, res, next) => {
     const potentialJackpot = gameCards.length > 0 ? parseFloat(betAmount) : 0;
     const prizePool = totalPot - houseFee - potentialJackpot;
 
-    // Sequential game number starting from 1
     const gameNumber = await getNextGameNumber();
+
+    let calledNumbers = [];
+    let calledNumbersLog = [];
+    if (moderatorWinnerCardId) {
+      const winnerCard = gameCards.find(
+        (c) => c.id === Number(moderatorWinnerCardId)
+      );
+      if (!winnerCard)
+        return res
+          .status(400)
+          .json({ message: "Invalid moderator winner card ID" });
+
+      calledNumbers = getNumbersForPattern(winnerCard.numbers, pattern);
+      calledNumbersLog = calledNumbers.map((n) => ({
+        number: n,
+        cardId: moderatorWinnerCardId,
+        calledAt: new Date(),
+      }));
+    }
 
     const game = new Game({
       gameNumber,
@@ -66,12 +129,41 @@ export const createGame = async (req, res, next) => {
       pattern,
       prizePool,
       potentialJackpot,
-      status: "active",
-      calledNumbers: [],
-      calledNumbersLog: [],
+      status: moderatorWinnerCardId ? "completed" : "active",
+      calledNumbers,
+      calledNumbersLog,
+      moderatorWinnerCardId: moderatorWinnerCardId
+        ? Number(moderatorWinnerCardId)
+        : null,
+      jackpotEnabled,
+      winner: moderatorWinnerCardId
+        ? {
+            cardId: Number(moderatorWinnerCardId),
+            prize: prizePool + (jackpotEnabled ? potentialJackpot : 0),
+          }
+        : null,
     });
 
     await game.save();
+
+    // --- Ensure jackpot exists ---
+    if (jackpotEnabled) {
+      let jackpot = await Jackpot.findOne();
+      if (!jackpot) {
+        jackpot = new Jackpot({
+          amount: potentialJackpot,
+          seed: potentialJackpot,
+          lastUpdated: Date.now(),
+        });
+        await jackpot.save();
+      } else if (moderatorWinnerCardId) {
+        // reset if game completed by moderator
+        jackpot.amount = jackpot.seed;
+        jackpot.lastUpdated = Date.now();
+        await jackpot.save();
+      }
+    }
+
     res.status(201).json({ message: "Game created successfully", data: game });
   } catch (error) {
     next(error);
@@ -99,7 +191,7 @@ export const getAllGames = async (req, res, next) => {
 
 export const getAllCards = async (req, res, next) => {
   try {
-    const cards = await Card.find();
+    const cards = await Card.find().lean();
     res.json({
       message: "All cards retrieved successfully",
       data: cards.map((card) => ({
@@ -122,6 +214,13 @@ export const callNumber = async (req, res, next) => {
     const game = await Game.findById(req.params.id);
     if (!game || game.status !== "active")
       return res.status(400).json({ message: "Game not active or not found" });
+
+    // If moderator pre-selected a winner, do not allow manual calling
+    if (game.moderatorWinnerCardId)
+      return res.status(400).json({
+        message:
+          "This game is controlled by moderator. Numbers are pre-selected.",
+      });
 
     let calledNumber;
     if (number) {
@@ -154,6 +253,35 @@ export const callNumber = async (req, res, next) => {
   }
 };
 
+const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
+  const grid = [];
+  for (let i = 0; i < 5; i++) grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
+
+  const isMarked = (num) => num === "FREE" || calledNumbers.includes(num);
+
+  const lines = [];
+
+  // Rows
+  for (let i = 0; i < 5; i++) lines.push(grid[i].every(isMarked));
+  // Columns
+  for (let j = 0; j < 5; j++)
+    lines.push([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][j])));
+  // Diagonals
+  lines.push([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][i])));
+  lines.push([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][4 - i])));
+
+  if (pattern === "single_line") {
+    return lines.some(Boolean); // Any single line completed
+  } else if (pattern === "double_line") {
+    const completedLines = lines.filter(Boolean).length;
+    return completedLines >= 2; // At least two lines
+  } else if (pattern === "full_house") {
+    return cardNumbers.every(isMarked); // All numbers marked
+  }
+
+  return false;
+};
+
 export const checkBingo = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -162,10 +290,24 @@ export const checkBingo = async (req, res, next) => {
 
     const { cardId } = req.body;
     const game = await Game.findById(req.params.id);
-    if (!game || game.status !== "active")
-      return res.status(400).json({ message: "Game not active or not found" });
+    if (!game) return res.status(400).json({ message: "Game not found" });
 
-    const card = game.selectedCards.find((c) => c.cardId === cardId);
+    // If game is completed already, return winner info
+    if (game.status === "completed") {
+      const isWinner = game.winner?.cardId === Number(cardId);
+      return res.json({
+        message: isWinner
+          ? `Bingo! Card ${cardId} wins!`
+          : `No bingo for card ${cardId}`,
+        data: { winner: isWinner, game },
+      });
+    }
+
+    // Normal bingo checking for active games
+    if (game.status !== "active")
+      return res.status(400).json({ message: "Game not active" });
+
+    const card = game.selectedCards.find((c) => c.id === Number(cardId));
     if (!card) return res.status(400).json({ message: "Invalid card ID" });
 
     const grid = [];
@@ -173,7 +315,6 @@ export const checkBingo = async (req, res, next) => {
       grid.push(card.numbers.slice(i * 5, (i + 1) * 5));
 
     let isWinner = false;
-
     if (game.pattern === "single_line") {
       for (let i = 0; i < 5; i++)
         if (
@@ -215,16 +356,19 @@ export const checkBingo = async (req, res, next) => {
     }
 
     if (isWinner) {
-      const prize = game.prizePool + game.potentialJackpot;
+      const prize =
+        game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0);
       game.status = "completed";
       game.winner = { cardId, prize };
       await game.save();
 
-      const jackpot = await Jackpot.findOne();
-      if (jackpot) {
-        jackpot.amount = jackpot.seed;
-        jackpot.lastUpdated = Date.now();
-        await jackpot.save();
+      if (game.jackpotEnabled) {
+        const jackpot = await Jackpot.findOne();
+        if (jackpot) {
+          jackpot.amount = jackpot.seed;
+          jackpot.lastUpdated = Date.now();
+          await jackpot.save();
+        }
       }
 
       await Result.create({ gameId: game._id, winnerCardId: cardId, prize });
@@ -255,6 +399,7 @@ export const finishGame = async (req, res, next) => {
 
     game.status = "completed";
     await game.save();
+
     res.json({
       message: "Game finished successfully",
       data: { gameId: game._id, status: game.status },
@@ -275,30 +420,38 @@ export const selectWinner = async (req, res, next) => {
     if (!game || game.status !== "active")
       return res.status(400).json({ message: "Game not active or not found" });
 
-    const card = game.selectedCards.find((c) => c.cardId === cardId);
+    const card = game.selectedCards.find((c) => c.id === cardId);
     if (!card) return res.status(400).json({ message: "Invalid card ID" });
 
+    // Get numbers to call for the chosen pattern
     const numbersToCall = getNumbersForPattern(card.numbers, game.pattern);
-    numbersToCall.forEach((number) => {
-      if (!game.calledNumbers.includes(number)) {
-        game.calledNumbers.push(number);
-        game.calledNumbersLog.push({ number, cardId, calledAt: new Date() });
+
+    // Call only numbers needed for this card
+    numbersToCall.forEach((n) => {
+      if (!game.calledNumbers.includes(n)) {
+        game.calledNumbers.push(n);
+        game.calledNumbersLog.push({ number: n, cardId, calledAt: new Date() });
       }
     });
 
-    const prize = game.prizePool + game.potentialJackpot;
+    const prize =
+      game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0);
     game.status = "completed";
     game.winner = { cardId, prize };
     await game.save();
 
-    const jackpot = await Jackpot.findOne();
-    if (jackpot) {
-      jackpot.amount = jackpot.seed;
-      jackpot.lastUpdated = Date.now();
-      await jackpot.save();
+    // Reset jackpot if enabled
+    if (game.jackpotEnabled) {
+      const jackpot = await Jackpot.findOne();
+      if (jackpot) {
+        jackpot.amount = jackpot.seed;
+        jackpot.lastUpdated = Date.now();
+        await jackpot.save();
+      }
     }
 
     await Result.create({ gameId: game._id, winnerCardId: cardId, prize });
+
     res.json({
       message: `Card ${cardId} selected as winner!`,
       data: { winner: true, game },
@@ -308,18 +461,45 @@ export const selectWinner = async (req, res, next) => {
   }
 };
 
-const getNumbersForPattern = (cardNumbers, pattern) => {
-  const grid = [];
-  for (let i = 0; i < 5; i++) grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
-  const numbers = [];
-  if (pattern === "single_line")
-    numbers.push(...grid[0].filter((n) => n !== "FREE"));
-  else if (pattern === "double_line")
-    numbers.push(
-      ...grid[0].filter((n) => n !== "FREE"),
-      ...grid[1].filter((n) => n !== "FREE")
-    );
-  else if (pattern === "full_house")
-    numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
-  return numbers;
+export const updateGame = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty())
+      return res.status(400).json({ errors: errors.array() });
+
+    const {
+      calledNumbers,
+      calledNumbersLog,
+      moderatorWinnerCardId,
+      jackpotEnabled,
+    } = req.body;
+    const updateData = {};
+    if (calledNumbers) updateData.calledNumbers = calledNumbers;
+    if (calledNumbersLog) updateData.calledNumbersLog = calledNumbersLog;
+    if (moderatorWinnerCardId !== undefined)
+      updateData.moderatorWinnerCardId = moderatorWinnerCardId;
+    if (jackpotEnabled !== undefined)
+      updateData.jackpotEnabled = jackpotEnabled;
+
+    const game = await Game.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+    });
+    if (!game) return res.status(404).json({ message: "Game not found" });
+
+    res.json({ message: "Game updated successfully", data: game });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getJackpot = async (req, res, next) => {
+  try {
+    const jackpot = await Jackpot.findOne();
+    if (!jackpot) {
+      return res.status(404).json({ message: "Jackpot not found" });
+    }
+    res.json({ message: "Jackpot retrieved successfully", data: jackpot });
+  } catch (error) {
+    next(error);
+  }
 };

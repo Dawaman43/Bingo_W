@@ -169,91 +169,48 @@ const SelectCard = () => {
   };
 
   const renderCards = () => {
-    const start = (currentPage - 1) * cardsPerPage;
-    const end = Math.min(start + cardsPerPage, cards.length);
-    const cardsToDisplay = cards.slice(start, end);
-    const rows = [];
+    if (!cards.length) {
+      return (
+        <div className="text-center py-8 bg-white dark:bg-gray-800 rounded-lg shadow">
+          <p className="text-gray-500 dark:text-gray-400">
+            No cards available.
+          </p>
+        </div>
+      );
+    }
 
-    for (let i = 0; i < cardsToDisplay.length; i += cardsPerRow) {
-      const rowCards = cardsToDisplay.slice(i, i + cardsPerRow);
-      const row = (
+    // Break cards into rows
+    const rows = [];
+    for (let i = 0; i < cards.length; i += cardsPerRow) {
+      const rowCards = cards.slice(i, i + cardsPerRow);
+      rows.push(
         <div
           key={`row-${i}`}
-          className="grid grid-cols-2 sm:grid-cols-5 md:grid-cols-10 lg:grid-cols-15 xl:grid-cols-20 gap-2 mb-2"
+          className="grid grid-cols-5 sm:grid-cols-10 md:grid-cols-10 lg:grid-cols-20 gap-2 mb-2"
         >
           {rowCards.map((card) => {
             const isSelected = selectedCards.includes(card.id);
             return (
               <div
-                key={`card-${card.id}`}
-                className={`p-2 rounded-lg shadow-sm cursor-pointer border-2 transition-all duration-200 ${
+                key={card.id}
+                className={`p-2 rounded-lg shadow-sm cursor-pointer border-2 transition-all duration-200 text-center ${
                   isSelected
                     ? "bg-red-100 dark:bg-red-900 border-red-500 shadow-[0_0_0_2px_rgba(229,62,62,0.3)] -translate-y-0.5"
-                    : "bg-white dark:bg-gray-800 border-transparent"
+                    : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700"
                 }`}
                 onClick={() => toggleCardSelection(card.id, card.card_number)}
               >
-                <div className="text-center">
-                  <span className="block text-lg font-extrabold leading-tight text-gray-800 dark:text-gray-200">
-                    {card.card_number}
-                  </span>
-                  <div
-                    className={`mt-1 flex items-center justify-center ${
-                      isSelected ? "text-red-500" : "text-gray-400"
-                    }`}
-                  >
-                    {isSelected ? (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                    )}
-                  </div>
-                </div>
+                <span className="block text-lg font-extrabold text-gray-800 dark:text-gray-200">
+                  {card.card_number}
+                </span>
               </div>
             );
           })}
-          {rowCards.length < cardsPerRow &&
-            Array(cardsPerRow - rowCards.length)
-              .fill()
-              .map((_, index) => (
-                <div key={`empty-${i}-${index}`} className="opacity-0" />
-              ))}
         </div>
       );
-      rows.push(row);
     }
 
-    return rows.length > 0 ? (
-      rows
-    ) : (
-      <div className="text-center py-8 bg-white dark:bg-gray-800 rounded-lg shadow">
-        <p className="text-gray-500 dark:text-gray-400">No cards available.</p>
-      </div>
-    );
+    return rows;
   };
 
   return (

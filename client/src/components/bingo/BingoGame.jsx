@@ -65,6 +65,9 @@ const BingoGame = () => {
     const loadGame = async () => {
       try {
         const fetchedGame = await fetchGame(gameId);
+        setGameData(fetchedGame);
+        setCalledNumbers(fetchedGame.calledNumbers || []);
+        setIsJackpotActive(fetchedGame.jackpotEnabled);
         await fetchBingoCards(gameId);
         await updateJackpotDisplay();
       } catch (error) {
@@ -83,29 +86,39 @@ const BingoGame = () => {
       setCalledNumbers(game.calledNumbers || []);
       setJackpotAmount(game.potentialJackpot || 0);
       setIsGameOver(game.status === "completed");
+      setIsJackpotActive(game.jackpotEnabled);
       const cards =
         game.selectedCards?.map((card) => ({
-          cardId: card.cardId,
-          cardNumber: card.cardId,
+          cardId: card.id,
+          cardNumber: card.id,
           numbers: {
-            B: card.numbers.slice(0, 5).map(Number),
-            I: card.numbers.slice(5, 10).map(Number),
-            N: card.numbers.slice(10, 15).map(Number),
-            G: card.numbers.slice(15, 20).map(Number),
-            O: card.numbers.slice(20, 25).map(Number),
+            B: card.numbers
+              .slice(0, 5)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            I: card.numbers
+              .slice(5, 10)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            N: card.numbers
+              .slice(10, 15)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            G: card.numbers
+              .slice(15, 20)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            O: card.numbers
+              .slice(20, 25)
+              .map((n) => (n === "FREE" ? n : Number(n))),
           },
           markedPositions: {
             B: new Array(5).fill(false),
             I: new Array(5).fill(false),
-            N: new Array(5).fill(false),
+            N: new Array(5).fill(false).map((_, i) => (i === 2 ? true : false)),
             G: new Array(5).fill(false),
             O: new Array(5).fill(false),
           },
-          isWinner: game.winner?.cardId === card.cardId,
-          eligibleForWin: false,
+          isWinner: game.winner?.cardId === card.id,
+          eligibleForWin: game.moderatorWinnerCardId === card.id,
           eligibleAtNumber: null,
         })) || [];
-      cards.forEach((card) => (card.markedPositions.N[2] = true));
       setBingoCards(cards);
     }
   }, [game]);
@@ -125,14 +138,7 @@ const BingoGame = () => {
       clearInterval(autoIntervalRef.current);
     }
     return () => clearInterval(autoIntervalRef.current);
-  }, [
-    isAutoCall,
-    speed,
-    isGameOver,
-    gameData?._id,
-    isPlaying,
-    isCallingNumber,
-  ]);
+  }, [isAutoCall, speed, isGameOver, isPlaying, isCallingNumber, gameData]);
 
   const fetchBingoCards = async (gameId) => {
     if (!gameId) {
@@ -142,30 +148,39 @@ const BingoGame = () => {
     }
     try {
       const cards = await gameService.getAllCards();
-      const gameCards = cards.filter((card) => card.gameId === gameId);
-      const formattedCards = gameCards.map((card) => ({
-        cardId: card.cardId,
-        cardNumber: card.cardId,
-        numbers: {
-          B: card.numbers.slice(0, 5).map(Number),
-          I: card.numbers.slice(5, 10).map(Number),
-          N: card.numbers.slice(10, 15).map(Number),
-          G: card.numbers.slice(15, 20).map(Number),
-          O: card.numbers.slice(20, 25).map(Number),
-        },
-        markedPositions: {
-          B: new Array(5).fill(false),
-          I: new Array(5).fill(false),
-          N: new Array(5).fill(false),
-          G: new Array(5).fill(false),
-          O: new Array(5).fill(false),
-        },
-        isWinner: false,
-        eligibleForWin: false,
-        eligibleAtNumber: null,
-      }));
-      formattedCards.forEach((card) => (card.markedPositions.N[2] = true));
-      setBingoCards(formattedCards);
+      const gameCards =
+        gameData?.selectedCards?.map((card) => ({
+          cardId: card.id,
+          cardNumber: card.id,
+          numbers: {
+            B: card.numbers
+              .slice(0, 5)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            I: card.numbers
+              .slice(5, 10)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            N: card.numbers
+              .slice(10, 15)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            G: card.numbers
+              .slice(15, 20)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+            O: card.numbers
+              .slice(20, 25)
+              .map((n) => (n === "FREE" ? n : Number(n))),
+          },
+          markedPositions: {
+            B: new Array(5).fill(false),
+            I: new Array(5).fill(false),
+            N: new Array(5).fill(false).map((_, i) => (i === 2 ? true : false)),
+            G: new Array(5).fill(false),
+            O: new Array(5).fill(false),
+          },
+          isWinner: false,
+          eligibleForWin: gameData?.moderatorWinnerCardId === card.id,
+          eligibleAtNumber: null,
+        })) || [];
+      setBingoCards(gameCards);
     } catch (error) {
       setCallError(error.message || "Failed to fetch cards");
       setIsErrorModalOpen(true);
@@ -174,13 +189,30 @@ const BingoGame = () => {
 
   const updateJackpotDisplay = async () => {
     try {
-      const games = await gameService.getAllGames();
-      const latestGame = games[games.length - 1];
-      setJackpotAmount(latestGame?.potentialJackpot || 0);
+      const jackpot = await gameService.getJackpot();
+      setJackpotAmount(gameData?.jackpotEnabled ? jackpot.amount : 0);
     } catch (error) {
       setCallError(error.message || "Failed to fetch jackpot");
       setIsErrorModalOpen(true);
     }
+  };
+
+  const getNumbersForPattern = (cardNumbers, pattern) => {
+    const grid = [];
+    for (let i = 0; i < 5; i++)
+      grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
+    const numbers = [];
+    if (pattern === "single_line") {
+      numbers.push(...grid[0].filter((n) => n !== "FREE"));
+    } else if (pattern === "double_line") {
+      numbers.push(
+        ...grid[0].filter((n) => n !== "FREE"),
+        ...grid[1].filter((n) => n !== "FREE")
+      );
+    } else if (pattern === "full_house") {
+      numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
+    }
+    return numbers.map((n) => (n === "FREE" ? n : Number(n)));
   };
 
   const handleCallNumber = async (manualNum = null) => {
@@ -212,17 +244,44 @@ const BingoGame = () => {
     setCallError(null);
 
     try {
-      let payload = {};
+      let numberToCall;
       if (manualNum) {
         const num = parseInt(manualNum, 10);
         if (isNaN(num) || num < 1 || num > 75 || calledNumbers.includes(num)) {
           throw new Error("Invalid or already called number");
         }
-        payload = { number: num };
+        numberToCall = num;
+      } else if (gameData.moderatorWinnerCardId) {
+        const winningCard = gameData.selectedCards.find(
+          (c) => c.id === gameData.moderatorWinnerCardId
+        );
+        if (!winningCard) {
+          throw new Error("Selected winning card not found");
+        }
+        const numbersToCall = getNumbersForPattern(
+          winningCard.numbers,
+          gameData.pattern
+        );
+        numberToCall = numbersToCall.find((n) => !calledNumbers.includes(n));
       }
 
-      const response = await callNumber(gameData._id, payload);
-      const calledNumber = response.calledNumber;
+      if (!numberToCall) {
+        const availableNumbers = Array.from(
+          { length: 75 },
+          (_, i) => i + 1
+        ).filter((n) => !calledNumbers.includes(n));
+        if (!availableNumbers.length) {
+          setIsGameFinishedModalOpen(true);
+          setIsAutoCall(false);
+          await handleFinish();
+          return;
+        }
+        numberToCall =
+          availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
+      }
+
+      const response = await callNumber(gameData._id, { number: numberToCall });
+      const calledNumber = response.calledNumber || numberToCall;
 
       setCalledNumbers((prev) => [...prev, calledNumber]);
       setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
@@ -244,6 +303,34 @@ const BingoGame = () => {
         })
       );
 
+      if (gameData.moderatorWinnerCardId) {
+        const bingoResult = await checkBingo(
+          gameData._id,
+          gameData.moderatorWinnerCardId
+        );
+        if (bingoResult.winner) {
+          setWinningCards([gameData.moderatorWinnerCardId]);
+          setIsWinnerModalOpen(true);
+          setIsGameOver(true);
+          await selectWinner(gameData._id, {
+            cardId: gameData.moderatorWinnerCardId,
+          });
+          SoundService.playSound("winner");
+        }
+      } else {
+        for (const card of gameData.selectedCards) {
+          const bingoResult = await checkBingo(gameData._id, card.id);
+          if (bingoResult.winner) {
+            setWinningCards([card.id]);
+            setIsWinnerModalOpen(true);
+            setIsGameOver(true);
+            await selectWinner(gameData._id, { cardId: card.id });
+            SoundService.playSound("winner");
+            break;
+          }
+        }
+      }
+
       if (manualNum) setManualNumber("");
     } catch (error) {
       setCallError(error.message || "Failed to call number");
@@ -251,7 +338,8 @@ const BingoGame = () => {
       if (
         error.message.includes("Invalid number") ||
         error.message.includes("Game is over") ||
-        error.message === "All numbers already called"
+        error.message === "All numbers already called" ||
+        error.message.includes("Selected winning card not found")
       ) {
         setIsAutoCall(false);
         if (error.message === "All numbers already called") {

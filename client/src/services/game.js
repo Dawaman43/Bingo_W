@@ -27,7 +27,7 @@ const gameService = {
   },
 
   checkBingo: async (gameId, cardId) => {
-    const response = await API.post("/games/check-bingo", { gameId, cardId });
+    const response = await API.post(`/games/${gameId}/check-bingo`, { cardId });
     return response.data.data;
   },
 
@@ -38,6 +38,14 @@ const gameService = {
 
   finishGame: async (gameId) => {
     const response = await API.post(`/games/${gameId}/finish`);
+    return response.data.data;
+  },
+  updateGame: async (gameId, data) => {
+    const response = await API.patch(`/games/${gameId}`, data);
+    return response.data.data;
+  },
+  getJackpot: async () => {
+    const response = await API.get("/games/jackpot");
     return response.data.data;
   },
 };

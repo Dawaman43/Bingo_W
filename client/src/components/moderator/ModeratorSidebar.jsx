@@ -17,12 +17,14 @@ export default function ModeratorSidebar({ isOpen, toggleSidebar }) {
       </button>
 
       {/* Sidebar Title */}
-      <h2 className="text-2xl font-bold text-green-400 mb-8">Moderator Panel</h2>
+      <h2 className="text-2xl font-bold text-green-400 mb-8">
+        Moderator Panel
+      </h2>
 
       {/* Navigation */}
       <nav className="flex flex-col gap-4 flex-1">
         <NavLink
-          to="/moderator-dashboard"
+          to="/control"
           className={({ isActive }) =>
             `flex items-center gap-3 p-2 rounded transition ${
               isActive ? "bg-green-600 text-white" : "hover:bg-gray-800"
@@ -34,7 +36,6 @@ export default function ModeratorSidebar({ isOpen, toggleSidebar }) {
           <Home size={20} /> Control Game
         </NavLink>
 
-
         <NavLink
           to="/reports"
           className={({ isActive }) =>
@@ -44,7 +45,8 @@ export default function ModeratorSidebar({ isOpen, toggleSidebar }) {
           }
           onClick={toggleSidebar}
         >
-          <FileText size={20} />Jack Pot Reports
+          <FileText size={20} />
+          Jack Pot Reports
         </NavLink>
       </nav>
     </div>

@@ -1,38 +1,75 @@
-// context/AuthContext.jsx
-import { createContext, useContext, useState } from "react";
-import { login as loginService, logout as logoutService } from "../services/auth";
+import { createContext, useContext, useState, useEffect } from "react";
+import {
+  login as loginService,
+  logout as logoutService,
+  getMe,
+} from "../services/auth";
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    const storedUser = localStorage.getItem("user");
+    return storedUser ? JSON.parse(storedUser) : null;
+  });
 
-  // handle login
-  const loginUser = async (credentials) => {
-    try {
-      const data = await loginService(credentials);
-      if (data.token) {
-        setUser(data.user); // assuming backend returns { user, token }
+  const [token, setToken] = useState(
+    () => localStorage.getItem("token") || null
+  );
+  const [loading, setLoading] = useState(true);
+
+  // Verify token on mount
+  useEffect(() => {
+    const verifyUser = async () => {
+      if (!token) {
+        setLoading(false);
+        return;
       }
-      return data;
-    } catch (err) {
-      throw err;
+      try {
+        const data = await getMe(token); // backend verification
+        setUser(data.user);
+        localStorage.setItem("user", JSON.stringify(data.user)); // refresh stored user
+      } catch (err) {
+        console.error("Token invalid or expired:", err);
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        setToken(null);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    verifyUser();
+  }, [token]);
+
+  const loginUser = async (credentials) => {
+    const data = await loginService(credentials);
+    if (data.token) {
+      setUser(data.user);
+      setToken(data.token);
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
     }
+    return data;
   };
 
-  // handle logout
   const logoutUser = async () => {
     try {
-      await logoutService(); // call backend
+      await logoutService();
     } catch (err) {
       console.error("Logout error:", err);
     }
-    sessionStorage.removeItem("token");
     setUser(null);
+    setToken(null);
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
   };
 
   return (
-    <AuthContext.Provider value={{ user, loginUser, logoutUser }}>
+    <AuthContext.Provider
+      value={{ user, token, loginUser, logoutUser, loading }}
+    >
       {children}
     </AuthContext.Provider>
   );
