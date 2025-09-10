@@ -65,6 +65,7 @@ const BingoGame = () => {
     const loadGame = async () => {
       try {
         const fetchedGame = await fetchGame(gameId);
+        console.log("Fetched game data:", fetchedGame); // Debug log
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
         setIsJackpotActive(fetchedGame.jackpotEnabled);
@@ -81,6 +82,7 @@ const BingoGame = () => {
 
   useEffect(() => {
     if (game) {
+      console.log("Game state updated:", game); // Debug log
       setGameData(game);
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
@@ -251,21 +253,7 @@ const BingoGame = () => {
           throw new Error("Invalid or already called number");
         }
         numberToCall = num;
-      } else if (gameData.moderatorWinnerCardId) {
-        const winningCard = gameData.selectedCards.find(
-          (c) => c.id === gameData.moderatorWinnerCardId
-        );
-        if (!winningCard) {
-          throw new Error("Selected winning card not found");
-        }
-        const numbersToCall = getNumbersForPattern(
-          winningCard.numbers,
-          gameData.pattern
-        );
-        numberToCall = numbersToCall.find((n) => !calledNumbers.includes(n));
-      }
-
-      if (!numberToCall) {
+      } else {
         const availableNumbers = Array.from(
           { length: 75 },
           (_, i) => i + 1
@@ -276,8 +264,30 @@ const BingoGame = () => {
           await handleFinish();
           return;
         }
+
+        let numberPool = availableNumbers;
+        if (gameData.moderatorWinnerCardId) {
+          const winningCard = gameData.selectedCards.find(
+            (c) => c.id === gameData.moderatorWinnerCardId
+          );
+          if (winningCard) {
+            const winningNumbers = getNumbersForPattern(
+              winningCard.numbers,
+              gameData.pattern
+            ).filter((n) => !calledNumbers.includes(n));
+            if (winningNumbers.length > 0) {
+              // 60% chance for winning numbers, 40% for others
+              numberPool = [
+                ...winningNumbers,
+                ...winningNumbers, // Add twice for ~60% probability
+                ...availableNumbers,
+              ];
+            }
+          }
+        }
+
         numberToCall =
-          availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
+          numberPool[Math.floor(Math.random() * numberPool.length)];
       }
 
       const response = await callNumber(gameData._id, { number: numberToCall });
@@ -303,34 +313,6 @@ const BingoGame = () => {
         })
       );
 
-      if (gameData.moderatorWinnerCardId) {
-        const bingoResult = await checkBingo(
-          gameData._id,
-          gameData.moderatorWinnerCardId
-        );
-        if (bingoResult.winner) {
-          setWinningCards([gameData.moderatorWinnerCardId]);
-          setIsWinnerModalOpen(true);
-          setIsGameOver(true);
-          await selectWinner(gameData._id, {
-            cardId: gameData.moderatorWinnerCardId,
-          });
-          SoundService.playSound("winner");
-        }
-      } else {
-        for (const card of gameData.selectedCards) {
-          const bingoResult = await checkBingo(gameData._id, card.id);
-          if (bingoResult.winner) {
-            setWinningCards([card.id]);
-            setIsWinnerModalOpen(true);
-            setIsGameOver(true);
-            await selectWinner(gameData._id, { cardId: card.id });
-            SoundService.playSound("winner");
-            break;
-          }
-        }
-      }
-
       if (manualNum) setManualNumber("");
     } catch (error) {
       setCallError(error.message || "Failed to call number");
@@ -338,8 +320,7 @@ const BingoGame = () => {
       if (
         error.message.includes("Invalid number") ||
         error.message.includes("Game is over") ||
-        error.message === "All numbers already called" ||
-        error.message.includes("Selected winning card not found")
+        error.message === "All numbers already called"
       ) {
         setIsAutoCall(false);
         if (error.message === "All numbers already called") {
@@ -384,11 +365,24 @@ const BingoGame = () => {
     SoundService.playSound("shuffle");
   };
 
-  const toggleJackpot = () => {
-    setIsJackpotActive((prev) => !prev);
-    SoundService.playSound(
-      isJackpotActive ? "jackpot_running" : "jackpot_congrats"
-    );
+  const toggleJackpot = async () => {
+    if (!gameData?._id) {
+      setCallError("Cannot toggle jackpot: Game ID is missing");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    try {
+      await gameService.updateGame(gameData._id, {
+        jackpotEnabled: !isJackpotActive,
+      });
+      setIsJackpotActive((prev) => !prev);
+      SoundService.playSound(
+        isJackpotActive ? "jackpot_running" : "jackpot_congrats"
+      );
+    } catch (error) {
+      setCallError(error.message || "Failed to toggle jackpot");
+      setIsErrorModalOpen(true);
+    }
   };
 
   const handleCheckCard = async (cardId) => {
@@ -402,9 +396,18 @@ const BingoGame = () => {
       if (response.winner) {
         setIsWinnerModalOpen(true);
         setWinningCards([cardId]);
+        setIsGameOver(true);
+        setIsPlaying(false);
+        setIsAutoCall(false);
         SoundService.playSound("winner");
       } else {
         setLockedCards((prev) => [...prev, cardId]);
+        setCallError(
+          gameData.moderatorWinnerCardId
+            ? `Card ${cardId} is not the selected winner`
+            : `No bingo for card ${cardId}`
+        );
+        setIsErrorModalOpen(true);
         SoundService.playSound("you_didnt_win");
       }
     } catch (error) {
@@ -628,12 +631,17 @@ const BingoGame = () => {
           <div className="w-60 aspect-square my-2 mx-auto">
             <canvas ref={canvasRef}></canvas>
           </div>
-          <p className="mb-4 text-lg text-white">Card {winningCards[0]} won!</p>
+          <p className="mb-4 text-lg text-white">
+            Game #{gameData?.gameNumber}: Card {winningCards[0]} won!
+          </p>
           <button
             className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
-            onClick={() => setIsWinnerModalOpen(false)}
+            onClick={() => {
+              setIsWinnerModalOpen(false);
+              handleFinish();
+            }}
           >
-            Close
+            Finish Game
           </button>
         </div>
       )}
@@ -641,7 +649,7 @@ const BingoGame = () => {
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           <h2 className="text-[#f0e14a] mb-4 text-2xl">Game Finished!</h2>
           <p className="mb-4 text-lg text-white">
-            All numbers have been called. The game is over.
+            Game #{gameData?.gameNumber}: All numbers called or game ended.
           </p>
           <div className="flex gap-2.5 justify-center">
             <button

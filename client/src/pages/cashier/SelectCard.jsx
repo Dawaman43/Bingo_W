@@ -31,17 +31,22 @@ const SelectCard = () => {
     const fetchCards = async () => {
       setLoading(true);
       try {
-        const data = await gameService.getAllCards();
+        const response = await gameService.getAllCards();
+        const data = response.data || response; // Handle response.data or direct data
+        console.log(
+          "Fetched cards response:",
+          JSON.stringify(response, null, 2)
+        );
         if (data && data.length > 0) {
           const sortedCards = data
             .map((c, index) => ({
-              id: c.id || c.card_number || index + 1,
+              id: c.cardId || c.id || c.card_number || index + 1,
               card_number: c.card_number || index + 1,
             }))
             .sort((a, b) => a.card_number - b.card_number);
           setCards(sortedCards);
         } else {
-          // fallback to 100 default cards
+          // Fallback to 100 default cards
           setCards(
             Array.from({ length: 100 }, (_, i) => ({
               id: i + 1,
@@ -125,7 +130,7 @@ const SelectCard = () => {
       const payload = {
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
-        pattern: "single_line",
+        pattern: "single_line", // Explicitly set to avoid undefined
         selectedCards: selectedCards.map((id) => ({ id })), // Send objects
       };
       console.log(
@@ -134,13 +139,30 @@ const SelectCard = () => {
       );
 
       const gameData = await gameService.createGame(payload);
+      console.log("gameData:", JSON.stringify(gameData, null, 2));
 
-      console.log("gameData:", gameData);
-
-      const gameId = gameData.id || gameData._id;
+      // Extract game ID from response.data.data
+      const gameId =
+        gameData.data?.data?.id ||
+        gameData.data?.data?.gameId ||
+        gameData.data?.data?._id ||
+        gameData.data?.id ||
+        gameData.data?.gameId ||
+        gameData.data?._id ||
+        gameData.id ||
+        gameData._id;
       if (!gameId) {
-        throw new Error("Game ID not found in response");
+        throw new Error(
+          `Game ID not found in response. Response data: ${JSON.stringify(
+            gameData,
+            null,
+            2
+          )}`
+        );
       }
+
+      // Start the game
+      await gameService.startGame(gameId);
 
       showAlert("Game started successfully!", "success");
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
@@ -151,7 +173,7 @@ const SelectCard = () => {
         response: error.response
           ? {
               status: error.response.status,
-              data: error.response.data,
+              data: JSON.stringify(error.response.data, null, 2),
               headers: error.response.headers,
             }
           : "No response data",
@@ -180,9 +202,12 @@ const SelectCard = () => {
     }
 
     // Break cards into rows
+    const startIndex = (currentPage - 1) * cardsPerPage;
+    const endIndex = startIndex + cardsPerPage;
+    const paginatedCards = cards.slice(startIndex, endIndex);
     const rows = [];
-    for (let i = 0; i < cards.length; i += cardsPerRow) {
-      const rowCards = cards.slice(i, i + cardsPerRow);
+    for (let i = 0; i < paginatedCards.length; i += cardsPerRow) {
+      const rowCards = paginatedCards.slice(i, i + cardsPerRow);
       rows.push(
         <div
           key={`row-${i}`}

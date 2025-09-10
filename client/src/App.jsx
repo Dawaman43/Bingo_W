@@ -25,7 +25,7 @@ function App() {
           {/* Cashier */}
           <Route path="/cashier-report" element={<CashierReport />} />
           <Route path="/select-card" element={<SelectCard />} />
-          <Route path="/bingo-game" element={<BingoGame />} />
+          <Route path="/game/:id" element={<BingoGame />} />
 
           {/* Admin */}
           <Route path="/add-user" element={<AddUser />} />

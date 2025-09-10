@@ -12,14 +12,17 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.getGame(id);
+      if (!response) {
+        throw new Error("No game data returned");
+      }
       setGame(response);
       setError(null);
       return response;
     } catch (error) {
-      setError(
-        error.response?.data?.error || error.message || "Failed to fetch game"
-      );
-      throw error;
+      const errorMessage =
+        error.response?.data?.error || error.message || "Failed to fetch game";
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, []);
 
@@ -29,15 +32,18 @@ export const useBingoGame = () => {
       throw new Error("Invalid game ID");
     }
     try {
-      const response = await gameService.callNumber(gameId, data);
-      setGame(response.game || response);
+      const response = await gameService.callNumber(gameId, data.number);
+      if (!response) {
+        throw new Error("No response data from call number");
+      }
+      setGame(response);
       setError(null);
       return response;
     } catch (error) {
-      setError(
-        error.response?.data?.error || error.message || "Failed to call number"
-      );
-      throw error;
+      const errorMessage =
+        error.response?.data?.error || error.message || "Failed to call number";
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, []);
 
@@ -48,14 +54,17 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.checkBingo(gameId, cardId);
-      setGame(response.game || response);
+      if (!response) {
+        throw new Error("No response data from check bingo");
+      }
+      setGame(response);
       setError(null);
       return response;
     } catch (error) {
-      setError(
-        error.response?.data?.error || error.message || "Failed to check bingo"
-      );
-      throw error;
+      const errorMessage =
+        error.response?.data?.error || error.message || "Failed to check bingo";
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, []);
 
@@ -66,16 +75,19 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.selectWinner(gameId, data);
-      setGame(response.game || response);
+      if (!response) {
+        throw new Error("No response data from select winner");
+      }
+      setGame(response);
       setError(null);
       return response;
     } catch (error) {
-      setError(
+      const errorMessage =
         error.response?.data?.error ||
-          error.message ||
-          "Failed to select winner"
-      );
-      throw error;
+        error.message ||
+        "Failed to select winner";
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, []);
 
@@ -86,14 +98,17 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.finishGame(gameId);
-      setGame(response.game || response);
+      if (!response) {
+        throw new Error("No response data from finish game");
+      }
+      setGame(response);
       setError(null);
       return response;
     } catch (error) {
-      setError(
-        error.response?.data?.error || error.message || "Failed to finish game"
-      );
-      throw error;
+      const errorMessage =
+        error.response?.data?.error || error.message || "Failed to finish game";
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, []);
 
