@@ -24,11 +24,6 @@ export default function ModeratorDashboard() {
   const [callNumberError, setCallNumberError] = useState(null);
   const [callNumberLoading, setCallNumberLoading] = useState(false);
   const [allCards, setAllCards] = useState([]);
-  const [cardSetModalOpen, setCardSetModalOpen] = useState(false);
-  const [selectedCardSet, setSelectedCardSet] = useState([]);
-  const [gameNumberInput, setGameNumberInput] = useState("");
-  const [selectedWinnerCard, setSelectedWinnerCard] = useState("");
-  const [jackpotEnabled, setJackpotEnabled] = useState(true);
   const [futureWinnerModalOpen, setFutureWinnerModalOpen] = useState(false);
   const [futureGameNumber, setFutureGameNumber] = useState("");
   const [futureWinnerCardId, setFutureWinnerCardId] = useState("");
@@ -234,88 +229,6 @@ export default function ModeratorDashboard() {
     }
   };
 
-  const openCardSetModal = () => {
-    setSelectedCardSet([]);
-    setSelectedWinnerCard("");
-    setGameNumberInput("");
-    setJackpotEnabled(true);
-    setModalError(null);
-    setCardSetModalOpen(true);
-  };
-
-  const handleCardSelection = (cardId) => {
-    setSelectedCardSet((prev) => {
-      if (prev.includes(cardId)) {
-        const newSet = prev.filter((id) => id !== cardId);
-        if (selectedWinnerCard === cardId) {
-          setSelectedWinnerCard(""); // Clear winner if deselected
-        }
-        return newSet;
-      } else {
-        return [...prev, cardId];
-      }
-    });
-  };
-
-  const handleWinnerCardSelection = (cardId) => {
-    if (selectedCardSet.includes(cardId)) {
-      setSelectedWinnerCard(cardId === selectedWinnerCard ? "" : cardId);
-    }
-  };
-
-  const handleConfigureGame = async () => {
-    if (!gameNumberInput) {
-      setModalError("Please enter a game number.");
-      return;
-    }
-    const gameNumber = parseInt(gameNumberInput, 10);
-    if (isNaN(gameNumber) || gameNumber < 1) {
-      setModalError("Invalid game number.");
-      return;
-    }
-    if (selectedCardSet.length === 0) {
-      setModalError("Please select at least one card.");
-      return;
-    }
-    if (selectedWinnerCard && !selectedCardSet.includes(selectedWinnerCard)) {
-      setModalError("Winning card must be one of the selected cards.");
-      return;
-    }
-
-    setModalLoading(true);
-    setModalError(null);
-    try {
-      const response = await gameService.createGame({
-        selectedCards: selectedCardSet.map((id) => ({ id })),
-        pattern: "full_house",
-        betAmount: 10,
-        houseFeePercentage: 15,
-        gameNumber,
-        jackpotEnabled,
-        moderatorWinnerCardId: selectedWinnerCard
-          ? parseInt(selectedWinnerCard, 10)
-          : null,
-      });
-
-      // Refresh games to reflect the new or updated game
-      await fetchGames();
-
-      setCardSetModalOpen(false);
-      setSelectedCardSet([]);
-      setSelectedWinnerCard("");
-      setGameNumberInput("");
-      setJackpotEnabled(true);
-    } catch (err) {
-      setModalError(
-        err.response?.data?.message ||
-          "Failed to configure game. Please try again."
-      );
-      console.error(err);
-    } finally {
-      setModalLoading(false);
-    }
-  };
-
   const openFutureWinnerModal = () => {
     setFutureGameNumber("");
     setFutureWinnerCardId("");
@@ -386,12 +299,6 @@ export default function ModeratorDashboard() {
           <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
             Configure Next Game
           </h3>
-          <button
-            onClick={openCardSetModal}
-            className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-all duration-200 mr-4"
-          >
-            Select Card Set & Winner
-          </button>
           <button
             onClick={openFutureWinnerModal}
             className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-all duration-200"
@@ -796,132 +703,6 @@ export default function ModeratorDashboard() {
                       </svg>
                     )}
                     Call Number
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Card Set Selection Modal */}
-        {cardSetModalOpen && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300 overflow-y-auto">
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl max-w-4xl w-full transform transition-all duration-300 scale-100 my-8">
-              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
-                Configure Game: Card Set & Winner
-              </h3>
-              {modalError && (
-                <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
-                  {modalError}
-                </div>
-              )}
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Game Number
-                  </label>
-                  <input
-                    type="number"
-                    value={gameNumberInput}
-                    onChange={(e) => setGameNumberInput(e.target.value)}
-                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                    placeholder="Enter game number (e.g., 2)"
-                    min="1"
-                    disabled={modalLoading}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Enable Jackpot
-                  </label>
-                  <input
-                    type="checkbox"
-                    checked={jackpotEnabled}
-                    onChange={() => setJackpotEnabled(!jackpotEnabled)}
-                    className="h-5 w-5 text-indigo-600 focus:ring-indigo-500"
-                    disabled={modalLoading}
-                  />
-                  <span className="ml-2 text-gray-700 dark:text-gray-300">
-                    {jackpotEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Select Cards (Click to select/deselect, double-click to set
-                    as winner)
-                  </label>
-                  <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto p-2 border border-gray-300 dark:border-gray-600 rounded-lg">
-                    {allCards.map((card) => (
-                      <div
-                        key={card.cardId}
-                        onClick={() => handleCardSelection(card.cardId)}
-                        onDoubleClick={() =>
-                          handleWinnerCardSelection(card.cardId)
-                        }
-                        className={`p-2 border rounded cursor-pointer text-center relative ${
-                          selectedCardSet.includes(card.cardId)
-                            ? "bg-indigo-100 dark:bg-indigo-900 border-indigo-500 dark:border-indigo-400"
-                            : "border-gray-300 dark:border-gray-600"
-                        } ${
-                          selectedWinnerCard === card.cardId
-                            ? "ring-2 ring-green-500 dark:ring-green-400"
-                            : ""
-                        }`}
-                      >
-                        Card #{card.cardId}
-                        {selectedWinnerCard === card.cardId && (
-                          <span className="absolute top-0 right-0 bg-green-500 text-white text-xs px-1 rounded">
-                            Winner
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                    Selected: {selectedCardSet.length} cards | Winner:{" "}
-                    {selectedWinnerCard || "None"}
-                  </p>
-                </div>
-                <div className="flex justify-end space-x-4">
-                  <button
-                    onClick={() => setCardSetModalOpen(false)}
-                    className="bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-all duration-200"
-                    disabled={modalLoading}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfigureGame}
-                    disabled={
-                      modalLoading ||
-                      selectedCardSet.length === 0 ||
-                      !gameNumberInput
-                    }
-                    className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center"
-                  >
-                    {modalLoading && (
-                      <svg
-                        className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                    )}
-                    Save
                   </button>
                 </div>
               </div>
