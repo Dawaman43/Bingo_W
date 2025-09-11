@@ -45,6 +45,8 @@ const BingoGame = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCallingNumber, setIsCallingNumber] = useState(false);
   const [callError, setCallError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
   const canvasRef = useRef(null);
   const autoIntervalRef = useRef(null);
 
@@ -58,14 +60,16 @@ const BingoGame = () => {
     if (!gameId) {
       setCallError("No game ID found");
       setIsErrorModalOpen(true);
+      setIsLoading(false);
       return;
     }
     sessionStorage.setItem("currentGameId", gameId);
 
     const loadGame = async () => {
       try {
+        setIsLoading(true);
         const fetchedGame = await fetchGame(gameId);
-        console.log("Fetched game data:", fetchedGame); // Debug log
+        console.log("Fetched game data:", fetchedGame);
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
         setIsJackpotActive(fetchedGame.jackpotEnabled);
@@ -75,6 +79,8 @@ const BingoGame = () => {
         setCallError(error.message || "Failed to load game");
         setIsErrorModalOpen(true);
         setGameData(null);
+      } finally {
+        setIsLoading(false);
       }
     };
     loadGame();
@@ -82,7 +88,7 @@ const BingoGame = () => {
 
   useEffect(() => {
     if (game) {
-      console.log("Game state updated:", game); // Debug log
+      console.log("Game state updated:", game);
       setGameData(game);
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
@@ -276,10 +282,9 @@ const BingoGame = () => {
               gameData.pattern
             ).filter((n) => !calledNumbers.includes(n));
             if (winningNumbers.length > 0) {
-              // 60% chance for winning numbers, 40% for others
               numberPool = [
                 ...winningNumbers,
-                ...winningNumbers, // Add twice for ~60% probability
+                ...winningNumbers,
                 ...availableNumbers,
               ];
             }
@@ -293,10 +298,15 @@ const BingoGame = () => {
       const response = await callNumber(gameData._id, { number: numberToCall });
       const calledNumber = response.calledNumber || numberToCall;
 
-      setCalledNumbers((prev) => [...prev, calledNumber]);
+      setCalledNumbers((prev) => {
+        const newCalledNumbers = [...prev, calledNumber];
+        console.log("Updated calledNumbers:", newCalledNumbers);
+        return newCalledNumbers;
+      });
       setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
       setCurrentNumber(calledNumber);
 
+      setGameData(response.game);
       SoundService.playSound(`number_${calledNumber}`);
 
       setBingoCards((prevCards) =>
@@ -348,16 +358,48 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
       return;
     }
+    if (gameData.status === "completed") {
+      setCallError("Game is already completed");
+      setIsErrorModalOpen(true);
+      setIsGameOver(true);
+      setIsAutoCall(false);
+      setIsPlaying(false);
+      setIsGameFinishedModalOpen(true);
+      return;
+    }
     setIsGameOver(true);
     setIsAutoCall(false);
     setIsPlaying(false);
     try {
-      await finishGame(gameData._id);
+      const response = await finishGame(gameData._id);
+      setGameData(response.game);
       SoundService.playSound("game_finish");
       setIsGameFinishedModalOpen(true);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
       setIsErrorModalOpen(true);
+    }
+  };
+
+  const handleStartNextGame = async () => {
+    try {
+      setIsLoading(true);
+      const nextGame = await gameService.getNextPendingGame();
+      if (!nextGame || !nextGame._id) {
+        setCallError("No pending game available");
+        setIsErrorModalOpen(true);
+        navigate("/select-card");
+        return;
+      }
+      await gameService.startGame(nextGame._id);
+      sessionStorage.setItem("currentGameId", nextGame._id);
+      navigate(`/bingo-game?id=${nextGame._id}`);
+    } catch (error) {
+      setCallError(error.message || "Failed to start next game");
+      setIsErrorModalOpen(true);
+      navigate("/select-card");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -376,6 +418,7 @@ const BingoGame = () => {
         jackpotEnabled: !isJackpotActive,
       });
       setIsJackpotActive((prev) => !prev);
+      setGameData((prev) => ({ ...prev, jackpotEnabled: !isJackpotActive }));
       SoundService.playSound(
         isJackpotActive ? "jackpot_running" : "jackpot_congrats"
       );
@@ -393,6 +436,7 @@ const BingoGame = () => {
     }
     try {
       const response = await checkBingo(gameData._id, cardId);
+      setGameData(response.game);
       if (response.winner) {
         setIsWinnerModalOpen(true);
         setWinningCards([cardId]);
@@ -495,7 +539,7 @@ const BingoGame = () => {
       </div>
       <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full">
         <div className="text-[#f0e14a] text-3xl font-bold mr-2.5">
-          GAME {gameData?.gameNumber || "Loading..."}
+          GAME {isLoading ? "Loading..." : gameData?.gameNumber || "Unknown"}
         </div>
         <div className="bg-[#f0e14a] text-black px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap">
           Called {calledNumbers.length}/75
@@ -528,7 +572,7 @@ const BingoGame = () => {
                 !gameData?._id || isCallingNumber || !isPlaying || isGameOver
               }
             >
-              Next
+              {isCallingNumber ? "Calling..." : "Next"}
             </button>
             <button
               className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
@@ -660,12 +704,10 @@ const BingoGame = () => {
             </button>
             <button
               className="bg-[#e9744c] text-white border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0854c]"
-              onClick={() => {
-                setIsGameFinishedModalOpen(false);
-                window.location.href = "/select-card";
-              }}
+              onClick={handleStartNextGame}
+              disabled={isLoading}
             >
-              Start New Game
+              {isLoading ? "Starting..." : "Start Next Game"}
             </button>
           </div>
         </div>
@@ -683,7 +725,7 @@ const BingoGame = () => {
                 callError.includes("No game ID found") ||
                 callError.includes("Failed to load game")
               ) {
-                window.location.href = "/create-game";
+                navigate("/create-game");
               }
             }}
           >

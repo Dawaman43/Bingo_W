@@ -12,6 +12,9 @@ const SelectCard = () => {
   const [housePercentage, setHousePercentage] = useState(
     localStorage.getItem("housePercentage") || "15"
   );
+  const [pattern, setPattern] = useState(
+    localStorage.getItem("gamePattern") || "line"
+  ); // New state for pattern
   const [currentPage, setCurrentPage] = useState(1);
   const [alert, setAlert] = useState({ message: "", type: "" });
   const [loading, setLoading] = useState(false);
@@ -31,12 +34,7 @@ const SelectCard = () => {
     const fetchCards = async () => {
       setLoading(true);
       try {
-        const response = await gameService.getAllCards();
-        const data = response.data || response; // Handle response.data or direct data
-        console.log(
-          "Fetched cards response:",
-          JSON.stringify(response, null, 2)
-        );
+        const data = await gameService.getAllCards();
         if (data && data.length > 0) {
           const sortedCards = data
             .map((c, index) => ({
@@ -46,7 +44,6 @@ const SelectCard = () => {
             .sort((a, b) => a.card_number - b.card_number);
           setCards(sortedCards);
         } else {
-          // Fallback to 100 default cards
           setCards(
             Array.from({ length: 100 }, (_, i) => ({
               id: i + 1,
@@ -123,15 +120,18 @@ const SelectCard = () => {
       showAlert("Please select at least one card", "error");
       return;
     }
+    if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
+      showAlert("Please select a valid game pattern", "error");
+      return;
+    }
 
     setLoading(true);
     try {
-      // Log the payload being sent
       const payload = {
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
-        pattern: "single_line", // Explicitly set to avoid undefined
-        selectedCards: selectedCards.map((id) => ({ id })), // Send objects
+        pattern, // Include selected pattern
+        selectedCards: selectedCards.map((id) => ({ id })),
       };
       console.log(
         "Sending payload to createGame:",
@@ -139,18 +139,7 @@ const SelectCard = () => {
       );
 
       const gameData = await gameService.createGame(payload);
-      console.log("gameData:", JSON.stringify(gameData, null, 2));
-
-      // Extract game ID from response.data.data
-      const gameId =
-        gameData.data?.data?.id ||
-        gameData.data?.data?.gameId ||
-        gameData.data?.data?._id ||
-        gameData.data?.id ||
-        gameData.data?.gameId ||
-        gameData.data?._id ||
-        gameData.id ||
-        gameData._id;
+      const gameId = gameData._id || gameData.id || gameData.gameId;
       if (!gameId) {
         throw new Error(
           `Game ID not found in response. Response data: ${JSON.stringify(
@@ -161,13 +150,10 @@ const SelectCard = () => {
         );
       }
 
-      // Start the game
       await gameService.startGame(gameId);
-
       showAlert("Game started successfully!", "success");
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
     } catch (error) {
-      // Log the full error details
       console.error("Error starting game:", {
         message: error.message,
         response: error.response
@@ -201,7 +187,6 @@ const SelectCard = () => {
       );
     }
 
-    // Break cards into rows
     const startIndex = (currentPage - 1) * cardsPerPage;
     const endIndex = startIndex + cardsPerPage;
     const paginatedCards = cards.slice(startIndex, endIndex);
@@ -240,7 +225,6 @@ const SelectCard = () => {
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4">
-      {/* Alert */}
       {alert.message && (
         <div
           className={`fixed top-4 right-4 p-4 rounded shadow-lg transition-transform duration-300 flex items-center max-w-sm z-50 transform ${
@@ -253,13 +237,29 @@ const SelectCard = () => {
         </div>
       )}
 
-      {/* Game Settings */}
       <div className="p-6 bg-white dark:bg-gray-800 shadow-sm mb-4 mx-auto max-w-4xl rounded-lg">
         <h2 className="text-xl font-bold mb-4 text-center text-gray-800 dark:text-gray-200">
           Game Settings
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                Game Pattern
+              </label>
+              <select
+                value={pattern}
+                onChange={(e) => {
+                  setPattern(e.target.value);
+                  localStorage.setItem("gamePattern", e.target.value);
+                }}
+                className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="line">Line (Horizontal)</option>
+                <option value="diagonal">Diagonal</option>
+                <option value="x_pattern">X Pattern (Both Diagonals)</option>
+              </select>
+            </div>
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 House Fee Percentage
@@ -364,7 +364,6 @@ const SelectCard = () => {
         </div>
       </div>
 
-      {/* Card Selection */}
       <div className="max-w-full mx-auto px-4">
         <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-gray-200">
           Select Cards
@@ -385,7 +384,6 @@ const SelectCard = () => {
         )}
       </div>
 
-      {/* Pagination */}
       <div className="flex justify-center gap-4 p-4">
         <button
           onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}

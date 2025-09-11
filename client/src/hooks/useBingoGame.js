@@ -15,7 +15,7 @@ export const useBingoGame = () => {
       if (!response) {
         throw new Error("No game data returned");
       }
-      setGame(response);
+      setGame(response); // response is already game object from gameService.getGame
       setError(null);
       return response;
     } catch (error) {
@@ -33,10 +33,10 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.callNumber(gameId, data.number);
-      if (!response) {
-        throw new Error("No response data from call number");
+      if (!response || !response.game) {
+        throw new Error("No game data in response from call number");
       }
-      setGame(response);
+      setGame(response.game); // Set to response.game, not the entire response
       setError(null);
       return response;
     } catch (error) {
@@ -54,10 +54,10 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.checkBingo(gameId, cardId);
-      if (!response) {
-        throw new Error("No response data from check bingo");
+      if (!response || !response.game) {
+        throw new Error("No game data in response from check bingo");
       }
-      setGame(response);
+      setGame(response.game); // Set to response.game
       setError(null);
       return response;
     } catch (error) {
@@ -75,10 +75,10 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.selectWinner(gameId, data);
-      if (!response) {
-        throw new Error("No response data from select winner");
+      if (!response || !response.game) {
+        throw new Error("No game data in response from select winner");
       }
-      setGame(response);
+      setGame(response.game); // Set to response.game
       setError(null);
       return response;
     } catch (error) {
@@ -98,12 +98,18 @@ export const useBingoGame = () => {
     }
     try {
       const response = await gameService.finishGame(gameId);
+      console.log("useBingoGame.finishGame response:", response);
       if (!response) {
         throw new Error("No response data from finish game");
       }
-      setGame(response);
+      // Handle both cases: response.game or response as game object
+      const gameData = response.game || response;
+      if (!gameData || !gameData._id) {
+        throw new Error("No valid game data in response from finish game");
+      }
+      setGame(gameData);
       setError(null);
-      return response;
+      return { game: gameData }; // Return consistent format
     } catch (error) {
       const errorMessage =
         error.response?.data?.error || error.message || "Failed to finish game";

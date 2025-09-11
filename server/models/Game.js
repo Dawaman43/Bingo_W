@@ -7,11 +7,15 @@ const gameSchema = new mongoose.Schema({
   selectedCards: [
     {
       id: { type: Number, required: true },
-      numbers: [[{ type: mongoose.Schema.Types.Mixed }]], // Nested array
+      numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
     },
   ],
-  pattern: { type: String, required: true },
-  prizePool: { type: Number, required: true },
+  pattern: {
+    type: String,
+    required: true,
+    enum: ["line", "diagonal", "x_pattern"],
+  }, // Updated enum
+  prizePool: { type: Number, required: true, default: 0 },
   potentialJackpot: { type: Number, default: 0 },
   status: {
     type: String,
@@ -26,6 +30,7 @@ const gameSchema = new mongoose.Schema({
     },
   ],
   moderatorWinnerCardId: { type: Number, default: null },
+  selectedWinnerRowIndices: { type: [Number], default: [] }, // Array for multiple lines (e.g., x_pattern)
   jackpotEnabled: { type: Boolean, default: true },
   winner: {
     cardId: { type: Number },

@@ -12,8 +12,9 @@ export const validate = [
     .withMessage("House percentage must be between 0 and 100"),
   body("pattern")
     .optional()
-    .isIn(["single_line", "double_line", "full_house"])
+    .isIn(["line", "diagonal", "x_pattern"])
     .withMessage("Invalid pattern"),
+
   body("selectedCards")
     .optional()
     .isArray({ min: 1 })

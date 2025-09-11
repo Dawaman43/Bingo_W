@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ModeratorLayout from "../../components/moderator/ModeratorLayout";
+import gameService from "../../services/game";
 import moderatorService from "../../services/moderator";
-import API from "../../services/axios";
 
 export default function ModeratorDashboard() {
   const navigate = useNavigate();
@@ -27,16 +27,18 @@ export default function ModeratorDashboard() {
   const [cardSetModalOpen, setCardSetModalOpen] = useState(false);
   const [selectedCardSet, setSelectedCardSet] = useState([]);
   const [gameNumberInput, setGameNumberInput] = useState("");
-  const [selectedWinnerCard, setSelectedWinnerCard] = useState(""); // New state for winner card
+  const [selectedWinnerCard, setSelectedWinnerCard] = useState("");
+  const [jackpotEnabled, setJackpotEnabled] = useState(true);
+  const [futureWinnerModalOpen, setFutureWinnerModalOpen] = useState(false);
+  const [futureGameNumber, setFutureGameNumber] = useState("");
+  const [futureWinnerCardId, setFutureWinnerCardId] = useState("");
 
   // Function to fetch all games
   const fetchGames = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await API.get("/games");
-      const allGames = response.data.data;
-
+      const allGames = await gameService.getAllGames();
       // Categorize games by status
       setActiveGames(allGames.filter((g) => g.status === "active"));
       setCompletedGames(allGames.filter((g) => g.status === "completed"));
@@ -52,8 +54,8 @@ export default function ModeratorDashboard() {
   // Function to fetch all cards
   const fetchAllCards = async () => {
     try {
-      const response = await API.get("/games/cards");
-      setAllCards(response.data.data);
+      const cards = await gameService.getAllCards();
+      setAllCards(cards);
     } catch (err) {
       console.error("Failed to fetch cards", err);
     }
@@ -234,15 +236,21 @@ export default function ModeratorDashboard() {
 
   const openCardSetModal = () => {
     setSelectedCardSet([]);
-    setSelectedWinnerCard(""); // Reset winner card
+    setSelectedWinnerCard("");
     setGameNumberInput("");
+    setJackpotEnabled(true);
+    setModalError(null);
     setCardSetModalOpen(true);
   };
 
   const handleCardSelection = (cardId) => {
     setSelectedCardSet((prev) => {
       if (prev.includes(cardId)) {
-        return prev.filter((id) => id !== cardId);
+        const newSet = prev.filter((id) => id !== cardId);
+        if (selectedWinnerCard === cardId) {
+          setSelectedWinnerCard(""); // Clear winner if deselected
+        }
+        return newSet;
       } else {
         return [...prev, cardId];
       }
@@ -250,54 +258,118 @@ export default function ModeratorDashboard() {
   };
 
   const handleWinnerCardSelection = (cardId) => {
-    setSelectedWinnerCard(cardId); // Set single winner card
+    if (selectedCardSet.includes(cardId)) {
+      setSelectedWinnerCard(cardId === selectedWinnerCard ? "" : cardId);
+    }
   };
 
-  const handleCreateGameWithCardSet = async () => {
-    if (selectedCardSet.length === 0) {
-      setError("Please select at least one card.");
-      return;
-    }
-
+  const handleConfigureGame = async () => {
     if (!gameNumberInput) {
-      setError("Please enter a game number.");
+      setModalError("Please enter a game number.");
+      return;
+    }
+    const gameNumber = parseInt(gameNumberInput, 10);
+    if (isNaN(gameNumber) || gameNumber < 1) {
+      setModalError("Invalid game number.");
+      return;
+    }
+    if (selectedCardSet.length === 0) {
+      setModalError("Please select at least one card.");
+      return;
+    }
+    if (selectedWinnerCard && !selectedCardSet.includes(selectedWinnerCard)) {
+      setModalError("Winning card must be one of the selected cards.");
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    setModalLoading(true);
+    setModalError(null);
     try {
-      const response = await API.post("/games", {
-        selectedCards: selectedCardSet,
+      const response = await gameService.createGame({
+        selectedCards: selectedCardSet.map((id) => ({ id })),
         pattern: "full_house",
-        gameNumber: parseInt(gameNumberInput, 10),
-        moderatorWinnerCardId: selectedWinnerCard || null, // Include winner card
+        betAmount: 10,
+        houseFeePercentage: 15,
+        gameNumber,
+        jackpotEnabled,
+        moderatorWinnerCardId: selectedWinnerCard
+          ? parseInt(selectedWinnerCard, 10)
+          : null,
       });
 
-      if (response.data && response.data.data) {
-        setPendingGames((prev) => [...prev, response.data.data]);
-        setCardSetModalOpen(false);
-        setSelectedCardSet([]);
-        setSelectedWinnerCard("");
-        setGameNumberInput("");
-      }
+      // Refresh games to reflect the new or updated game
+      await fetchGames();
+
+      setCardSetModalOpen(false);
+      setSelectedCardSet([]);
+      setSelectedWinnerCard("");
+      setGameNumberInput("");
+      setJackpotEnabled(true);
     } catch (err) {
-      setError("Failed to create game. Please try again.");
+      setModalError(
+        err.response?.data?.message ||
+          "Failed to configure game. Please try again."
+      );
       console.error(err);
     } finally {
-      setLoading(false);
+      setModalLoading(false);
+    }
+  };
+
+  const openFutureWinnerModal = () => {
+    setFutureGameNumber("");
+    setFutureWinnerCardId("");
+    setModalError(null);
+    setFutureWinnerModalOpen(true);
+  };
+
+  const handleConfigureFutureWinner = async () => {
+    if (!futureGameNumber || !futureWinnerCardId) {
+      setModalError("Please enter a game number and select a winning card.");
+      return;
+    }
+
+    const gameNumber = parseInt(futureGameNumber, 10);
+    const cardId = parseInt(futureWinnerCardId, 10);
+    if (isNaN(gameNumber) || gameNumber < 1) {
+      setModalError("Invalid game number.");
+      return;
+    }
+    if (isNaN(cardId) || cardId < 1) {
+      setModalError("Invalid card ID.");
+      return;
+    }
+
+    setModalLoading(true);
+    setModalError(null);
+    try {
+      const response = await moderatorService.configureFutureWinners([
+        { gameNumber, cardId },
+      ]);
+
+      // Refresh games to reflect the new or updated game
+      await fetchGames();
+
+      setFutureWinnerModalOpen(false);
+      setFutureGameNumber("");
+      setFutureWinnerCardId("");
+    } catch (err) {
+      setModalError("Failed to configure future winner. Please try again.");
+      console.error(err);
+    } finally {
+      setModalLoading(false);
     }
   };
 
   return (
     <ModeratorLayout>
-      <div className="container mx-auto p-4 sm:p-6 space-y-6">
-        <h2 className="text-3xl font-bold text-gray-900 mb-6">
+      <div className="container mx-auto p-6 space-y-8">
+        <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
           Moderator Dashboard
         </h2>
 
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-lg shadow-sm transition-all duration-300">
+          <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg shadow-md">
             {error}
           </div>
         )}
@@ -305,36 +377,122 @@ export default function ModeratorDashboard() {
         {loading && (
           <div className="text-center py-4">
             <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600 mx-auto"></div>
-            <p className="text-gray-600 mt-2">Loading...</p>
+            <p className="text-gray-600 dark:text-gray-400 mt-2">Loading...</p>
           </div>
         )}
 
-        {/* Create New Game with Card Set */}
-        <div className="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="text-xl font-semibold text-gray-800 mb-4">
-            Create Next Game
+        {/* Configure Game */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
+          <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
+            Configure Next Game
           </h3>
           <button
             onClick={openCardSetModal}
-            className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-all duration-200"
+            className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-all duration-200 mr-4"
           >
             Select Card Set & Winner
           </button>
+          <button
+            onClick={openFutureWinnerModal}
+            className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-all duration-200"
+          >
+            Configure Future Winner
+          </button>
+        </div>
+
+        {/* Pending Games Table */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
+          <h3 className="text-xl font-semibold text-indigo-600 dark:text-indigo-400 mb-4">
+            Pending Games
+          </h3>
+          {pendingGames.length === 0 ? (
+            <p className="text-gray-500 dark:text-gray-400">
+              No pending games available.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200">
+                    <th className="border-b px-4 py-3 text-left">Game #</th>
+                    <th className="border-b px-4 py-3 text-left">Pattern</th>
+                    <th className="border-b px-4 py-3 text-left">Cards</th>
+                    <th className="border-b px-4 py-3 text-left">Winner</th>
+                    <th className="border-b px-4 py-3 text-left">Jackpot</th>
+                    <th className="border-b px-4 py-3 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingGames.map((game) => (
+                    <tr
+                      key={game._id}
+                      className="hover:bg-indigo-50 dark:hover:bg-indigo-900/50 transition-colors duration-200"
+                    >
+                      <td className="border-b px-4 py-3">{game.gameNumber}</td>
+                      <td className="border-b px-4 py-3">
+                        {game.pattern.replaceAll("_", " ")}
+                      </td>
+                      <td className="border-b px-4 py-3">
+                        {game.selectedCards.length}
+                      </td>
+                      <td className="border-b px-4 py-3">
+                        {game.moderatorWinnerCardId || "None"}
+                      </td>
+                      <td className="border-b px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={game.jackpotEnabled}
+                          onChange={() =>
+                            handleToggleJackpot(game._id, game.jackpotEnabled)
+                          }
+                          disabled={loading}
+                          className="h-5 w-5 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
+                      <td className="border-b px-4 py-3 space-y-2 sm:space-y-0 sm:space-x-2">
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <button
+                            onClick={() =>
+                              openWinnerModal(
+                                game._id,
+                                game.moderatorWinnerCardId
+                              )
+                            }
+                            className="bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 transition-all duration-200 text-sm"
+                          >
+                            Set Winner
+                          </button>
+                          <button
+                            onClick={() => setSelectedNextGame(game._id)}
+                            className="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-all duration-200 text-sm"
+                          >
+                            Select to Start
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Start Next Game */}
-        <div className="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="text-xl font-semibold text-gray-800 mb-4">
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
+          <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
             Start Next Game
           </h3>
           {pendingGames.length === 0 ? (
-            <p className="text-gray-500">No pending games available.</p>
+            <p className="text-gray-500 dark:text-gray-400">
+              No pending games available.
+            </p>
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 space-y-4 sm:space-y-0">
               <select
                 value={selectedNextGame}
                 onChange={(e) => setSelectedNextGame(e.target.value)}
-                className="w-full sm:w-2/3 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                className="w-full sm:w-2/3 p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 disabled={loading}
               >
                 <option value="">Select a pending game</option>
@@ -358,17 +516,17 @@ export default function ModeratorDashboard() {
         </div>
 
         {/* Active Games Table */}
-        <div className="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="text-xl font-semibold text-indigo-600 mb-4">
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
+          <h3 className="text-xl font-semibold text-indigo-600 dark:text-indigo-400 mb-4">
             Active Games
           </h3>
           {activeGames.length === 0 ? (
-            <p className="text-gray-500">No active games.</p>
+            <p className="text-gray-500 dark:text-gray-400">No active games.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
-                  <tr className="bg-indigo-100 text-indigo-800">
+                  <tr className="bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200">
                     <th className="border-b px-4 py-3 text-left">Game #</th>
                     <th className="border-b px-4 py-3 text-left">Pattern</th>
                     <th className="border-b px-4 py-3 text-left">Cards</th>
@@ -382,7 +540,7 @@ export default function ModeratorDashboard() {
                   {activeGames.map((game) => (
                     <tr
                       key={game._id}
-                      className="hover:bg-indigo-50 transition-colors duration-200"
+                      className="hover:bg-indigo-50 dark:hover:bg-indigo-900/50 transition-colors duration-200"
                     >
                       <td className="border-b px-4 py-3">{game.gameNumber}</td>
                       <td className="border-b px-4 py-3">
@@ -440,34 +598,38 @@ export default function ModeratorDashboard() {
           )}
         </div>
 
-        {/* Completed Games Table */}
-        <div className="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="text-xl font-semibold text-gray-600 mb-4">
-            Completed Games
+        {/* Started and Completed Games Table (Non-editable) */}
+        <div className="bg-red-50 dark:bg-red-900/50 p-6 rounded-xl shadow-lg">
+          <h3 className="text-xl font-semibold text-red-600 dark:text-red-400 mb-4">
+            Started and Completed Games (Non-editable)
           </h3>
-          {completedGames.length === 0 ? (
-            <p className="text-gray-500">No completed games.</p>
+          {activeGames.length === 0 && completedGames.length === 0 ? (
+            <p className="text-red-500 dark:text-red-400">
+              No started or completed games.
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full border-collapse">
                 <thead>
-                  <tr className="bg-gray-100 text-gray-800">
+                  <tr className="bg-red-100 dark:bg-red-800 text-red-800 dark:text-red-200">
                     <th className="border-b px-4 py-3 text-left">Game #</th>
+                    <th className="border-b px-4 py-3 text-left">Status</th>
                     <th className="border-b px-4 py-3 text-left">Pattern</th>
                     <th className="border-b px-4 py-3 text-left">Cards</th>
                     <th className="border-b px-4 py-3 text-left">Called</th>
                     <th className="border-b px-4 py-3 text-left">Winner</th>
                     <th className="border-b px-4 py-3 text-left">Prize</th>
-                    <th className="border-b px-4 py-3 text-left">Actions</th>
+                    <th className="border-b px-4 py-3 text-left">Jackpot</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {completedGames.map((game) => (
+                  {[...activeGames, ...completedGames].map((game) => (
                     <tr
                       key={game._id}
-                      className="hover:bg-gray-50 transition-colors duration-200"
+                      className="hover:bg-red-100 dark:hover:bg-red-800/50 transition-colors duration-200"
                     >
                       <td className="border-b px-4 py-3">{game.gameNumber}</td>
+                      <td className="border-b px-4 py-3">{game.status}</td>
                       <td className="border-b px-4 py-3">
                         {game.pattern.replaceAll("_", " ")}
                       </td>
@@ -486,18 +648,7 @@ export default function ModeratorDashboard() {
                         ${game.winner?.prize || 0}
                       </td>
                       <td className="border-b px-4 py-3">
-                        <button
-                          onClick={() =>
-                            openWinnerModal(
-                              game._id,
-                              game.moderatorWinnerCardId || game.winner?.cardId
-                            )
-                          }
-                          className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-all duration-200 text-sm"
-                          disabled // Disable for completed games
-                        >
-                          View Winner
-                        </button>
+                        {game.jackpotEnabled ? "Enabled" : "Disabled"}
                       </td>
                     </tr>
                   ))}
@@ -507,27 +658,27 @@ export default function ModeratorDashboard() {
           )}
         </div>
 
-        {/* Winner Modal */}
+        {/* Winner Modal (for pending games) */}
         {modalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300">
-            <div className="bg-white p-8 rounded-xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
-              <h3 className="text-2xl font-semibold text-gray-800 mb-6">
-                Set Winning Card for Next Game
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
+                Set Winning Card for Game
               </h3>
               {modalError && (
-                <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
+                <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
                   {modalError}
                 </div>
               )}
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Winning Card ID
                   </label>
                   <select
                     value={selectedWinnerId}
                     onChange={(e) => setSelectedWinnerId(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     disabled={modalLoading}
                   >
                     <option value="">Select Card ID</option>
@@ -585,18 +736,18 @@ export default function ModeratorDashboard() {
         {/* Call Number Modal */}
         {callNumberModalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300">
-            <div className="bg-white p-8 rounded-xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
-              <h3 className="text-2xl font-semibold text-gray-800 mb-6">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
                 Call Number
               </h3>
               {callNumberError && (
-                <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
+                <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
                   {callNumberError}
                 </div>
               )}
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Number to Call (1-75)
                   </label>
                   <input
@@ -605,7 +756,7 @@ export default function ModeratorDashboard() {
                     max="75"
                     value={selectedNumber}
                     onChange={(e) => setSelectedNumber(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     disabled={callNumberLoading}
                     placeholder="Enter number between 1-75"
                   />
@@ -655,87 +806,100 @@ export default function ModeratorDashboard() {
         {/* Card Set Selection Modal */}
         {cardSetModalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300 overflow-y-auto">
-            <div className="bg-white p-8 rounded-xl shadow-2xl max-w-4xl w-full transform transition-all duration-300 scale-100 my-8">
-              <h3 className="text-2xl font-semibold text-gray-800 mb-6">
-                Select Card Set & Winner for Next Game
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl max-w-4xl w-full transform transition-all duration-300 scale-100 my-8">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
+                Configure Game: Card Set & Winner
               </h3>
+              {modalError && (
+                <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
+                  {modalError}
+                </div>
+              )}
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Game Number
                   </label>
                   <input
                     type="number"
                     value={gameNumberInput}
                     onChange={(e) => setGameNumberInput(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     placeholder="Enter game number (e.g., 2)"
                     min="1"
+                    disabled={modalLoading}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Cards (Click to select/deselect)
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Enable Jackpot
                   </label>
-                  <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto p-2 border border-gray-300 rounded-lg">
+                  <input
+                    type="checkbox"
+                    checked={jackpotEnabled}
+                    onChange={() => setJackpotEnabled(!jackpotEnabled)}
+                    className="h-5 w-5 text-indigo-600 focus:ring-indigo-500"
+                    disabled={modalLoading}
+                  />
+                  <span className="ml-2 text-gray-700 dark:text-gray-300">
+                    {jackpotEnabled ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Select Cards (Click to select/deselect, double-click to set
+                    as winner)
+                  </label>
+                  <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto p-2 border border-gray-300 dark:border-gray-600 rounded-lg">
                     {allCards.map((card) => (
                       <div
                         key={card.cardId}
                         onClick={() => handleCardSelection(card.cardId)}
-                        className={`p-2 border rounded cursor-pointer text-center ${
+                        onDoubleClick={() =>
+                          handleWinnerCardSelection(card.cardId)
+                        }
+                        className={`p-2 border rounded cursor-pointer text-center relative ${
                           selectedCardSet.includes(card.cardId)
-                            ? "bg-indigo-100 border-indigo-500"
-                            : "border-gray-300"
-                        }`}
-                      >
-                        Card #{card.cardId}
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-sm text-gray-500 mt-2">
-                    Selected: {selectedCardSet.length} cards
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Winning Card (Choose one)
-                  </label>
-                  <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto p-2 border border-gray-300 rounded-lg">
-                    {allCards.map((card) => (
-                      <div
-                        key={card.cardId}
-                        onClick={() => handleWinnerCardSelection(card.cardId)}
-                        className={`p-2 border rounded cursor-pointer text-center ${
+                            ? "bg-indigo-100 dark:bg-indigo-900 border-indigo-500 dark:border-indigo-400"
+                            : "border-gray-300 dark:border-gray-600"
+                        } ${
                           selectedWinnerCard === card.cardId
-                            ? "bg-green-100 border-green-500"
-                            : "border-gray-300"
+                            ? "ring-2 ring-green-500 dark:ring-green-400"
+                            : ""
                         }`}
                       >
                         Card #{card.cardId}
+                        {selectedWinnerCard === card.cardId && (
+                          <span className="absolute top-0 right-0 bg-green-500 text-white text-xs px-1 rounded">
+                            Winner
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
-                  <p className="text-sm text-gray-500 mt-2">
-                    Selected Winner: {selectedWinnerCard || "None"}
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                    Selected: {selectedCardSet.length} cards | Winner:{" "}
+                    {selectedWinnerCard || "None"}
                   </p>
                 </div>
                 <div className="flex justify-end space-x-4">
                   <button
                     onClick={() => setCardSetModalOpen(false)}
                     className="bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-all duration-200"
+                    disabled={modalLoading}
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={handleCreateGameWithCardSet}
+                    onClick={handleConfigureGame}
                     disabled={
-                      loading ||
+                      modalLoading ||
                       selectedCardSet.length === 0 ||
                       !gameNumberInput
                     }
                     className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center"
                   >
-                    {loading && (
+                    {modalLoading && (
                       <svg
                         className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
                         xmlns="http://www.w3.org/2000/svg"
@@ -757,7 +921,96 @@ export default function ModeratorDashboard() {
                         ></path>
                       </svg>
                     )}
-                    Create Game
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Future Winner Modal */}
+        {futureWinnerModalOpen && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 transition-opacity duration-300">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
+                Configure Future Game Winner
+              </h3>
+              {modalError && (
+                <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6">
+                  {modalError}
+                </div>
+              )}
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Game Number
+                  </label>
+                  <input
+                    type="number"
+                    value={futureGameNumber}
+                    onChange={(e) => setFutureGameNumber(e.target.value)}
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    placeholder="Enter future game number (e.g., 10)"
+                    min="1"
+                    disabled={modalLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Winning Card ID
+                  </label>
+                  <select
+                    value={futureWinnerCardId}
+                    onChange={(e) => setFutureWinnerCardId(e.target.value)}
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    disabled={modalLoading}
+                  >
+                    <option value="">Select Card ID</option>
+                    {allCards.map((card) => (
+                      <option key={card.cardId} value={card.cardId}>
+                        Card #{card.cardId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex justify-end space-x-4">
+                  <button
+                    onClick={() => setFutureWinnerModalOpen(false)}
+                    className="bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-all duration-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfigureFutureWinner}
+                    disabled={
+                      modalLoading || !futureGameNumber || !futureWinnerCardId
+                    }
+                    className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center"
+                  >
+                    {modalLoading && (
+                      <svg
+                        className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        ></circle>
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        ></path>
+                      </svg>
+                    )}
+                    Save
                   </button>
                 </div>
               </div>
