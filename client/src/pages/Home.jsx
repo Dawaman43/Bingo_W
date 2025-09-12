@@ -42,7 +42,7 @@ const Home = () => {
       {/* Footer */}
       <footer className="bg-black/70 py-6 shadow-inner text-center border-t border-gray-800">
         <p className="text-gray-400 text-sm">
-          © {new Date().getFullYear()} Dagi Bingo. All rights reserved.
+          © {new Date().getFullYear()} Joker Bingo. All rights reserved.
         </p>
       </footer>
     </div>
