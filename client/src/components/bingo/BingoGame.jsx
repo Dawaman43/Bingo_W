@@ -49,6 +49,7 @@ const BingoGame = () => {
 
   const canvasRef = useRef(null);
   const autoIntervalRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => {
     SoundService.preloadSounds(language);
@@ -147,6 +148,17 @@ const BingoGame = () => {
     }
     return () => clearInterval(autoIntervalRef.current);
   }, [isAutoCall, speed, isGameOver, isPlaying, isCallingNumber, gameData]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
 
   const fetchBingoCards = async (gameId) => {
     if (!gameId) {
@@ -470,22 +482,53 @@ const BingoGame = () => {
   };
 
   const handleToggleFullscreen = () => {
-    setIsFullscreen((prev) => !prev);
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch((err) => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
   };
 
   const generateBoard = () => {
+    const letters = [
+      { letter: "B", color: "bg-red-600" },
+      { letter: "I", color: "bg-blue-600" },
+      { letter: "N", color: "bg-green-600" },
+      { letter: "G", color: "bg-yellow-600" },
+      { letter: "O", color: "bg-purple-600" },
+    ];
     const board = [];
-    for (let i = 1; i <= 75; i++) {
-      board.push(
+    for (let row = 0; row < 5; row++) {
+      const rowNumbers = [];
+      // Add letter column
+      rowNumbers.push(
         <div
-          key={i}
-          className={`w-10 h-10 rounded flex justify-center items-center text-lg font-bold cursor-default transition-all duration-300 ${
-            calledNumbers.includes(i)
-              ? "bg-[#f0e14a] text-black shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]"
-              : "bg-[#0f1a4a] text-[#f0e14a] border border-[#2a3969]"
-          }`}
+          key={`letter-${row}`}
+          className={`w-12 h-12 ${letters[row].color} text-white flex justify-center items-center text-xl font-bold border border-[#2a3969]`}
         >
-          {i}
+          {letters[row].letter}
+        </div>
+      );
+      // Add numbers for the row
+      for (let i = row * 15 + 1; i <= (row + 1) * 15; i++) {
+        rowNumbers.push(
+          <div
+            key={i}
+            className={`w-12 h-12 rounded flex justify-center items-center text-xl font-bold cursor-default transition-all duration-300 ${
+              calledNumbers.includes(i)
+                ? "bg-[#f0e14a] text-black shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]"
+                : "bg-[#0f1a4a] text-[#f0e14a] border border-[#2a3969]"
+            }`}
+          >
+            {i}
+          </div>
+        );
+      }
+      board.push(
+        <div key={`row-${row}`} className="flex gap-[2px]">
+          {rowNumbers}
         </div>
       );
     }
@@ -495,15 +538,18 @@ const BingoGame = () => {
   const recentNumbers = lastCalledNumbers.map((num, index) => (
     <span
       key={index}
-      className="bg-[#f0e14a] text-black w-10 h-10 rounded-full flex justify-center items-center font-bold text-lg"
+      className="bg-[#f0e14a] text-black w-8 h-8 rounded-full flex justify-center items-center font-bold text-sm"
     >
       {num}
     </span>
   ));
 
   return (
-    <div className="w-full h-full bg-[#1a2b5f] flex flex-col items-center p-5 relative">
-      <div className="flex justify-between items-center w-full max-w-[1000px]">
+    <div
+      ref={containerRef}
+      className="w-full h-full bg-[#1a2b5f] flex flex-col items-center p-5 relative"
+    >
+      <div className="flex justify-between items-center w-full max-w-[1200px]">
         <button
           className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
           onClick={() => navigate("/select-card")}
@@ -526,47 +572,47 @@ const BingoGame = () => {
           </span>
         </button>
       </div>
-      <div className="w-full flex justify-between px-16 items-center my-12 max-[1100px]:flex-col max-[1100px]:gap-2">
+      <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-5xl font-black text-[#f0e14a] text-center">
-          CLASSIC BINGO
+          JOKER BINGO
         </h1>
-        <div className="flex justify-center items-center gap-2.5">
-          <span className="text-[#e9a64c] text-3xl font-bold mr-1.5">
+        <div className="flex justify-center items-center gap-2">
+          <span className="text-[#e9a64c] text-2xl font-bold mr-1">
             Last called:
           </span>
           {recentNumbers}
         </div>
       </div>
-      <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full">
-        <div className="text-[#f0e14a] text-3xl font-bold mr-2.5">
+      <div className="flex flex-wrap justify-center gap-2 mb-5 w-full">
+        <div className="text-[#f0e14a] text-2xl font-bold mr-2">
           GAME {isLoading ? "Loading..." : gameData?.gameNumber || "Unknown"}
         </div>
-        <div className="bg-[#f0e14a] text-black px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap">
+        <div className="bg-[#f0e14a] text-black px-3 py-1.5 rounded-full font-bold text-xs whitespace-nowrap">
           Called {calledNumbers.length}/75
         </div>
       </div>
-      <div className="grid grid-cols-16 gap-1 mb-5 w-full max-w-[1000px]">
+      <div className="flex flex-col gap-[2px] mb-5 w-full max-w-[1200px] mr-4 flex-grow justify-center items-center">
         {generateBoard()}
       </div>
-      <div className="w-full flex justify-between gap-4 max-w-[1000px] max-md:flex-col">
-        <div className="flex-1">
-          <div className="flex flex-wrap justify-center gap-2.5 mb-5 w-full max-w-[1000px]">
+      <div className="w-full flex items-center gap-4 max-w-[1200px] max-md:flex-col">
+        <div className="flex-1 flex flex-col items-center">
+          <div className="flex flex-wrap justify-center gap-2 mb-4 w-full">
             <button
-              className="bg-green-500 text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-green-500 text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={handlePlayPause}
               disabled={isGameOver}
             >
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
-              className="bg-[#e9744c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => setIsAutoCall((prev) => !prev)}
               disabled={!gameData?._id || !isPlaying || isGameOver}
             >
               Auto Call {isAutoCall ? "On" : "Off"}
             </button>
             <button
-              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCallNumber()}
               disabled={
                 !gameData?._id || isCallingNumber || !isPlaying || isGameOver
@@ -575,14 +621,14 @@ const BingoGame = () => {
               {isCallingNumber ? "Calling..." : "Next"}
             </button>
             <button
-              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={handleFinish}
               disabled={isGameOver}
             >
               Finish
             </button>
             <button
-              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={handleShuffle}
               disabled={!isPlaying || isGameOver}
             >
@@ -590,7 +636,7 @@ const BingoGame = () => {
             </button>
             {user?.role === "moderator" && (
               <button
-                className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+                className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
                 onClick={toggleJackpot}
                 disabled={isGameOver}
               >
@@ -598,17 +644,17 @@ const BingoGame = () => {
               </button>
             )}
           </div>
-          <div className="flex gap-2.5 mt-2.5 w-full max-w-[1000px] justify-center">
+          <div className="flex gap-2 mt-2 w-full justify-center">
             <input
               type="text"
-              className="p-2.5 bg-[#e9a64c] border-none rounded text-base text-black w-52"
+              className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
               value={cardId}
               onChange={(e) => setCardId(e.target.value)}
               placeholder="Enter Card ID"
               disabled={!gameData?._id}
             />
             <button
-              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCheckCard(cardId)}
               disabled={!gameData?._id || !cardId}
             >
@@ -616,10 +662,10 @@ const BingoGame = () => {
             </button>
           </div>
           {user?.role === "moderator" && (
-            <div className="flex gap-2.5 mt-2.5 w-full max-w-[1000px] justify-center">
+            <div className="flex gap-2 mt-2 w-full justify-center">
               <input
                 type="number"
-                className="p-2.5 bg-[#e9a64c] border-none rounded text-base text-black w-52"
+                className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
                 value={manualNumber}
                 onChange={(e) => setManualNumber(e.target.value)}
                 placeholder="Manual Number (1-75)"
@@ -628,7 +674,7 @@ const BingoGame = () => {
                 max="75"
               />
               <button
-                className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+                className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
                 onClick={handleManualCall}
                 disabled={!isPlaying || isGameOver || !manualNumber}
               >
@@ -636,35 +682,35 @@ const BingoGame = () => {
               </button>
             </div>
           )}
-          <div className="flex justify-center items-center gap-2.5 mt-5 mb-5">
-            <span>Speed:</span>
+          <div className="flex justify-center items-center gap-2 mt-4 mb-4">
+            <span className="text-sm">Speed:</span>
             <input
               type="range"
               min="1"
               max="10"
               value={speed}
               onChange={(e) => setSpeed(parseInt(e.target.value))}
-              className="w-24 accent-[#f0e14a]"
+              className="w-20 accent-[#f0e14a]"
               disabled={!isPlaying || isGameOver}
             />
-            <span>{speed}s</span>
+            <span className="text-sm">{speed}s</span>
           </div>
         </div>
-        <div className="flex-1 aspect-square flex justify-center items-start">
-          <p className="w-[70%] aspect-square flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_20px_white] rounded-full text-6xl font-black text-black">
+        <div className="flex items-center">
+          <p className="w-16 h-16 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
             {currentNumber || "-"}
           </p>
         </div>
       </div>
       {isJackpotActive && (
         <div className="fixed bottom-5 left-[8.5%] -translate-x-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-20">
-          <div className="text-3xl font-bold text-[#e9a64c] uppercase mb-2">
+          <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
             JACKPOT
           </div>
-          <div className="text-4xl font-bold text-[#f0e14a] mb-2.5">
+          <div className="text-3xl font-bold text-[#f0e14a] mb-2">
             {jackpotAmount} BIRR
           </div>
-          <button className="bg-[#e9744c] text-white border-none px-4 py-2.5 font-bold rounded cursor-pointer text-base transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full">
+          <button className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full">
             Run Jackpot
           </button>
         </div>
@@ -679,7 +725,7 @@ const BingoGame = () => {
             Game #{gameData?.gameNumber}: Card {winningCards[0]} won!
           </p>
           <button
-            className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
             onClick={() => {
               setIsWinnerModalOpen(false);
               handleFinish();
@@ -695,15 +741,15 @@ const BingoGame = () => {
           <p className="mb-4 text-lg text-white">
             Game #{gameData?.gameNumber}: All numbers called or game ended.
           </p>
-          <div className="flex gap-2.5 justify-center">
+          <div className="flex gap-2 justify-center">
             <button
-              className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => setIsGameFinishedModalOpen(false)}
             >
               Close
             </button>
             <button
-              className="bg-[#e9744c] text-white border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0854c]"
+              className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0854c]"
               onClick={handleStartNextGame}
               disabled={isLoading}
             >
@@ -717,7 +763,7 @@ const BingoGame = () => {
           <h2 className="text-[#e9744c] mb-4 text-2xl">Error</h2>
           <p className="mb-4 text-lg text-white">{callError}</p>
           <button
-            className="bg-[#e9a64c] text-black border-none px-5 py-2.5 font-bold rounded cursor-pointer text-base transition-colors duration-300 hover:bg-[#f0b76a]"
+            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
             onClick={() => {
               setIsErrorModalOpen(false);
               setCallError(null);
