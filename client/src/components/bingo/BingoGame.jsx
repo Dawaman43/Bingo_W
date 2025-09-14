@@ -400,7 +400,7 @@ const BingoGame = () => {
       if (!nextGame || !nextGame._id) {
         setCallError("No pending game available");
         setIsErrorModalOpen(true);
-        navigate("/select-card");
+        navigate("/cashier-dashboard");
         return;
       }
       await gameService.startGame(nextGame._id);
