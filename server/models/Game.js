@@ -4,6 +4,7 @@ const gameSchema = new mongoose.Schema({
   gameNumber: { type: Number, required: true, unique: true },
   betAmount: { type: Number, required: true },
   houseFeePercentage: { type: Number, required: true },
+  houseFee: { type: Number, default: 0 },
   selectedCards: [
     {
       id: { type: Number, required: true },

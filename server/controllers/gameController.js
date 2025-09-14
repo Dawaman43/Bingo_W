@@ -1524,106 +1524,35 @@ export const createFutureGames = async (req, res, next) => {
  * @param {Object} config - Game configuration
  * @returns {Promise<Object>} Created game object
  */
-export const createGameRecord = async ({
-  selectedCards = [],
-  pattern = "line",
-  betAmount = 10,
-  houseFeePercentage = 15,
-  moderatorWinnerCardId = null,
-  jackpotEnabled = true,
-  startFromGameNumber = null,
-}) => {
-  console.log(
-    "[createGameRecord] Creating game record with startFromGameNumber:",
-    startFromGameNumber
-  );
+export const createGameRecord = async (
+  gameNumber,
+  betAmount,
+  houseFeePercentage,
+  gameCards,
+  pattern,
+  prizePool,
+  potentialJackpot,
+  winnerCardId,
+  selectedWinnerRowIndices = [],
+  jackpotEnabled = true
+) => {
+  if (!gameCards || !Array.isArray(gameCards) || gameCards.length === 0) {
+    throw new Error("Game cards must be a non-empty array");
+  }
 
+  // Validate pattern
   if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
-    console.log("[createGameRecord] Invalid pattern:", pattern);
-    throw new Error("Invalid game pattern");
+    throw new Error("Invalid pattern type");
   }
 
-  const cardIds = selectedCards
-    .map((c) =>
-      typeof c === "object" && c !== null && "id" in c
-        ? Number(c.id)
-        : Number(c)
-    )
-    .filter((id) => !isNaN(id));
+  // Calculate houseFee
+  const houseFee = betAmount * (houseFeePercentage / 100) * gameCards.length;
 
-  if (!cardIds.length) {
-    console.log("[createGameRecord] Invalid card IDs provided:", selectedCards);
-    throw new Error("Invalid card IDs provided");
-  }
-
-  const cards = await Card.find({ card_number: { $in: cardIds } });
-  if (!cards.length) {
-    console.log("[createGameRecord] No valid cards found for IDs:", cardIds);
-    throw new Error("No valid cards found for the provided IDs");
-  }
-
-  const foundCardIds = cards.map((card) => card.card_number);
-  const missingCardIds = cardIds.filter((id) => !foundCardIds.includes(id));
-  if (missingCardIds.length) {
-    console.log("[createGameRecord] Missing card IDs:", missingCardIds);
-    throw new Error(`Cards not found: ${missingCardIds.join(", ")}`);
-  }
-
-  const gameCards = cards.map((card) => ({
-    id: card.card_number,
-    numbers: card.numbers,
-  }));
-
-  const totalPot = Number(betAmount) * gameCards.length;
-  const houseFee = (totalPot * Number(houseFeePercentage)) / 100;
-  const potentialJackpot = jackpotEnabled ? totalPot * 0.1 : 0;
-  const prizePool = totalPot - houseFee - potentialJackpot;
-
-  let winnerCardId = moderatorWinnerCardId
-    ? Number(moderatorWinnerCardId)
-    : null;
-  if (!winnerCardId) {
-    const futureWinning = await Counter.findOne({
-      _id: `futureWinning_${startFromGameNumber}`,
-    });
-    if (futureWinning && !isNaN(Number(futureWinning.cardId))) {
-      winnerCardId = Number(futureWinning.cardId);
-    }
-    console.log(
-      `[createGameRecord] Checked for predefined winner for game #${startFromGameNumber}:`,
-      winnerCardId
-    );
-  }
-
-  if (winnerCardId && !gameCards.some((card) => card.id === winnerCardId)) {
-    console.log("[createGameRecord] Invalid winnerCardId:", winnerCardId);
-    throw new Error(`Invalid winner card ID: ${winnerCardId}`);
-  }
-
-  // Determine selectedWinnerRowIndices based on pattern and winner card
-  let selectedWinnerRowIndices = [];
-  if (winnerCardId) {
-    const winnerCard = gameCards.find((card) => card.id === winnerCardId);
-    if (winnerCard) {
-      const { selectedIndices } = getNumbersForPattern(
-        winnerCard.numbers,
-        pattern,
-        [],
-        true
-      );
-      selectedWinnerRowIndices = selectedIndices;
-      console.log(
-        `[createGameRecord] Selected indices for winner card ${winnerCardId}:`,
-        selectedWinnerRowIndices
-      );
-    }
-  }
-
-  const gameNumber = await getNextGameNumber(startFromGameNumber);
   const game = new Game({
     gameNumber,
     betAmount,
     houseFeePercentage,
+    houseFee, // Set the computed houseFee
     selectedCards: gameCards,
     pattern,
     prizePool,
@@ -1651,7 +1580,6 @@ export const createGameRecord = async ({
 
   return game;
 };
-
 /**
  * Gets report data with filters and aggregations for cashier reports.
  * @param {Object} req - Express request object with query params: status, pattern, startDate, endDate
