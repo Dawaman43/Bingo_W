@@ -16,6 +16,7 @@ import {
   configureFutureWinners,
   createSequentialGames,
   getNextPendingGame,
+  getReportData,
 } from "../controllers/gameController.js";
 import { verifyToken } from "../middlewares/auth.js";
 import { validate } from "../middlewares/validate.js";
@@ -58,6 +59,7 @@ router.get("/:id", verifyToken, (req, res, next) => {
   console.log("Hit /api/games/:id route with id:", req.params.id);
   getGame(req, res, next);
 });
+router.get("/report", verifyToken, getReportData);
 router.post("/:id/call-number", verifyToken, validate, callNumber);
 router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
 router.post("/:id/select-winner", verifyToken, validate, selectWinner);

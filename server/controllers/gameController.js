@@ -1651,3 +1651,101 @@ export const createGameRecord = async ({
 
   return game;
 };
+
+/**
+ * Gets report data with filters and aggregations for cashier reports.
+ * @param {Object} req - Express request object with query params: status, pattern, startDate, endDate
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const getReportData = async (req, res, next) => {
+  try {
+    console.log(
+      "[getReportData] Fetching report data with filters:",
+      req.query
+    );
+
+    const { status, pattern, startDate, endDate } = req.query;
+
+    // Build filter object
+    const filter = { status: { $ne: null } }; // All games by default
+
+    if (status && status !== "") {
+      filter.status = status === "finished" ? "completed" : status; // Map 'finished' to 'completed'
+    }
+
+    if (pattern && pattern !== "") {
+      filter.pattern = pattern;
+    }
+
+    if (startDate) {
+      filter.createdAt = { ...filter.createdAt, $gte: new Date(startDate) };
+    }
+    if (endDate) {
+      if (!filter.createdAt) filter.createdAt = {};
+      filter.createdAt.$lte = new Date(endDate);
+    }
+
+    // Fetch all matching games
+    const games = await Game.find(filter)
+      .select(
+        "gameNumber betAmount houseFeePercentage houseFee prizePool status pattern createdAt startedAt winner"
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!games || games.length === 0) {
+      return res.json({
+        message: "Report data retrieved",
+        data: {
+          totalGames: 0,
+          activeGames: 0,
+          totalHouseFee: 0,
+          games: [],
+        },
+      });
+    }
+
+    // Aggregations
+    const totalGames = games.length;
+    const activeGames = games.filter(
+      (g) => g.status === "active" || g.status === "pending"
+    ).length;
+    const totalHouseFee = games.reduce(
+      (sum, game) => sum + (game.houseFee || 0),
+      0
+    );
+
+    // Map fields for frontend (use createdAt as date if startedAt not present)
+    const mappedGames = games.map((game) => ({
+      id: game._id,
+      gameNumber: game.gameNumber,
+      status: game.status === "completed" ? "finished" : game.status,
+      started_at: game.startedAt || game.createdAt, // Fallback to createdAt
+      bet_amount: game.betAmount,
+      house_percentage: game.houseFeePercentage,
+      winning_pattern: game.pattern, // Assume pattern is winning_pattern
+      house_fee: game.houseFee,
+      prize_pool: game.prizePool,
+      // Add more fields if needed, e.g., total_pot: game.totalPot (calculate if not stored)
+    }));
+
+    console.log(
+      `[getReportData] Retrieved ${totalGames} games, ${activeGames} active, total house fee: ${totalHouseFee}`
+    );
+
+    res.json({
+      message: "Report data retrieved successfully",
+      data: {
+        totalGames,
+        activeGames,
+        totalHouseFee: totalHouseFee.toFixed(2),
+        games: mappedGames,
+      },
+    });
+  } catch (error) {
+    console.error("[getReportData] Error fetching report data:", error);
+    next(error);
+  }
+};
