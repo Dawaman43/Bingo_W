@@ -2,14 +2,15 @@ import { Route, Routes } from "react-router-dom";
 import Home from "./pages/Home";
 import { Toaster } from "react-hot-toast";
 import Login from "./pages/auth/Login";
-import SelectCard from "./pages/cashier/SelectCard";
 import AddUser from "./pages/admin/AddUser";
 import Control from "./pages/moderator/Control";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Dashboard from "./pages/admin/Dashboard";
 import AdminReport from "./pages/admin/Report";
-import CashierReport from "./pages/cashier/Report";
 import BingoGame from "./components/bingo/BingoGame";
+import CashierDashboard from "./pages/cashier/cashier";
+import SelectCard from "./components/cashier/SelectCard";
+import CashierReport from "./components/cashier/Report";
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
         {/* Protected routes group */}
         <Route element={<ProtectedRoute />}>
           {/* Cashier */}
+          <Route path="/cashier-dashboard" element={<CashierDashboard />} />
           <Route path="/cashier-report" element={<CashierReport />} />
           <Route path="/select-card" element={<SelectCard />} />
           <Route path="/bingo-game" element={<BingoGame />} />

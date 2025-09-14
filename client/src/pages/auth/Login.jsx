@@ -38,7 +38,7 @@ function Login() {
         toast.success("Login successful!");
 
         if (userRole === "admin") navigate("/admin-dashboard");
-        else if (userRole === "cashier") navigate("/select-card");
+        else if (userRole === "cashier") navigate("/cashier-dashboard");
         else if (userRole === "moderator") navigate("/control");
         else navigate("/");
       } else {
