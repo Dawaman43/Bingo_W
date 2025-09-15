@@ -414,7 +414,7 @@ const BingoGame = () => {
     } catch (error) {
       setCallError(error.message || "Failed to start next game");
       setIsErrorModalOpen(true);
-      navigate("/select-card");
+      navigate("/cashier-dashboard");
     } finally {
       setIsLoading(false);
     }
@@ -613,7 +613,7 @@ const BingoGame = () => {
       <div className="flex justify-between items-center w-full max-w-[1200px]">
         <button
           className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
-          onClick={() => navigate("/select-card")}
+          onClick={() => navigate("/cashier-dashboard")}
         >
           ↩️
         </button>
