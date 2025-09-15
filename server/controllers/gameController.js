@@ -1677,3 +1677,47 @@ export const getReportData = async (req, res, next) => {
     next(error);
   }
 };
+
+export const pauseGame = async (req, res, next) => {
+  try {
+    const { gameId } = req.params;
+    console.log("[pauseGame] Pausing game:", gameId);
+
+    const game = await Game.findById(gameId);
+    if (!game) {
+      return res.status(404).json({ message: "Game not found" });
+    }
+    if (game.status !== "active") {
+      return res.status(400).json({ message: "Game must be active to pause" });
+    }
+
+    game.status = "paused";
+    await game.save();
+
+    // Log the action (if GameLog exists)
+    if (GameLog) {
+      await GameLog.create({
+        gameId,
+        action: "pauseGame",
+        status: "success",
+        details: { gameNumber: game.gameNumber },
+      });
+    }
+
+    res.json({
+      message: `Game ${game.gameNumber} paused successfully`,
+      status: "paused",
+    });
+  } catch (error) {
+    console.error("[pauseGame] Error pausing game:", error);
+    if (GameLog) {
+      await GameLog.create({
+        gameId: req.params.gameId,
+        action: "pauseGame",
+        status: "failed",
+        details: { error: error.message || "Internal server error" },
+      });
+    }
+    next(error);
+  }
+};

@@ -20,7 +20,7 @@ const gameSchema = new mongoose.Schema({
   potentialJackpot: { type: Number, default: 0 },
   status: {
     type: String,
-    enum: ["pending", "active", "completed"],
+    enum: ["pending", "active", "paused", "completed"],
     default: "pending",
   },
   calledNumbers: [{ type: Number }],

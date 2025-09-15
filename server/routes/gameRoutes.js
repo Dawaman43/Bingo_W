@@ -11,6 +11,7 @@ import {
   updateGame,
   getJackpot,
   startGame,
+  pauseGame, // Added import
   resetGameCounter,
   moderatorConfigureNextGameNumber,
   configureFutureWinners,
@@ -65,6 +66,7 @@ router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
 router.post("/:id/select-winner", verifyToken, validate, selectWinner);
 router.post("/:id/finish", verifyToken, validate, finishGame);
 router.post("/:id/start", verifyToken, startGame);
+router.post("/:id/pause", verifyToken, pauseGame); // Added pause route
 router.patch("/:id", verifyToken, validate, updateGame);
 
 export default router;

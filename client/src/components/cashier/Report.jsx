@@ -1,4 +1,6 @@
+// Updated Report.jsx with computed house fees and optimistic updates for instant pause/stop
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import reportService from "../../services/report";
 import gameService from "../../services/game";
 import {
@@ -30,6 +32,7 @@ ChartJS.register(
 );
 
 const CashierReport = () => {
+  const navigate = useNavigate();
   const [reportData, setReportData] = useState({
     totalGames: 0,
     activeGames: 0,
@@ -46,14 +49,14 @@ const CashierReport = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentJackpot, setCurrentJackpot] = useState(0);
 
-  // Enhanced chart data states
+  // Chart data states
   const [gamesStatusData, setGamesStatusData] = useState({
     labels: ["Active/Pending", "Finished"],
     datasets: [{ data: [0, 0] }],
   });
   const [patternsData, setPatternsData] = useState({
-    labels: ["Line", "Diagonal", "X Pattern"],
-    datasets: [{ data: [0, 0, 0] }],
+    labels: ["Line", "Diagonal", "X Pattern", "Full House", "Single Line"],
+    datasets: [{ data: [0, 0, 0, 0, 0] }],
   });
   const [dailyActivityData, setDailyActivityData] = useState({
     labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -69,13 +72,12 @@ const CashierReport = () => {
     ],
     datasets: [{ data: [0, 0, 0, 0, 0] }],
   });
-  // New charts
   const [houseFeeData, setHouseFeeData] = useState({
     labels: ["Low (<10%)", "Medium (10-20%)", "High (>20%)"],
     datasets: [{ data: [0, 0, 0] }],
   });
   const [revenueTrendData, setRevenueTrendData] = useState({
-    labels: [], // Will be populated with dates
+    labels: [],
     datasets: [{ data: [] }],
   });
   const [jackpotContributionData, setJackpotContributionData] = useState({
@@ -83,7 +85,7 @@ const CashierReport = () => {
     datasets: [{ data: [0, 0, 0] }],
   });
 
-  // Enhanced summary stats
+  // Summary stats
   const [summaryStats, setSummaryStats] = useState({
     totalGames: 0,
     activeGames: 0,
@@ -94,6 +96,21 @@ const CashierReport = () => {
     averageBetAmount: 0,
     totalPotentialJackpot: 0,
   });
+
+  // Helper function to compute house fee
+  const computeHouseFee = (betAmount, housePercentage, prizePool) => {
+    const bet = parseFloat(betAmount) || 10;
+    const perc = parseFloat(housePercentage) || 0;
+    const p = parseFloat(prizePool) || 0;
+    const r = perc / 100;
+    const s = 1 - r;
+    const kOverBet = 0.1; // Since j = totalPot / 10
+    const denominator = s - kOverBet;
+    if (denominator <= 0 || p <= 0) return 0;
+    const t = p / denominator;
+    const h = t * r;
+    return Math.round(h * 100) / 100; // Round to 2 decimals
+  };
 
   useEffect(() => {
     fetchReportData();
@@ -107,7 +124,6 @@ const CashierReport = () => {
       setReportData(data);
       updateSummaryStats(data);
       updateCharts(data.games);
-      // Fetch current jackpot
       const jackpotData = await gameService.getJackpot();
       setCurrentJackpot(jackpotData.amount || 0);
     } catch (error) {
@@ -128,19 +144,21 @@ const CashierReport = () => {
       0
     );
     const completed = games.filter((g) => g.status === "finished").length;
+    // Compute totalHouseFee using the formula
+    const totalHouseFee = games.reduce((sum, g) => {
+      return (
+        sum + computeHouseFee(g.bet_amount, g.house_percentage, g.prize_pool)
+      );
+    }, 0);
     const avgBet = games.length > 0 ? (sumBet / games.length).toFixed(2) : 0;
-    const totalPotential = games.reduce(
-      (sum, g) => sum + parseFloat(g.potential_jackpot || 0),
-      0
-    );
+    // For totalPotentialJackpot, approximate as totalHouseFee (since j = totalPot /10, similar ratio)
+    const totalPotential = totalHouseFee; // Approximation, or compute similarly if needed
 
     setSummaryStats({
       totalGames: data.totalGames,
       activeGames: data.activeGames,
       completedGames: completed,
-      totalHouseFee:
-        parseFloat(data.totalHouseFee) ||
-        games.reduce((sum, g) => sum + parseFloat(g.house_fee || 0), 0),
+      totalHouseFee: totalHouseFee,
       sumBetAmounts: sumBet.toFixed(2),
       totalPrizePool: totalPrize.toFixed(2),
       averageBetAmount: avgBet,
@@ -166,17 +184,23 @@ const CashierReport = () => {
       ],
     });
 
-    // Patterns (Bar)
-    const line = games.filter((g) => g.winning_pattern === "line").length;
+    // Patterns (Bar) - Handle variations
+    const line = games.filter(
+      (g) => g.winning_pattern === "line" || g.winning_pattern === "single_line"
+    ).length;
     const diagonal = games.filter(
       (g) => g.winning_pattern === "diagonal"
     ).length;
     const x = games.filter((g) => g.winning_pattern === "x_pattern").length;
+    const fullHouse = games.filter(
+      (g) => g.winning_pattern === "full_house"
+    ).length;
     setPatternsData({
+      labels: ["Line", "Diagonal", "X Pattern", "Full House"],
       datasets: [
         {
           label: "Number of Games",
-          data: [line, diagonal, x],
+          data: [line, diagonal, x, fullHouse],
           backgroundColor: "#F59E0B",
           borderColor: "#D97706",
           borderWidth: 1,
@@ -192,6 +216,7 @@ const CashierReport = () => {
       daily[day]++;
     });
     setDailyActivityData({
+      labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
       datasets: [
         {
           label: "Number of Games",
@@ -215,6 +240,13 @@ const CashierReport = () => {
       else bet[4]++;
     });
     setBetAmountData({
+      labels: [
+        "0-10 Birr",
+        "11-20 Birr",
+        "21-50 Birr",
+        "51-100 Birr",
+        "100+ Birr",
+      ],
       datasets: [
         {
           label: "Number of Games",
@@ -226,7 +258,7 @@ const CashierReport = () => {
       ],
     });
 
-    // House Fee Distribution (Bar)
+    // House Fee Distribution (Bar) - Using computed house fees
     const houseLow = games.filter(
       (g) => parseFloat(g.house_percentage || 0) < 10
     ).length;
@@ -238,6 +270,7 @@ const CashierReport = () => {
       (g) => parseFloat(g.house_percentage || 0) > 20
     ).length;
     setHouseFeeData({
+      labels: ["Low (<10%)", "Medium (10-20%)", "High (>20%)"],
       datasets: [
         {
           label: "Number of Games",
@@ -249,7 +282,7 @@ const CashierReport = () => {
       ],
     });
 
-    // Revenue Trend (Line) - House Fee over last 7 days
+    // Revenue Trend (Line) - Use computed house fees
     const last7Days = Array.from({ length: 7 }, (_, i) => {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -261,7 +294,12 @@ const CashierReport = () => {
           const gDate = new Date(g.started_at).toISOString().split("T")[0];
           return gDate === date;
         })
-        .reduce((sum, g) => sum + parseFloat(g.house_fee || 0), 0);
+        .reduce(
+          (sum, g) =>
+            sum +
+            computeHouseFee(g.bet_amount, g.house_percentage, g.prize_pool),
+          0
+        );
     });
     setRevenueTrendData({
       labels: last7Days.map((d) =>
@@ -283,14 +321,18 @@ const CashierReport = () => {
       ],
     });
 
-    // New: Jackpot Contribution (Bar) - Simplified periods
+    // Jackpot Contribution (Bar) - Approximate as totalHouseFee / something, but use computed
     const thisWeek = games
       .filter((g) => {
         const weekAgo = new Date();
         weekAgo.setDate(weekAgo.getDate() - 7);
         return new Date(g.started_at) > weekAgo;
       })
-      .reduce((sum, g) => sum + parseFloat(g.potential_jackpot || 0), 0);
+      .reduce(
+        (sum, g) =>
+          sum + computeHouseFee(g.bet_amount, g.house_percentage, g.prize_pool),
+        0
+      );
     const lastWeek = games
       .filter((g) => {
         const twoWeeksAgo = new Date();
@@ -300,12 +342,21 @@ const CashierReport = () => {
         const gDate = new Date(g.started_at);
         return gDate > twoWeeksAgo && gDate <= weekAgo;
       })
-      .reduce((sum, g) => sum + parseFloat(g.potential_jackpot || 0), 0);
+      .reduce(
+        (sum, g) =>
+          sum + computeHouseFee(g.bet_amount, g.house_percentage, g.prize_pool),
+        0
+      );
     const prior =
-      games.reduce((sum, g) => sum + parseFloat(g.potential_jackpot || 0), 0) -
+      games.reduce(
+        (sum, g) =>
+          sum + computeHouseFee(g.bet_amount, g.house_percentage, g.prize_pool),
+        0
+      ) -
       thisWeek -
       lastWeek;
     setJackpotContributionData({
+      labels: ["This Week", "Last Week", "Prior"],
       datasets: [
         {
           label: "Contributions (Birr)",
@@ -340,204 +391,290 @@ const CashierReport = () => {
       "Prize Pool",
       "Status",
     ];
-    const csvRows = [
+    const csvContent = [
       headers.join(","),
-      ...filteredGames.map((game) =>
-        [
+      ...filteredGames.map((game) => {
+        const houseFee = computeHouseFee(
+          game.bet_amount,
+          game.house_percentage,
+          game.prize_pool
+        );
+        return [
           game.gameNumber,
           new Date(game.started_at).toLocaleDateString(),
-          game.winning_pattern.replace("_", " "),
-          `${game.bet_amount} Birr`,
-          `${game.house_percentage}%`,
-          `${parseFloat(game.house_fee || 0).toFixed(2)} Birr`,
-          `${parseFloat(game.prize_pool || 0).toFixed(2)} Birr`,
+          game.winning_pattern,
+          game.bet_amount,
+          game.house_percentage,
+          houseFee.toFixed(2),
+          game.prize_pool,
           game.status,
-        ].join(",")
-      ),
+        ].join(",");
+      }),
     ].join("\n");
-    const blob = new Blob([csvRows], { type: "text/csv" });
+
+    const blob = new Blob([csvContent], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `games-report-${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = "bingo-report.csv";
     a.click();
     window.URL.revokeObjectURL(url);
   };
 
-  const getPatternDisplay = (pattern) => {
-    if (pattern === "x_pattern") return "X Pattern";
-    return pattern.charAt(0).toUpperCase() + pattern.slice(1);
+  // Optimistic update for instant game control without reload
+  const handleGameControl = async (gameId, action) => {
+    const previousReportData = { ...reportData }; // For rollback
+    const previousSummaryStats = { ...summaryStats };
+    const previousGamesStatusData = { ...gamesStatusData };
+
+    try {
+      // Determine new status
+      let newStatus;
+      if (action === "play") {
+        newStatus = "active";
+      } else if (action === "pause") {
+        newStatus = "paused";
+      } else if (action === "stop") {
+        newStatus = "finished";
+      }
+
+      // Optimistically update games list and activeGames count
+      setReportData((prev) => {
+        const updatedGames = prev.games.map((game) =>
+          game.id === gameId ? { ...game, status: newStatus } : game
+        );
+        const newActiveGames = updatedGames.filter(
+          (g) => g.status === "active" || g.status === "pending"
+        ).length;
+        return {
+          ...prev,
+          games: updatedGames,
+          activeGames: newActiveGames,
+        };
+      });
+
+      // Update summary stats
+      setSummaryStats((prev) => {
+        const updatedGames = reportData.games.map((game) =>
+          game.id === gameId ? { ...game, status: newStatus } : game
+        );
+        const newActive = updatedGames.filter(
+          (g) => g.status === "active" || g.status === "pending"
+        ).length;
+        const newCompleted = updatedGames.filter(
+          (g) => g.status === "finished"
+        ).length;
+        return {
+          ...prev,
+          activeGames: newActive,
+          completedGames: newCompleted,
+        };
+      });
+
+      // Update status pie chart
+      setGamesStatusData((prev) => {
+        const updatedGames = reportData.games.map((game) =>
+          game.id === gameId ? { ...game, status: newStatus } : game
+        );
+        const newActive = updatedGames.filter(
+          (g) => g.status === "active" || g.status === "pending"
+        ).length;
+        const newFinished = updatedGames.filter(
+          (g) => g.status === "finished"
+        ).length;
+        return {
+          ...prev,
+          datasets: [{ ...prev.datasets[0], data: [newActive, newFinished] }],
+        };
+      });
+
+      // Make API call (no fetchReportData to avoid reload)
+      if (action === "play") {
+        await gameService.startGame(gameId); // /start for pending or paused
+      } else if (action === "pause") {
+        await gameService.pauseGame(gameId); // /pause for active
+      } else if (action === "stop") {
+        await gameService.finishGame(gameId); // /finish for active
+      }
+
+      console.log(`Game ${action}ed successfully`);
+    } catch (error) {
+      console.error(`Error ${action}ing game:`, error);
+      // Revert on failure
+      setReportData(previousReportData);
+      setSummaryStats(previousSummaryStats);
+      setGamesStatusData(previousGamesStatusData);
+      alert(`Failed to ${action} game: ${error.message || "Unknown error"}`);
+    }
   };
 
-  const getStatusDisplay = (status) => {
-    return status.charAt(0).toUpperCase() + status.slice(1);
+  const handleViewGame = (gameId) => {
+    navigate(`/bingo-game?id=${gameId}`);
   };
 
-  const renderTableRow = (game, index) => (
-    <tr
-      key={game.id}
-      className="hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-    >
-      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
-        {index + 1}
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-        {new Date(game.started_at).toLocaleString()}
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap">
-        <span
-          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-            game.winning_pattern === "line"
-              ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-              : game.winning_pattern === "diagonal"
-              ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-              : "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
-          }`}
-        >
-          {getPatternDisplay(game.winning_pattern)}
-        </span>
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-        {parseFloat(game.bet_amount || 0).toFixed(2)} Birr
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-        {game.house_percentage || 0}%
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-        {parseFloat(game.house_fee || 0).toFixed(2)} Birr
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-        {parseFloat(game.prize_pool || 0).toFixed(2)} Birr
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap">
-        <span
-          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-            game.status === "active"
-              ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-              : game.status === "pending"
-              ? "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
-              : "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-          }`}
-        >
-          {getStatusDisplay(game.status)}
-        </span>
-      </td>
-      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-        <div className="flex space-x-2">
-          <button
-            className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-200 px-2 py-1 rounded"
-            onClick={() => handleGameAction("view", game.id)}
+  const renderTableRow = (game, index) => {
+    const houseFee = computeHouseFee(
+      game.bet_amount,
+      game.house_percentage,
+      game.prize_pool
+    );
+    return (
+      <tr
+        key={game.id || index}
+        className="hover:bg-gray-50 dark:hover:bg-gray-700"
+      >
+        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
+          {game.gameNumber}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+          {new Date(game.started_at).toLocaleDateString()}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+          {game.winning_pattern}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+          {game.bet_amount} Birr
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+          {game.house_percentage}%
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
+          {houseFee.toFixed(2)} Birr
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+          {game.prize_pool} Birr
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          <span
+            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+              game.status === "finished"
+                ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+                : game.status === "active"
+                ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
+                : game.status === "paused"
+                ? "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300"
+                : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300"
+            }`}
           >
-            View
-          </button>
-          {game.status !== "finished" && (
-            <>
+            {game.status}
+          </span>
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleViewGame(game.id)}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition-colors"
+            >
+              View
+            </button>
+            {game.status === "active" && (
+              <>
+                <button
+                  onClick={() => handleGameControl(game.id, "pause")}
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                >
+                  Pause
+                </button>
+                <button
+                  onClick={() => handleGameControl(game.id, "stop")}
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                >
+                  Stop
+                </button>
+              </>
+            )}
+            {game.status === "pending" && (
               <button
-                className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-200 px-2 py-1 rounded"
-                onClick={() => handleGameAction("edit", game.id)}
+                onClick={() => handleGameControl(game.id, "play")}
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
               >
-                Edit
+                Play
               </button>
+            )}
+            {game.status === "paused" && (
               <button
-                className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-200 px-2 py-1 rounded"
-                onClick={() => handleGameAction("end", game.id)}
+                onClick={() => handleGameControl(game.id, "play")}
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
               >
-                End
+                Resume
               </button>
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
-  );
-
-  const handleGameAction = (action, id) => {
-    console.log(`Action: ${action} for game ${id}`);
+            )}
+          </div>
+        </td>
+      </tr>
+    );
   };
+
+  // Stats for summary cards
+  const stats = [
+    {
+      name: "Total Games",
+      value: summaryStats.totalGames,
+      color: "bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-300",
+      icon: "🎲",
+      label: "All Time",
+    },
+    {
+      name: "Active Games",
+      value: summaryStats.activeGames,
+      color:
+        "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-300",
+      icon: "⏳",
+      label: "In Progress",
+    },
+    {
+      name: "Completed Games",
+      value: summaryStats.completedGames,
+      color:
+        "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300",
+      icon: "✅",
+      label: "Finished",
+    },
+    {
+      name: "Total House Fee",
+      value: `${summaryStats.totalHouseFee.toFixed(2)} Birr`,
+      color:
+        "bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-300",
+      icon: "💰",
+      label: "Total house fee",
+    },
+    {
+      name: "Avg Bet Amount",
+      value: `${summaryStats.averageBetAmount} Birr`,
+      color:
+        "bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-300",
+      icon: "📊",
+      label: "Per Game",
+    },
+    {
+      name: "Current Jackpot",
+      value: `${currentJackpot} Birr`,
+      color:
+        "bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-300",
+      icon: "🏆",
+      label: "Live",
+    },
+  ];
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading report...</p>
+          <div className="mx-auto mb-4 w-6 h-6 border-2 border-gray-600 dark:border-gray-400 border-t-indigo-500 rounded-full animate-spin"></div>
+          <p className="text-gray-500 dark:text-gray-400">Loading report...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8 px-4 sm:px-6 lg:px-8">
-      {/* Enhanced Summary Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-        {[
-          {
-            label: "Total Games",
-            value: summaryStats.totalGames,
-            icon: "🎲",
-            color:
-              "bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200",
-          },
-          {
-            label: "Active Games",
-            value: summaryStats.activeGames,
-            icon: "⏳",
-            color:
-              "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200",
-          },
-          {
-            label: "Completed Games",
-            value: summaryStats.completedGames,
-            icon: "✅",
-            color:
-              "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200",
-          },
-          {
-            label: "Total House Fee",
-            value: `${summaryStats.totalHouseFee.toFixed(2)} Birr`,
-            icon: "💰",
-            color:
-              "bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200",
-          },
-          {
-            label: "Sum Bet Amounts",
-            value: `${summaryStats.sumBetAmounts} Birr`,
-            icon: "📈",
-            color:
-              "bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200",
-          },
-          {
-            label: "Total Prize Pool",
-            value: `${summaryStats.totalPrizePool} Birr`,
-            icon: "🏆",
-            color:
-              "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
-          },
-          {
-            label: "Avg Bet Amount",
-            value: `${summaryStats.averageBetAmount} Birr`,
-            icon: "📊",
-            color:
-              "bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200",
-          },
-          {
-            label: "Total Potential Jackpot",
-            value: `${summaryStats.totalPotentialJackpot} Birr`,
-            icon: "⭐",
-            color:
-              "bg-pink-100 dark:bg-pink-900 text-pink-800 dark:text-pink-200",
-          },
-          {
-            label: "Current Jackpot",
-            value: `${currentJackpot.toFixed(2)} Birr`,
-            icon: "💎",
-            color:
-              "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200",
-          },
-        ].map((stat, index) => (
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4">
+      {/* Summary Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-6">
+        {stats.map((stat) => (
           <div
-            key={index}
-            className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 text-center transition-all hover:scale-105"
+            key={stat.name}
+            className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-6 text-center transition-all hover:scale-105"
           >
             <div
               className={`inline-flex items-center justify-center w-12 h-12 rounded-full mx-auto mb-2 ${stat.color}`}
@@ -569,6 +706,7 @@ const CashierReport = () => {
             <option value="active">Active</option>
             <option value="pending">Pending</option>
             <option value="finished">Finished</option>
+            <option value="paused">Paused</option>
           </select>
           <select
             value={filters.pattern}
@@ -579,6 +717,8 @@ const CashierReport = () => {
             <option value="line">Line</option>
             <option value="diagonal">Diagonal</option>
             <option value="x_pattern">X Pattern</option>
+            <option value="full_house">Full House</option>
+            <option value="single_line">Single Line</option>
           </select>
           <input
             type="date"
