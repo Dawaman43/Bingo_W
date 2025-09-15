@@ -11,13 +11,14 @@ import {
   updateGame,
   getJackpot,
   startGame,
-  pauseGame, // Added import
+  pauseGame,
   resetGameCounter,
   moderatorConfigureNextGameNumber,
   configureFutureWinners,
   createSequentialGames,
   getNextPendingGame,
   getReportData,
+  selectJackpotWinner, // Added import
 } from "../controllers/gameController.js";
 import { verifyToken } from "../middlewares/auth.js";
 import { validate } from "../middlewares/validate.js";
@@ -36,7 +37,7 @@ router.post("/reset-game-counter", verifyToken, resetGameCounter);
 router.post("/sequential", verifyToken, validate, createSequentialGames);
 
 // Moderator routes
-router.post("/select-winner", verifyToken, validate, selectWinner); // Fixed to use selectWinner
+router.post("/select-winner", verifyToken, validate, selectWinner);
 router.post(
   "/configure-next",
   verifyToken,
@@ -66,7 +67,8 @@ router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
 router.post("/:id/select-winner", verifyToken, validate, selectWinner);
 router.post("/:id/finish", verifyToken, validate, finishGame);
 router.post("/:id/start", verifyToken, startGame);
-router.post("/:id/pause", verifyToken, pauseGame); // Added pause route
+router.post("/:id/pause", verifyToken, pauseGame);
+router.post("/:id/select-jackpot-winner", verifyToken, selectJackpotWinner); // Added route
 router.patch("/:id", verifyToken, validate, updateGame);
 
 export default router;

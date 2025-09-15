@@ -1809,3 +1809,132 @@ export const pauseGame = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Selects a random jackpot winner from the game's selected cards.
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const selectJackpotWinner = async (req, res, next) => {
+  try {
+    const gameId = req.params.id;
+    if (!mongoose.isValidObjectId(gameId)) {
+      console.log("[selectJackpotWinner] Invalid game ID format:", gameId);
+      return res.status(400).json({
+        message: "Invalid game ID format",
+        errorCode: "INVALID_GAME_ID",
+      });
+    }
+
+    const game = await Game.findById(gameId);
+    if (!game) {
+      console.log("[selectJackpotWinner] Game not found:", gameId);
+      return res.status(404).json({
+        message: "Game not found",
+        errorCode: "GAME_NOT_FOUND",
+      });
+    }
+
+    if (game.status !== "active") {
+      console.log("[selectJackpotWinner] Game not active:", game.status);
+      return res.status(400).json({
+        message: "Game must be active to select jackpot winner",
+        errorCode: "GAME_NOT_ACTIVE",
+      });
+    }
+
+    if (!game.jackpotEnabled) {
+      console.log(
+        "[selectJackpotWinner] Jackpot not enabled for game:",
+        gameId
+      );
+      return res.status(400).json({
+        message: "Jackpot is not enabled for this game",
+        errorCode: "JACKPOT_NOT_ENABLED",
+      });
+    }
+
+    if (game.jackpotWinner) {
+      console.log(
+        "[selectJackpotWinner] Jackpot winner already selected for game:",
+        game.jackpotWinner.cardId
+      );
+      return res.status(400).json({
+        message: "Jackpot winner already selected",
+        errorCode: "JACKPOT_WINNER_ALREADY_SELECTED",
+      });
+    }
+
+    const jackpot = await Jackpot.findOne();
+    if (!jackpot) {
+      console.log("[selectJackpotWinner] Jackpot not found");
+      return res.status(404).json({
+        message: "Jackpot not found",
+        errorCode: "JACKPOT_NOT_FOUND",
+      });
+    }
+
+    const eligibleCards = game.selectedCards.filter(
+      (card) =>
+        !game.moderatorWinnerCardId || card.id !== game.moderatorWinnerCardId
+    );
+    if (eligibleCards.length === 0) {
+      console.log("[selectJackpotWinner] No eligible cards for jackpot");
+      return res.status(400).json({
+        message: "No eligible cards available for jackpot",
+        errorCode: "NO_ELIGIBLE_CARDS",
+      });
+    }
+
+    const randomIndex = Math.floor(Math.random() * eligibleCards.length);
+    const jackpotWinnerCard = eligibleCards[randomIndex];
+
+    game.jackpotWinner = {
+      cardId: jackpotWinnerCard.id,
+      prize: jackpot.amount,
+    };
+
+    await game.save();
+
+    await logJackpotUpdate(
+      jackpot.amount,
+      `Jackpot awarded to card ${jackpotWinnerCard.id}`,
+      gameId
+    );
+
+    // Reset jackpot to seed value
+    jackpot.amount = jackpot.seed;
+    jackpot.lastUpdated = Date.now();
+    await jackpot.save();
+
+    await Result.create({
+      gameId: game._id,
+      winnerCardId: jackpotWinnerCard.id,
+      prize: jackpot.amount,
+      isJackpot: true,
+    });
+
+    console.log(
+      `[selectJackpotWinner] Jackpot winner selected for game #${game.gameNumber}: Card ${jackpotWinnerCard.id}, Prize=${jackpot.amount}`
+    );
+
+    res.json({
+      message: `Jackpot winner selected: Card ${jackpotWinnerCard.id}`,
+      data: {
+        game,
+        jackpotWinner: game.jackpotWinner,
+      },
+    });
+  } catch (error) {
+    console.error("[selectJackpotWinner] Error in selectJackpotWinner:", error);
+    await GameLog.create({
+      gameId,
+      action: "selectJackpotWinner",
+      status: "failed",
+      details: { error: error.message || "Internal server error" },
+    });
+    next(error);
+  }
+};

@@ -110,6 +110,20 @@ const gameService = {
     }
   },
 
+  selectJackpotWinner: async (gameId) => {
+    try {
+      const response = await API.post(`/games/${gameId}/select-jackpot-winner`);
+      console.log("gameService.selectJackpotWinner response:", response);
+      return response.data.data;
+    } catch (error) {
+      console.error(
+        "gameService.selectJackpotWinner error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
   finishGame: async (gameId, moderatorCardId = null) => {
     try {
       const response = await API.post(`/games/${gameId}/finish`, {

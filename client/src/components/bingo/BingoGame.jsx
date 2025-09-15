@@ -36,10 +36,13 @@ const BingoGame = () => {
   const [isJackpotActive, setIsJackpotActive] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
+  const [isJackpotWinnerModalOpen, setIsJackpotWinnerModalOpen] =
+    useState(false);
   const [isGameFinishedModalOpen, setIsGameFinishedModalOpen] = useState(false);
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   const [winningPattern, setWinningPattern] = useState("line");
   const [winningCards, setWinningCards] = useState([]);
+  const [jackpotWinnerCard, setJackpotWinnerCard] = useState(null);
   const [lockedCards, setLockedCards] = useState([]);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -74,6 +77,7 @@ const BingoGame = () => {
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
         setIsJackpotActive(fetchedGame.jackpotEnabled);
+        setJackpotWinnerCard(fetchedGame.jackpotWinner?.cardId || null);
         await fetchBingoCards(gameId);
         await updateJackpotDisplay();
       } catch (error) {
@@ -96,6 +100,7 @@ const BingoGame = () => {
       setJackpotAmount(game.potentialJackpot || 0);
       setIsGameOver(game.status === "completed");
       setIsJackpotActive(game.jackpotEnabled);
+      setJackpotWinnerCard(game.jackpotWinner?.cardId || null);
       const cards =
         game.selectedCards?.map((card) => ({
           cardId: card.id,
@@ -442,6 +447,30 @@ const BingoGame = () => {
     }
   };
 
+  const handleRunJackpot = async () => {
+    if (!gameData?._id || !isJackpotActive || isGameOver) {
+      setCallError("Cannot run jackpot: Game is over or jackpot is not active");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    try {
+      const response = await gameService.selectJackpotWinner(gameData._id);
+      setJackpotWinnerCard(response.jackpotWinner.cardId);
+      setJackpotAmount(response.jackpotWinner.prize);
+      setIsJackpotWinnerModalOpen(true);
+      SoundService.playSound("jackpot_congrats");
+
+      // Automatically close the jackpot winner modal after 5 seconds
+      setTimeout(() => {
+        setIsJackpotWinnerModalOpen(false);
+        setIsJackpotActive(false); // Hide the jackpot modal
+      }, 5000);
+    } catch (error) {
+      setCallError(error.message || "Failed to select jackpot winner");
+      setIsErrorModalOpen(true);
+    }
+  };
+
   const handleCheckCard = async (cardId) => {
     if (!gameData?._id || !cardId) {
       setCallError("Invalid game ID or card ID");
@@ -449,7 +478,6 @@ const BingoGame = () => {
       return;
     }
 
-    // Convert cardId to number for consistent comparison
     const numericCardId = parseInt(cardId, 10);
     if (isNaN(numericCardId) || numericCardId < 1) {
       setCallError("Invalid card ID");
@@ -457,16 +485,18 @@ const BingoGame = () => {
       return;
     }
 
-    // Check if the game is completed and validate the winner
     if (isGameOver || gameData.status === "completed") {
       if (
         (gameData.winner?.cardId && gameData.winner.cardId === numericCardId) ||
         (gameData.moderatorWinnerCardId &&
-          gameData.moderatorWinnerCardId === numericCardId)
+          gameData.moderatorWinnerCardId === numericCardId) ||
+        (gameData.jackpotWinner?.cardId &&
+          gameData.jackpotWinner.cardId === numericCardId)
       ) {
         setIsWinnerModalOpen(true);
         setWinningCards([numericCardId]);
-        SoundService.playSound("winner");
+        const isJackpotWin = gameData.jackpotWinner?.cardId === numericCardId;
+        SoundService.playSound(isJackpotWin ? "jackpot_congrats" : "winner");
       } else {
         setCallError(
           `Card ${numericCardId} is not the winner for Game #${gameData.gameNumber}`
@@ -478,7 +508,6 @@ const BingoGame = () => {
       return;
     }
 
-    // For active games, call the backend to check bingo
     try {
       const response = await checkBingo(gameData._id, numericCardId);
       setGameData(response.game);
@@ -734,7 +763,7 @@ const BingoGame = () => {
           </p>
         </div>
       </div>
-      {isJackpotActive && (
+      {isJackpotActive && !jackpotWinnerCard && (
         <div className="fixed bottom-5 left-[8.5%] -translate-x-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-20">
           <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
             JACKPOT
@@ -742,19 +771,30 @@ const BingoGame = () => {
           <div className="text-3xl font-bold text-[#f0e14a] mb-2">
             {jackpotAmount} BIRR
           </div>
-          <button className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full">
-            Run Jackpot
+          <button
+            className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full"
+            onClick={handleRunJackpot}
+            disabled={isGameOver || !isJackpotActive || jackpotWinnerCard}
+          >
+            {jackpotWinnerCard ? "Jackpot Awarded" : "Run Jackpot"}
           </button>
         </div>
       )}
       {isWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
-          <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner!</h2>
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">
+            {gameData?.jackpotWinner?.cardId === winningCards[0]
+              ? "Jackpot Winner!"
+              : "Winner!"}
+          </h2>
           <div className="w-60 aspect-square my-2 mx-auto">
             <canvas ref={canvasRef}></canvas>
           </div>
           <p className="mb-4 text-lg text-white">
-            Game #{gameData?.gameNumber}: Card {winningCards[0]} won!
+            Game #{gameData?.gameNumber}: Card {winningCards[0]} won
+            {gameData?.jackpotWinner?.cardId === winningCards[0]
+              ? ` the jackpot of ${gameData.jackpotWinner.prize} BIRR!`
+              : ` ${gameData?.winner?.prize || 0} BIRR!`}
           </p>
           <button
             className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
@@ -764,6 +804,24 @@ const BingoGame = () => {
             }}
           >
             Finish Game
+          </button>
+        </div>
+      )}
+      {isJackpotWinnerModalOpen && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Jackpot Winner!</h2>
+          <p className="mb-4 text-lg text-white">
+            Game #{gameData?.gameNumber}: Card {jackpotWinnerCard} won the
+            jackpot of {jackpotAmount} BIRR!
+          </p>
+          <button
+            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+            onClick={() => {
+              setIsJackpotWinnerModalOpen(false);
+              setIsJackpotActive(false); // Hide the jackpot modal
+            }}
+          >
+            Close
           </button>
         </div>
       )}
