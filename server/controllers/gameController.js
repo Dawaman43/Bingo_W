@@ -283,7 +283,7 @@ export const createGame = async (req, res, next) => {
       betAmount = 10,
       houseFeePercentage = 15,
       moderatorWinnerCardId = null,
-      jackpotEnabled = true,
+      jackpotEnabled = true, // Default to true
     } = req.body;
 
     if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
@@ -331,10 +331,11 @@ export const createGame = async (req, res, next) => {
     // --- Assign game number first ---
     const assignedGameNumber = await getNextGameNumber();
 
-    // --- Assign winnerCardId ---
+    // --- Assign winnerCardId and jackpotEnabled ---
     let winnerCardId = moderatorWinnerCardId
       ? Number(moderatorWinnerCardId)
       : null;
+    let finalJackpotEnabled = jackpotEnabled;
     if (!winnerCardId) {
       const futureWinning = await Counter.findOne({
         _id: `futureWinning_${assignedGameNumber}`,
@@ -343,8 +344,12 @@ export const createGame = async (req, res, next) => {
         const parsedWinnerCardId = Number(futureWinning.cardId);
         if (foundCardIds.includes(parsedWinnerCardId)) {
           winnerCardId = parsedWinnerCardId;
+          finalJackpotEnabled =
+            futureWinning.jackpotEnabled !== undefined
+              ? futureWinning.jackpotEnabled
+              : jackpotEnabled; // Use stored jackpotEnabled if available
           console.log(
-            `[createGame] Assigned predefined winner for game #${assignedGameNumber}: card ${winnerCardId}`
+            `[createGame] Assigned predefined winner for game #${assignedGameNumber}: card ${winnerCardId}, jackpotEnabled: ${finalJackpotEnabled}`
           );
         }
       }
@@ -373,19 +378,19 @@ export const createGame = async (req, res, next) => {
       selectedCards: gameCards,
       pattern,
       prizePool,
-      potentialJackpot,
+      potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0, // Adjust based on finalJackpotEnabled
       status: "pending",
       calledNumbers: [],
       calledNumbersLog: [],
       moderatorWinnerCardId: winnerCardId,
       selectedWinnerRowIndices,
-      jackpotEnabled,
+      jackpotEnabled: finalJackpotEnabled,
       winner: null,
     });
 
     await game.save();
     console.log(
-      `[createGame] Game created: ID=${game._id}, Number=${game.gameNumber}, WinnerCardId=${winnerCardId}`
+      `[createGame] Game created: ID=${game._id}, Number=${game.gameNumber}, WinnerCardId=${winnerCardId}, JackpotEnabled=${game.jackpotEnabled}`
     );
 
     // --- Cleanup future winner entry if assigned ---
@@ -403,6 +408,7 @@ export const createGame = async (req, res, next) => {
         gameNumber: game.gameNumber,
         moderatorWinnerCardId: game.moderatorWinnerCardId,
         pattern: game.pattern,
+        jackpotEnabled: game.jackpotEnabled,
       },
     });
   } catch (error) {
@@ -429,34 +435,32 @@ export const createGame = async (req, res, next) => {
 export const callNumber = async (req, res, next) => {
   try {
     const gameId = req.params.id;
+    const now = () => new Date().toISOString(); // timestamp helper
 
     if (!mongoose.isValidObjectId(gameId)) {
-      console.log("[callNumber] Invalid game ID format:", gameId);
+      console.log(`[${now()}] [callNumber] Invalid game ID: ${gameId}`);
       return res.status(400).json({ message: "Invalid game ID format" });
     }
 
     const game = await Game.findById(gameId);
     if (!game) {
-      console.log("[callNumber] Game not found:", gameId);
+      console.log(`[${now()}] [callNumber] Game not found: ${gameId}`);
       return res.status(404).json({ message: "Game not found" });
     }
-
     if (game.status !== "active") {
-      console.log("[callNumber] Game not active:", game.status);
+      console.log(`[${now()}] [callNumber] Game not active: ${game.status}`);
       return res.status(400).json({ message: "Game is not active" });
     }
 
     let calledNumber = null;
     let isForcedCall = false;
 
-    // --- Forced winner logic ---
+    // --- Forced winner numbers ---
     if (game.moderatorWinnerCardId) {
       const winnerCard = game.selectedCards.find(
-        (card) => card.id === game.moderatorWinnerCardId
+        (c) => c.id === game.moderatorWinnerCardId
       );
-
       if (winnerCard && Array.isArray(winnerCard.numbers)) {
-        // Initialize forced numbers queue if not already present
         if (
           !Array.isArray(game.forcedNumbersQueue) ||
           game.forcedNumbersQueue.length === 0
@@ -474,71 +478,69 @@ export const callNumber = async (req, res, next) => {
           if (!game.selectedWinnerRowIndices.length) {
             game.selectedWinnerRowIndices = selectedIndices;
           }
-          await game.save();
           console.log(
-            `[callNumber] Initialized forced numbers queue: ${game.forcedNumbersQueue}`
+            `[${now()}] [callNumber] Forced numbers initialized: ${numbers}`
           );
         }
 
-        // Call next forced number
         if (game.forcedNumbersQueue.length > 0) {
           calledNumber = Number(game.forcedNumbersQueue.shift());
           isForcedCall = true;
-          await game.save();
           console.log(
-            `[callNumber] Forced winner card number: ${calledNumber} from ${game.pattern} (indices: ${game.selectedWinnerRowIndices}) for card ID: ${winnerCard.id}`
+            `[${now()}] [callNumber] Forced number called: ${calledNumber} (pattern: ${
+              game.pattern
+            }, indices: ${game.selectedWinnerRowIndices}, cardId: ${
+              winnerCard.id
+            })`
           );
         }
       }
     }
 
-    // --- Fallback to random number if forced numbers exhausted ---
+    // --- Random number fallback ---
     if (calledNumber === null) {
       const randomNumber = getRandomNumber(game.calledNumbers);
       if (randomNumber === null) {
-        console.log("[callNumber] No uncalled numbers available in game");
+        console.log(`[${now()}] [callNumber] No uncalled numbers left.`);
         return res
           .status(400)
           .json({ message: "No uncalled numbers available" });
       }
       calledNumber = randomNumber;
-      console.log(`[callNumber] Random number ${calledNumber} called`);
+      console.log(
+        `[${now()}] [callNumber] Random number called: ${calledNumber}`
+      );
     }
 
-    // --- Add number to called numbers ---
+    // --- Update game state ---
     game.calledNumbers.push(calledNumber);
     game.calledNumbersLog.push({ number: calledNumber, calledAt: new Date() });
-    await game.save();
 
-    // --- Check for winner ---
-    let winner = null;
-    for (const card of game.selectedCards) {
-      const { isBingo } = checkCardBingo(
-        card.numbers,
-        game.calledNumbers,
-        game.pattern
+    // --- Check winner ---
+    if (!game.winner) {
+      const winnerCard = game.selectedCards.find(
+        (card) =>
+          checkCardBingo(card.numbers, game.calledNumbers, game.pattern).isBingo
       );
-      if (isBingo) {
-        winner = { cardId: card.id, prize: game.prizePool };
-        break;
+      if (winnerCard) {
+        game.winner = { cardId: winnerCard.id, prize: game.prizePool };
+        game.status = "completed";
+        console.log(
+          `[${now()}] [callNumber] Winner found! CardId=${
+            winnerCard.id
+          }, Prize=${game.prizePool}`
+        );
       }
     }
 
-    if (winner && !game.winner) {
-      game.winner = winner;
-      game.status = "completed";
-      await game.save();
-      console.log(
-        `[callNumber] Winner found: Number=${game.gameNumber}, WinnerCardId=${winner.cardId}`
-      );
-    }
+    await game.save(); // Only one save per call
 
     res.json({
       message: `Number ${calledNumber} called`,
       data: { game, calledNumber, isForcedCall },
     });
   } catch (error) {
-    console.error("[callNumber] Error in callNumber:", error);
+    console.error(`[${new Date().toISOString()}] [callNumber] Error:`, error);
     next(error);
   }
 };
@@ -831,17 +833,21 @@ export const createSequentialGames = async (req, res, next) => {
       let moderatorWinnerCardId = moderatorWinnerCardIds[i]
         ? Number(moderatorWinnerCardIds[i])
         : null;
+      let finalJackpotEnabled = jackpotEnabled;
       if (!moderatorWinnerCardId) {
         const futureWinning = await Counter.findOne({
           _id: `futureWinning_${gameNumber}`,
         });
-        moderatorWinnerCardId = futureWinning
-          ? Number(futureWinning.cardId)
-          : null;
-        console.log(
-          `[createSequentialGames] Checked for predefined winner for game #${gameNumber}:`,
-          moderatorWinnerCardId
-        );
+        if (futureWinning && futureWinning.cardId !== undefined) {
+          moderatorWinnerCardId = Number(futureWinning.cardId);
+          finalJackpotEnabled =
+            futureWinning.jackpotEnabled !== undefined
+              ? futureWinning.jackpotEnabled
+              : jackpotEnabled; // Use stored jackpotEnabled
+          console.log(
+            `[createSequentialGames] Checked for predefined winner for game #${gameNumber}: card=${moderatorWinnerCardId}, jackpotEnabled=${finalJackpotEnabled}`
+          );
+        }
       }
 
       if (
@@ -882,8 +888,8 @@ export const createSequentialGames = async (req, res, next) => {
         houseFeePercentage,
         selectedCards: gameCards,
         prizePool,
-        potentialJackpot,
-        jackpotEnabled,
+        potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0, // Adjust based on finalJackpotEnabled
+        jackpotEnabled: finalJackpotEnabled,
         status: "pending",
         calledNumbers: [],
         calledNumbersLog: [],
@@ -894,7 +900,7 @@ export const createSequentialGames = async (req, res, next) => {
 
       await game.save();
       console.log(
-        `[createSequentialGames] Saved game #${gameNumber} with ID: ${game._id}`
+        `[createSequentialGames] Saved game #${gameNumber} with ID: ${game._id}, JackpotEnabled: ${game.jackpotEnabled}`
       );
 
       if (moderatorWinnerCardId && !moderatorWinnerCardIds[i]) {
@@ -920,7 +926,6 @@ export const createSequentialGames = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * Checks if a card has bingo based on the pattern.
  * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
@@ -951,7 +956,7 @@ export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
 };
 
 /**
- * Checks bingo status for a specific card in a game, declaring the first card with bingo as the winner.
+ * Checks bingo status for a specific card in a game, declaring the winner correctly.
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @param {Function} next - Express next middleware function
@@ -963,58 +968,135 @@ export const checkBingo = async (req, res, next) => {
     const gameId = req.params.id;
 
     if (!mongoose.isValidObjectId(gameId)) {
+      console.log("[checkBingo] Invalid game ID format:", gameId);
       return res.status(400).json({
         message: "Invalid game ID format",
         errorCode: "INVALID_GAME_ID",
       });
     }
 
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res
-        .status(404)
-        .json({ message: "Game not found", errorCode: "GAME_NOT_FOUND" });
-    }
-
-    if (game.status !== "active" && game.status !== "completed") {
-      return res
-        .status(400)
-        .json({ message: "Game not active", errorCode: "GAME_NOT_ACTIVE" });
-    }
-
-    const card = game.selectedCards.find((c) => c.id === Number(cardId));
-    if (!card) {
-      return res
-        .status(400)
-        .json({ message: "Invalid card ID", errorCode: "INVALID_CARD_ID" });
-    }
-
-    // --- Check all cards for bingo ---
-    let firstWinner = null;
-    for (const c of game.selectedCards) {
-      const { isBingo } = checkCardBingo(
-        c.numbers,
-        game.calledNumbers,
-        game.pattern
-      );
-      if (isBingo) {
-        firstWinner = c;
-        break; // Stop at the first card with bingo
-      }
-    }
-
-    if (!firstWinner) {
-      return res.json({
-        message: `No bingo yet for card ${cardId}`,
-        data: { winner: false, game, winnerCardId: null },
+    const numericCardId = Number(cardId);
+    if (isNaN(numericCardId) || numericCardId < 1) {
+      console.log("[checkBingo] Invalid card ID:", cardId);
+      return res.status(400).json({
+        message: "Invalid card ID",
+        errorCode: "INVALID_CARD_ID",
       });
     }
 
-    // --- Update game if winner not set ---
-    if (!game.winner) {
-      const prize =
-        game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0);
-      game.winner = { cardId: firstWinner.id, prize };
+    const game = await Game.findById(gameId);
+    if (!game) {
+      console.log("[checkBingo] Game not found:", gameId);
+      return res.status(404).json({
+        message: "Game not found",
+        errorCode: "GAME_NOT_FOUND",
+      });
+    }
+
+    const card = game.selectedCards.find((c) => c.id === numericCardId);
+    if (!card) {
+      console.log("[checkBingo] Card not found in game:", numericCardId);
+      return res.status(400).json({
+        message: `Card ${numericCardId} not found in game`,
+        errorCode: "INVALID_CARD_ID",
+      });
+    }
+
+    // For completed games, only allow the designated winner
+    if (game.status === "completed") {
+      if (
+        (game.winner?.cardId && game.winner.cardId === numericCardId) ||
+        (game.moderatorWinnerCardId &&
+          game.moderatorWinnerCardId === numericCardId)
+      ) {
+        console.log(
+          `[checkBingo] Winner confirmed for completed game #${game.gameNumber}: Card ${numericCardId}`
+        );
+        return res.json({
+          message: `Bingo! Card ${numericCardId} wins!`,
+          data: {
+            winner: true,
+            game,
+            winnerCardId: numericCardId,
+            isYourCardWinner: true,
+          },
+        });
+      } else {
+        console.log(
+          `[checkBingo] Card ${numericCardId} is not the winner for completed game #${game.gameNumber}`
+        );
+        return res.json({
+          message: `Card ${numericCardId} is not the winner`,
+          data: {
+            winner: false,
+            game,
+            winnerCardId:
+              game.winner?.cardId || game.moderatorWinnerCardId || null,
+            isYourCardWinner: false,
+          },
+        });
+      }
+    }
+
+    // For active games, check bingo and enforce moderatorWinnerCardId if set
+    if (game.status !== "active") {
+      console.log("[checkBingo] Game not active:", game.status);
+      return res.status(400).json({
+        message: `Game is ${game.status}, cannot check bingo`,
+        errorCode: "GAME_NOT_ACTIVE",
+      });
+    }
+
+    const { isBingo } = checkCardBingo(
+      card.numbers,
+      game.calledNumbers,
+      game.pattern
+    );
+    let winner = null;
+
+    if (isBingo) {
+      // If moderatorWinnerCardId is set, only that card can win
+      if (game.moderatorWinnerCardId) {
+        if (game.moderatorWinnerCardId === numericCardId) {
+          winner = {
+            cardId: numericCardId,
+            prize:
+              game.prizePool +
+              (game.jackpotEnabled ? game.potentialJackpot : 0),
+          };
+          console.log(
+            `[checkBingo] Moderator-designated winner confirmed for game #${game.gameNumber}: Card ${numericCardId}`
+          );
+        } else {
+          console.log(
+            `[checkBingo] Card ${numericCardId} has bingo but is not the designated winner for game #${game.gameNumber}`
+          );
+          return res.json({
+            message: `Card ${numericCardId} is not the designated winner`,
+            data: {
+              winner: false,
+              game,
+              winnerCardId: game.moderatorWinnerCardId,
+              isYourCardWinner: false,
+            },
+          });
+        }
+      } else {
+        // No moderatorWinnerCardId, first card with bingo wins
+        winner = {
+          cardId: numericCardId,
+          prize:
+            game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0),
+        };
+        console.log(
+          `[checkBingo] First bingo winner found for game #${game.gameNumber}: Card ${numericCardId}`
+        );
+      }
+    }
+
+    // Update game if a winner is found
+    if (winner && !game.winner) {
+      game.winner = winner;
       game.status = "completed";
       await game.save();
 
@@ -1034,18 +1116,20 @@ export const checkBingo = async (req, res, next) => {
 
       await Result.create({
         gameId: game._id,
-        winnerCardId: firstWinner.id,
-        prize,
+        winnerCardId: winner.cardId,
+        prize: winner.prize,
       });
     }
 
     return res.json({
-      message: `Bingo! Card ${firstWinner.id} wins!`,
+      message: winner
+        ? `Bingo! Card ${numericCardId} wins!`
+        : `No bingo yet for card ${numericCardId}`,
       data: {
-        winner: true,
+        winner: !!winner,
         game,
-        winnerCardId: firstWinner.id,
-        isYourCardWinner: firstWinner.id === Number(cardId),
+        winnerCardId: winner ? winner.cardId : null,
+        isYourCardWinner: winner && winner.cardId === numericCardId,
       },
     });
   } catch (error) {
@@ -1327,7 +1411,7 @@ export const configureFutureWinners = async (req, res, next) => {
 
     const configuredGames = [];
     for (const winnerConfig of winners) {
-      const { gameNumber, cardId } = winnerConfig;
+      const { gameNumber, cardId, jackpotEnabled = true } = winnerConfig; // Default to true
       if (!gameNumber || !cardId) {
         console.log(
           "[configureFutureWinners] Skipping invalid config:",
@@ -1353,19 +1437,23 @@ export const configureFutureWinners = async (req, res, next) => {
       }
 
       console.log(
-        `[configureFutureWinners] Configuring winner for game #${gameNumber}, cardId: ${parsedCardId}`
+        `[configureFutureWinners] Configuring winner for game #${gameNumber}, cardId: ${parsedCardId}, jackpotEnabled: ${jackpotEnabled}`
       );
       const counter = await Counter.findOneAndUpdate(
         { _id: `futureWinning_${gameNumber}` },
-        { cardId: parsedCardId },
+        { cardId: parsedCardId, jackpotEnabled }, // Store jackpotEnabled
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
 
       console.log(
-        `[configureFutureWinners] Saved winner for game #${gameNumber} with card: ${parsedCardId}`,
+        `[configureFutureWinners] Saved winner for game #${gameNumber} with card: ${parsedCardId}, jackpotEnabled: ${jackpotEnabled}`,
         counter
       );
-      configuredGames.push({ gameNumber, moderatorWinnerCardId: parsedCardId });
+      configuredGames.push({
+        gameNumber,
+        moderatorWinnerCardId: parsedCardId,
+        jackpotEnabled,
+      });
     }
 
     if (!configuredGames.length) {

@@ -426,13 +426,15 @@ const BingoGame = () => {
       return;
     }
     try {
-      await gameService.updateGame(gameData._id, {
-        jackpotEnabled: !isJackpotActive,
+      const newJackpotEnabled = !isJackpotActive;
+      const response = await gameService.updateGame(gameData._id, {
+        jackpotEnabled: newJackpotEnabled,
       });
-      setIsJackpotActive((prev) => !prev);
-      setGameData((prev) => ({ ...prev, jackpotEnabled: !isJackpotActive }));
+      setIsJackpotActive(newJackpotEnabled);
+      setGameData((prev) => ({ ...prev, jackpotEnabled: newJackpotEnabled }));
+      setJackpotAmount(newJackpotEnabled ? response.potentialJackpot || 0 : 0);
       SoundService.playSound(
-        isJackpotActive ? "jackpot_running" : "jackpot_congrats"
+        newJackpotEnabled ? "jackpot_running" : "jackpot_congrats"
       );
     } catch (error) {
       setCallError(error.message || "Failed to toggle jackpot");
@@ -446,29 +448,61 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
       return;
     }
+
+    // Convert cardId to number for consistent comparison
+    const numericCardId = parseInt(cardId, 10);
+    if (isNaN(numericCardId) || numericCardId < 1) {
+      setCallError("Invalid card ID");
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    // Check if the game is completed and validate the winner
+    if (isGameOver || gameData.status === "completed") {
+      if (
+        (gameData.winner?.cardId && gameData.winner.cardId === numericCardId) ||
+        (gameData.moderatorWinnerCardId &&
+          gameData.moderatorWinnerCardId === numericCardId)
+      ) {
+        setIsWinnerModalOpen(true);
+        setWinningCards([numericCardId]);
+        SoundService.playSound("winner");
+      } else {
+        setCallError(
+          `Card ${numericCardId} is not the winner for Game #${gameData.gameNumber}`
+        );
+        setIsErrorModalOpen(true);
+        SoundService.playSound("you_didnt_win");
+        setLockedCards((prev) => [...prev, numericCardId]);
+      }
+      return;
+    }
+
+    // For active games, call the backend to check bingo
     try {
-      const response = await checkBingo(gameData._id, cardId);
+      const response = await checkBingo(gameData._id, numericCardId);
       setGameData(response.game);
       if (response.winner) {
         setIsWinnerModalOpen(true);
-        setWinningCards([cardId]);
+        setWinningCards([numericCardId]);
         setIsGameOver(true);
         setIsPlaying(false);
         setIsAutoCall(false);
         SoundService.playSound("winner");
       } else {
-        setLockedCards((prev) => [...prev, cardId]);
+        setLockedCards((prev) => [...prev, numericCardId]);
         setCallError(
           gameData.moderatorWinnerCardId
-            ? `Card ${cardId} is not the selected winner`
-            : `No bingo for card ${cardId}`
+            ? `Card ${numericCardId} is not the selected winner`
+            : `No bingo for card ${numericCardId}`
         );
         setIsErrorModalOpen(true);
         SoundService.playSound("you_didnt_win");
       }
     } catch (error) {
-      setCallError(error.message || "Failed to check card");
+      setCallError(error.message || `Failed to check card ${numericCardId}`);
       setIsErrorModalOpen(true);
+      SoundService.playSound("you_didnt_win");
     }
   };
 
@@ -502,7 +536,6 @@ const BingoGame = () => {
     const board = [];
     for (let row = 0; row < 5; row++) {
       const rowNumbers = [];
-      // Add letter column
       rowNumbers.push(
         <div
           key={`letter-${row}`}
@@ -511,7 +544,6 @@ const BingoGame = () => {
           {letters[row].letter}
         </div>
       );
-      // Add numbers for the row
       for (let i = row * 15 + 1; i <= (row + 1) * 15; i++) {
         rowNumbers.push(
           <div

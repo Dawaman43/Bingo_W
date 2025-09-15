@@ -9,6 +9,7 @@ const counterSchema = new mongoose.Schema({
       return this._id.startsWith("futureWinning_");
     },
   },
+  jackpotEnabled: { type: Boolean, default: true },
 });
 
 export default mongoose.model("Counter", counterSchema);

@@ -27,6 +27,7 @@ export default function ModeratorDashboard() {
   const [futureWinnerModalOpen, setFutureWinnerModalOpen] = useState(false);
   const [futureGameNumber, setFutureGameNumber] = useState("");
   const [futureWinnerCardId, setFutureWinnerCardId] = useState("");
+  const [futureJackpotEnabled, setFutureJackpotEnabled] = useState(true); // New state for jackpot toggle
 
   // Function to fetch all games
   const fetchGames = async () => {
@@ -232,6 +233,7 @@ export default function ModeratorDashboard() {
   const openFutureWinnerModal = () => {
     setFutureGameNumber("");
     setFutureWinnerCardId("");
+    setFutureJackpotEnabled(true); // Default to enabled
     setModalError(null);
     setFutureWinnerModalOpen(true);
   };
@@ -257,7 +259,7 @@ export default function ModeratorDashboard() {
     setModalError(null);
     try {
       const response = await moderatorService.configureFutureWinners([
-        { gameNumber, cardId },
+        { gameNumber, cardId, jackpotEnabled: futureJackpotEnabled },
       ]);
 
       // Refresh games to reflect the new or updated game
@@ -266,6 +268,7 @@ export default function ModeratorDashboard() {
       setFutureWinnerModalOpen(false);
       setFutureGameNumber("");
       setFutureWinnerCardId("");
+      setFutureJackpotEnabled(true); // Reset to default
     } catch (err) {
       setModalError("Failed to configure future winner. Please try again.");
       console.error(err);
@@ -754,6 +757,20 @@ export default function ModeratorDashboard() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={futureJackpotEnabled}
+                      onChange={(e) =>
+                        setFutureJackpotEnabled(e.target.checked)
+                      }
+                      disabled={modalLoading}
+                      className="h-5 w-5 text-indigo-600 focus:ring-indigo-500 mr-2"
+                    />
+                    Enable Jackpot
+                  </label>
                 </div>
                 <div className="flex justify-end space-x-4">
                   <button
