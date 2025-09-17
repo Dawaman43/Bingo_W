@@ -3,13 +3,21 @@ import API from "./axios";
 const gameService = {
   createGame: async (data) => {
     try {
+      console.log(
+        "gameService.createGame - Sending data:",
+        JSON.stringify(data, null, 2)
+      );
       const response = await API.post("/games", data);
-      console.log("gameService.createGame response:", response);
+      console.log("gameService.createGame response:", response.data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.createGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -17,12 +25,18 @@ const gameService = {
 
   getGame: async (id) => {
     try {
+      if (!id) throw new Error("Game ID is required");
+      console.log("gameService.getGame - Fetching game ID:", id);
       const response = await API.get(`/games/${id}`);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.getGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -30,12 +44,17 @@ const gameService = {
 
   getAllGames: async () => {
     try {
+      console.log("gameService.getAllGames - Fetching all games");
       const response = await API.get("/games");
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.getAllGames error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -43,12 +62,19 @@ const gameService = {
 
   getNextPendingGame: async () => {
     try {
+      console.log(
+        "gameService.getNextPendingGame - Fetching next pending game"
+      );
       const response = await API.get("/games/next-pending");
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.getNextPendingGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -56,12 +82,18 @@ const gameService = {
 
   getAllCards: async () => {
     try {
+      console.log("gameService.getAllCards - Fetching all cards");
       const response = await API.get("/games/cards");
+      console.log("gameService.getAllCards response:", response.data.data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.getAllCards error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -69,6 +101,12 @@ const gameService = {
 
   callNumber: async (gameId, number) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      if (!number || number < 1 || number > 75)
+        throw new Error("Invalid number");
+      console.log(
+        `gameService.callNumber - Calling number ${number} for game ${gameId}`
+      );
       const response = await API.post(`/games/${gameId}/call-number`, {
         number,
       });
@@ -76,7 +114,11 @@ const gameService = {
     } catch (error) {
       console.error(
         "gameService.callNumber error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -84,27 +126,64 @@ const gameService = {
 
   checkBingo: async (gameId, cardId) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      if (!cardId || isNaN(cardId))
+        throw new Error("Valid card ID is required");
+      console.log(
+        `gameService.checkBingo - Checking card ${cardId} for game ${gameId}`
+      );
       const response = await API.post(`/games/${gameId}/check-bingo`, {
-        cardId,
+        cardId: Number(cardId),
       });
+      console.log("gameService.checkBingo response:", response.data.data);
       return response.data.data;
     } catch (error) {
       console.error(
-        "gameService.checkBingo error:",
-        error.response?.data || error.message
+        "gameService.checkBingo FULL ERROR:",
+        JSON.stringify(
+          {
+            message: error.message,
+            response: error.response
+              ? {
+                  status: error.response.status,
+                  data: error.response.data,
+                  headers: error.response.headers,
+                }
+              : null,
+            request: error.request ? "Exists" : null,
+            config: error.config
+              ? {
+                  url: error.config.url,
+                  method: error.config.method,
+                }
+              : null,
+          },
+          null,
+          2
+        )
       );
+
+      // Preserve the original error object
       throw error;
     }
   },
 
   selectWinner: async (gameId, data) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        `gameService.selectWinner - Selecting winner for game ${gameId}`
+      );
       const response = await API.post(`/games/${gameId}/select-winner`, data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.selectWinner error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -112,13 +191,21 @@ const gameService = {
 
   selectJackpotWinner: async (gameId) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        `gameService.selectJackpotWinner - Selecting jackpot winner for game ${gameId}`
+      );
       const response = await API.post(`/games/${gameId}/select-jackpot-winner`);
       console.log("gameService.selectJackpotWinner response:", response);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.selectJackpotWinner error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -126,6 +213,10 @@ const gameService = {
 
   finishGame: async (gameId, moderatorCardId = null) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        `gameService.finishGame - Finishing game ${gameId}, moderatorCardId: ${moderatorCardId}`
+      );
       const response = await API.post(`/games/${gameId}/finish`, {
         moderatorCardId,
       });
@@ -141,7 +232,11 @@ const gameService = {
     } catch (error) {
       console.error(
         "gameService.finishGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -149,12 +244,22 @@ const gameService = {
 
   startGame: async (gameId) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      if (typeof gameId !== "string" || !/^[0-9a-fA-F]{24}$/.test(gameId)) {
+        throw new Error("Invalid game ID format");
+      }
+      console.log("gameService.startGame - Starting game with ID:", gameId);
       const response = await API.post(`/games/${gameId}/start`);
+      console.log("gameService.startGame response:", response.data.data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.startGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -162,12 +267,21 @@ const gameService = {
 
   updateGame: async (gameId, data) => {
     try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        `gameService.updateGame - Updating game ${gameId} with data:`,
+        JSON.stringify(data, null, 2)
+      );
       const response = await API.patch(`/games/${gameId}`, data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.updateGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -175,12 +289,17 @@ const gameService = {
 
   getJackpot: async () => {
     try {
+      console.log("gameService.getJackpot - Fetching jackpot");
       const response = await API.get("/games/jackpot");
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.getJackpot error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -188,12 +307,17 @@ const gameService = {
 
   resetGameCounter: async () => {
     try {
+      console.log("gameService.resetGameCounter - Resetting counter");
       const response = await API.post("/games/reset-game-counter");
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.resetGameCounter error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -201,12 +325,20 @@ const gameService = {
 
   createSequentialGames: async (data) => {
     try {
+      console.log(
+        "gameService.createSequentialGames - Creating sequential games:",
+        JSON.stringify(data, null, 2)
+      );
       const response = await API.post("/games/sequential", data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.createSequentialGames error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -214,6 +346,10 @@ const gameService = {
 
   configureFutureWinners: async (winners) => {
     try {
+      console.log(
+        "gameService.configureFutureWinners - Configuring winners:",
+        JSON.stringify({ winners }, null, 2)
+      );
       const response = await API.post("/games/configure-future-winners", {
         winners,
       });
@@ -221,7 +357,11 @@ const gameService = {
     } catch (error) {
       console.error(
         "gameService.configureFutureWinners error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -229,12 +369,20 @@ const gameService = {
 
   configureNextGameNumber: async (startNumber) => {
     try {
+      console.log(
+        "gameService.configureNextGameNumber - Configuring next number:",
+        startNumber
+      );
       const response = await API.post("/games/configure-next", { startNumber });
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.configureNextGameNumber error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -242,12 +390,20 @@ const gameService = {
 
   createFutureGames: async (data) => {
     try {
+      console.log(
+        "gameService.createFutureGames - Creating future games:",
+        JSON.stringify(data, null, 2)
+      );
       const response = await API.post("/games/future", data);
       return response.data.data;
     } catch (error) {
       console.error(
         "gameService.createFutureGames error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }

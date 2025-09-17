@@ -8,14 +8,22 @@ const gameSchema = new mongoose.Schema({
   selectedCards: [
     {
       id: { type: Number, required: true },
-      numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
+      numbers: [[{ type: mongoose.Schema.Types.Mixed }]], // 5x5 grid of numbers or "free"
     },
   ],
   pattern: {
     type: String,
     required: true,
-    enum: ["line", "diagonal", "x_pattern"],
-  }, // Updated enum
+    enum: [
+      "four_corners_center", // Pattern 1
+      "cross", // Pattern 2
+      "main_diagonal", // Pattern 3
+      "other_diagonal", // Pattern 4
+      "horizontal_line", // Pattern 5
+      "vertical_line", // Pattern 6
+      "all", // Pattern 7
+    ],
+  },
   prizePool: { type: Number, required: true, default: 0 },
   potentialJackpot: { type: Number, default: 0 },
   status: {
@@ -23,7 +31,7 @@ const gameSchema = new mongoose.Schema({
     enum: ["pending", "active", "paused", "completed"],
     default: "pending",
   },
-  calledNumbers: [{ type: Number }],
+  calledNumbers: [{ type: Number }], // List of called bingo numbers
   calledNumbersLog: [
     {
       number: { type: Number, required: true },
@@ -31,14 +39,22 @@ const gameSchema = new mongoose.Schema({
     },
   ],
   moderatorWinnerCardId: { type: Number, default: null },
-  selectedWinnerRowIndices: { type: [Number], default: [] }, // Array for multiple lines (e.g., x_pattern)
-  jackpotEnabled: { type: Boolean, default: true },
+  selectedWinnerRowIndices: { type: [Number], default: [] },
+  forcedCallSequence: {
+    type: [Number],
+    default: [],
+  },
   winner: {
     cardId: { type: Number },
     prize: { type: Number },
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+});
+
+gameSchema.pre("save", function (next) {
+  this.updatedAt = Date.now();
+  next();
 });
 
 export default mongoose.model("Game", gameSchema);

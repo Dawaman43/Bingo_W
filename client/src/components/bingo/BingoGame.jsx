@@ -22,6 +22,7 @@ const BingoGame = () => {
   } = useBingoGame();
   const [searchParams] = useSearchParams();
 
+  // Game state
   const [gameData, setGameData] = useState(null);
   const [bingoCards, setBingoCards] = useState([]);
   const [calledNumbers, setCalledNumbers] = useState([]);
@@ -50,10 +51,12 @@ const BingoGame = () => {
   const [callError, setCallError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Refs
   const canvasRef = useRef(null);
   const autoIntervalRef = useRef(null);
   const containerRef = useRef(null);
 
+  // Effects
   useEffect(() => {
     SoundService.preloadSounds(language);
   }, [language]);
@@ -68,12 +71,10 @@ const BingoGame = () => {
       return;
     }
     sessionStorage.setItem("currentGameId", gameId);
-
     const loadGame = async () => {
       try {
         setIsLoading(true);
         const fetchedGame = await fetchGame(gameId);
-        console.log("Fetched game data:", fetchedGame);
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
         setIsJackpotActive(fetchedGame.jackpotEnabled);
@@ -93,14 +94,20 @@ const BingoGame = () => {
 
   useEffect(() => {
     if (game) {
-      console.log("Game state updated:", game);
       setGameData(game);
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
-      setJackpotAmount(game.potentialJackpot || 0);
+      setJackpotAmount(
+        game.moderatorWinnerCardId
+          ? game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0)
+          : game.jackpotEnabled
+          ? game.potentialJackpot
+          : 0
+      );
       setIsGameOver(game.status === "completed");
       setIsJackpotActive(game.jackpotEnabled);
       setJackpotWinnerCard(game.jackpotWinner?.cardId || null);
+
       const cards =
         game.selectedCards?.map((card) => ({
           cardId: card.id,
@@ -133,6 +140,7 @@ const BingoGame = () => {
           eligibleForWin: game.moderatorWinnerCardId === card.id,
           eligibleAtNumber: null,
         })) || [];
+
       setBingoCards(cards);
     }
   }, [game]);
@@ -158,13 +166,13 @@ const BingoGame = () => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
     };
-
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
   }, []);
 
+  // Helper functions
   const fetchBingoCards = async (gameId) => {
     if (!gameId) {
       setCallError("Invalid game ID for fetching cards");
@@ -215,7 +223,14 @@ const BingoGame = () => {
   const updateJackpotDisplay = async () => {
     try {
       const jackpot = await gameService.getJackpot();
-      setJackpotAmount(gameData?.jackpotEnabled ? jackpot.amount : 0);
+      setJackpotAmount(
+        gameData?.moderatorWinnerCardId
+          ? gameData.prizePool +
+              (gameData.jackpotEnabled ? gameData.potentialJackpot : 0)
+          : gameData?.jackpotEnabled
+          ? jackpot.amount
+          : 0
+      );
     } catch (error) {
       setCallError(error.message || "Failed to fetch jackpot");
       setIsErrorModalOpen(true);
@@ -240,6 +255,7 @@ const BingoGame = () => {
     return numbers.map((n) => (n === "FREE" ? n : Number(n)));
   };
 
+  // Event handlers
   const handleCallNumber = async (manualNum = null) => {
     if (
       isGameOver ||
@@ -257,17 +273,14 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
       return;
     }
-
     if (!gameData?._id) {
       setCallError("Game ID is missing");
       setIsErrorModalOpen(true);
       setIsAutoCall(false);
       return;
     }
-
     setIsCallingNumber(true);
     setCallError(null);
-
     try {
       let numberToCall;
       if (manualNum) {
@@ -287,7 +300,6 @@ const BingoGame = () => {
           await handleFinish();
           return;
         }
-
         let numberPool = availableNumbers;
         if (gameData.moderatorWinnerCardId) {
           const winningCard = gameData.selectedCards.find(
@@ -307,25 +319,19 @@ const BingoGame = () => {
             }
           }
         }
-
         numberToCall =
           numberPool[Math.floor(Math.random() * numberPool.length)];
       }
-
       const response = await callNumber(gameData._id, { number: numberToCall });
       const calledNumber = response.calledNumber || numberToCall;
-
       setCalledNumbers((prev) => {
         const newCalledNumbers = [...prev, calledNumber];
-        console.log("Updated calledNumbers:", newCalledNumbers);
         return newCalledNumbers;
       });
       setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
       setCurrentNumber(calledNumber);
-
       setGameData(response.game);
       SoundService.playSound(`number_${calledNumber}`);
-
       setBingoCards((prevCards) =>
         prevCards.map((card) => {
           const newCard = { ...card };
@@ -339,7 +345,6 @@ const BingoGame = () => {
           return newCard;
         })
       );
-
       if (manualNum) setManualNumber("");
     } catch (error) {
       setCallError(error.message || "Failed to call number");
@@ -437,7 +442,13 @@ const BingoGame = () => {
       });
       setIsJackpotActive(newJackpotEnabled);
       setGameData((prev) => ({ ...prev, jackpotEnabled: newJackpotEnabled }));
-      setJackpotAmount(newJackpotEnabled ? response.potentialJackpot || 0 : 0);
+      setJackpotAmount(
+        newJackpotEnabled
+          ? gameData.moderatorWinnerCardId
+            ? response.prizePool + response.potentialJackpot
+            : response.potentialJackpot || 0
+          : 0
+      );
       SoundService.playSound(
         newJackpotEnabled ? "jackpot_running" : "jackpot_congrats"
       );
@@ -459,11 +470,9 @@ const BingoGame = () => {
       setJackpotAmount(response.jackpotWinner.prize);
       setIsJackpotWinnerModalOpen(true);
       SoundService.playSound("jackpot_congrats");
-
-      // Automatically close the jackpot winner modal after 5 seconds
       setTimeout(() => {
         setIsJackpotWinnerModalOpen(false);
-        setIsJackpotActive(false); // Hide the jackpot modal
+        setIsJackpotActive(false);
       }, 5000);
     } catch (error) {
       setCallError(error.message || "Failed to select jackpot winner");
@@ -472,8 +481,14 @@ const BingoGame = () => {
   };
 
   const handleCheckCard = async (cardId) => {
-    if (!gameData?._id || !cardId) {
-      setCallError("Invalid game ID or card ID");
+    if (!gameData?._id) {
+      setCallError("Invalid game ID");
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    if (!cardId) {
+      setCallError("No card selected");
       setIsErrorModalOpen(true);
       return;
     }
@@ -482,6 +497,17 @@ const BingoGame = () => {
     if (isNaN(numericCardId) || numericCardId < 1) {
       setCallError("Invalid card ID");
       setIsErrorModalOpen(true);
+      return;
+    }
+
+    const isValidCardInGame = gameData.selectedCards?.some(
+      (card) => card.id === numericCardId
+    );
+
+    if (!isValidCardInGame) {
+      setCallError(`Card ${numericCardId} is not playing in this game`);
+      setIsErrorModalOpen(true);
+      SoundService.playSound("you_didnt_win");
       return;
     }
 
@@ -510,6 +536,7 @@ const BingoGame = () => {
 
     try {
       const response = await checkBingo(gameData._id, numericCardId);
+      console.log("checkBingo Response:", response); // Debug log to inspect response
       setGameData(response.game);
       if (response.winner) {
         setIsWinnerModalOpen(true);
@@ -517,7 +544,15 @@ const BingoGame = () => {
         setIsGameOver(true);
         setIsPlaying(false);
         setIsAutoCall(false);
-        SoundService.playSound("winner");
+        const isJackpotWin =
+          response.game.jackpotWinner?.cardId === numericCardId;
+        // Update jackpotAmount to reflect the prize
+        setJackpotAmount(
+          isJackpotWin
+            ? response.game.jackpotWinner?.prize || 0
+            : response.game.winner?.prize || 0
+        );
+        SoundService.playSound(isJackpotWin ? "jackpot_congrats" : "winner");
       } else {
         setLockedCards((prev) => [...prev, numericCardId]);
         setCallError(
@@ -529,7 +564,40 @@ const BingoGame = () => {
         SoundService.playSound("you_didnt_win");
       }
     } catch (error) {
-      setCallError(error.message || `Failed to check card ${numericCardId}`);
+      console.log("===== ERROR DEBUGGING =====");
+      console.log("Full error structure:", {
+        errorMessage: error.message,
+        hasResponse: !!error.response,
+        responseData: error.response?.data,
+        responseMessage: error.response?.data?.message,
+        errorObject: error,
+      });
+
+      let userFriendlyMessage;
+      if (error.response?.data?.message) {
+        userFriendlyMessage = error.response.data.message;
+        if (
+          userFriendlyMessage.includes(
+            "The provided card is not in the game"
+          ) ||
+          userFriendlyMessage.includes("Card not found in game")
+        ) {
+          userFriendlyMessage = `Card ${cardId} not found in game #${
+            gameData?.gameNumber || "unknown"
+          }`;
+        }
+      } else if (error.response?.data?.error) {
+        userFriendlyMessage = error.response.data.error;
+      } else if (typeof error.response?.data === "string") {
+        userFriendlyMessage = error.response.data;
+      } else {
+        userFriendlyMessage = error.message || "An unexpected error occurred";
+      }
+
+      console.log("Final user-friendly message:", userFriendlyMessage);
+      console.log("==========================");
+
+      setCallError(userFriendlyMessage);
       setIsErrorModalOpen(true);
       SoundService.playSound("you_didnt_win");
     }
@@ -554,13 +622,14 @@ const BingoGame = () => {
     }
   };
 
+  // UI Generation
   const generateBoard = () => {
     const letters = [
-      { letter: "B", color: "bg-red-600" },
-      { letter: "I", color: "bg-blue-600" },
-      { letter: "N", color: "bg-green-600" },
-      { letter: "G", color: "bg-yellow-600" },
-      { letter: "O", color: "bg-purple-600" },
+      { letter: "B", color: "bg-[#e9a64c]" },
+      { letter: "I", color: "bg-[#e9a64c]" },
+      { letter: "N", color: "bg-[#e9a64c]" },
+      { letter: "G", color: "bg-[#e9a64c]" },
+      { letter: "O", color: "bg-[#e9a64c]" },
     ];
     const board = [];
     for (let row = 0; row < 5; row++) {
@@ -568,7 +637,7 @@ const BingoGame = () => {
       rowNumbers.push(
         <div
           key={`letter-${row}`}
-          className={`w-12 h-12 ${letters[row].color} text-white flex justify-center items-center text-xl font-bold border border-[#2a3969]`}
+          className={`w-14 h-14 ${letters[row].color} text-black flex justify-center items-center text-2xl font-bold border border-[#2a3969]`}
         >
           {letters[row].letter}
         </div>
@@ -577,10 +646,10 @@ const BingoGame = () => {
         rowNumbers.push(
           <div
             key={i}
-            className={`w-12 h-12 rounded flex justify-center items-center text-xl font-bold cursor-default transition-all duration-300 ${
+            className={`w-14 h-14 flex justify-center items-center text-xl font-bold cursor-default transition-all duration-300 ${
               calledNumbers.includes(i)
-                ? "bg-[#f0e14a] text-black shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]"
-                : "bg-[#0f1a4a] text-[#f0e14a] border border-[#2a3969]"
+                ? "bg-[#0a1174] text-white border border-[#2a3969]"
+                : "bg-[#e02d2d] text-white border border-[#2a3969]"
             }`}
           >
             {i}
@@ -588,7 +657,7 @@ const BingoGame = () => {
         );
       }
       board.push(
-        <div key={`row-${row}`} className="flex gap-[2px]">
+        <div key={`row-${row}`} className="flex gap-[5px]">
           {rowNumbers}
         </div>
       );
@@ -597,19 +666,30 @@ const BingoGame = () => {
   };
 
   const recentNumbers = lastCalledNumbers.map((num, index) => (
-    <span
+    <div
       key={index}
-      className="bg-[#f0e14a] text-black w-8 h-8 rounded-full flex justify-center items-center font-bold text-sm"
+      className={`w-11 h-11 flex justify-center items-center font-bold text-lg rounded-full ${
+        index === 0
+          ? "bg-[#d20000]"
+          : index === 1
+          ? "bg-[rgba(210,0,0,0.8)]"
+          : index === 2
+          ? "bg-[rgba(210,0,0,0.6)]"
+          : index === 3
+          ? "bg-[rgba(210,0,0,0.4)]"
+          : "bg-[rgba(210,0,0,0.2)]"
+      } text-white`}
     >
-      {num}
-    </span>
+      {num || "-"}
+    </div>
   ));
 
   return (
     <div
       ref={containerRef}
-      className="w-full h-full bg-[#1a2b5f] flex flex-col items-center p-5 relative"
+      className="w-full h-full bg-[#0a1235] flex flex-col items-center p-5 relative"
     >
+      {/* Navigation Header */}
       <div className="flex justify-between items-center w-full max-w-[1200px]">
         <button
           className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
@@ -627,15 +707,17 @@ const BingoGame = () => {
           className="bg-transparent border border-gray-600 text-[#f0e14a] px-3 flex items-center gap-1.5 rounded cursor-pointer transition-all duration-300 hover:bg-white/10 hover:scale-105"
           onClick={toggleLanguage}
         >
-          <span className="text-base">🇪🇹</span>
+          <span className="text-base">🇬🇧</span>
           <span className="text-sm">
             {translations[language]?.language || "Language"}
           </span>
         </button>
       </div>
+
+      {/* Title and Recent Numbers */}
       <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-5xl font-black text-[#f0e14a] text-center">
-          JOKER BINGO
+          JOCKER BINGO
         </h1>
         <div className="flex justify-center items-center gap-2">
           <span className="text-[#e9a64c] text-2xl font-bold mr-1">
@@ -644,6 +726,8 @@ const BingoGame = () => {
           {recentNumbers}
         </div>
       </div>
+
+      {/* Game Info */}
       <div className="flex flex-wrap justify-center gap-2 mb-5 w-full">
         <div className="text-[#f0e14a] text-2xl font-bold mr-2">
           GAME {isLoading ? "Loading..." : gameData?.gameNumber || "Unknown"}
@@ -652,21 +736,30 @@ const BingoGame = () => {
           Called {calledNumbers.length}/75
         </div>
       </div>
-      <div className="flex flex-col gap-[2px] mb-5 w-full max-w-[1200px] mr-4 flex-grow justify-center items-center">
+
+      {/* Bingo Board */}
+      <div className="flex flex-col gap-[5px] mb-5 w-full max-w-[1200px] flex-grow justify-center items-center">
         {generateBoard()}
       </div>
+
+      {/* Controls and Last Number */}
       <div className="w-full flex items-center gap-4 max-w-[1200px] max-md:flex-col">
         <div className="flex-1 flex flex-col items-center">
+          {/* Control Buttons */}
           <div className="flex flex-wrap justify-center gap-2 mb-4 w-full">
             <button
-              className="bg-green-500 text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              className={`bg-[#4caf50] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
+                isPlaying ? "bg-[#e9744c]" : ""
+              }`}
               onClick={handlePlayPause}
               disabled={isGameOver}
             >
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
-              className="bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              className={`bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
+                isAutoCall ? "bg-[#4caf50]" : ""
+              }`}
               onClick={() => setIsAutoCall((prev) => !prev)}
               disabled={!gameData?._id || !isPlaying || isGameOver}
             >
@@ -705,6 +798,8 @@ const BingoGame = () => {
               </button>
             )}
           </div>
+
+          {/* Card Check Input */}
           <div className="flex gap-2 mt-2 w-full justify-center">
             <input
               type="text"
@@ -717,11 +812,13 @@ const BingoGame = () => {
             <button
               className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCheckCard(cardId)}
-              disabled={!gameData?._id || !cardId}
+              disabled={!gameData?._id}
             >
               Check
             </button>
           </div>
+
+          {/* Manual Number Input (Moderator only) */}
           {user?.role === "moderator" && (
             <div className="flex gap-2 mt-2 w-full justify-center">
               <input
@@ -743,8 +840,10 @@ const BingoGame = () => {
               </button>
             </div>
           )}
+
+          {/* Speed Control */}
           <div className="flex justify-center items-center gap-2 mt-4 mb-4">
-            <span className="text-sm">Speed:</span>
+            <span className="text-sm">🕒</span>
             <input
               type="range"
               min="1"
@@ -757,12 +856,27 @@ const BingoGame = () => {
             <span className="text-sm">{speed}s</span>
           </div>
         </div>
-        <div className="flex items-center">
-          <p className="w-16 h-16 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
-            {currentNumber || "-"}
-          </p>
+
+        {/* Last Number Container */}
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col items-center">
+            <p className="text-[#f0e14a] text-sm font-bold mb-1">
+              Current Number
+            </p>
+            <p className="w-16 h-16 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
+              {currentNumber || "-"}
+            </p>
+          </div>
+          <div className="flex flex-col items-center">
+            <p className="text-[#f0e14a] text-sm font-bold mb-1">Prize Pool</p>
+            <p className="w-16 h-16 flex justify-center items-center bg-[#e9744c] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-white">
+              {gameData?.prizePool || 0}
+            </p>
+          </div>
         </div>
       </div>
+
+      {/* Jackpot Display */}
       {isJackpotActive && !jackpotWinnerCard && (
         <div className="fixed bottom-5 left-[8.5%] -translate-x-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-20">
           <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
@@ -780,6 +894,8 @@ const BingoGame = () => {
           </button>
         </div>
       )}
+
+      {/* Winner Modal */}
       {isWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           <h2 className="text-[#f0e14a] mb-4 text-2xl">
@@ -791,10 +907,8 @@ const BingoGame = () => {
             <canvas ref={canvasRef}></canvas>
           </div>
           <p className="mb-4 text-lg text-white">
-            Game #{gameData?.gameNumber}: Card {winningCards[0]} won
-            {gameData?.jackpotWinner?.cardId === winningCards[0]
-              ? ` the jackpot of ${gameData.jackpotWinner.prize} BIRR!`
-              : ` ${gameData?.winner?.prize || 0} BIRR!`}
+            Game #{gameData?.gameNumber}: Card {winningCards[0]} won{" "}
+            {jackpotAmount} BIRR!
           </p>
           <button
             className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
@@ -807,6 +921,8 @@ const BingoGame = () => {
           </button>
         </div>
       )}
+
+      {/* Jackpot Winner Modal */}
       {isJackpotWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           <h2 className="text-[#f0e14a] mb-4 text-2xl">Jackpot Winner!</h2>
@@ -818,13 +934,15 @@ const BingoGame = () => {
             className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
             onClick={() => {
               setIsJackpotWinnerModalOpen(false);
-              setIsJackpotActive(false); // Hide the jackpot modal
+              setIsJackpotActive(false);
             }}
           >
             Close
           </button>
         </div>
       )}
+
+      {/* Game Finished Modal */}
       {isGameFinishedModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           <h2 className="text-[#f0e14a] mb-4 text-2xl">Game Finished!</h2>
@@ -848,16 +966,19 @@ const BingoGame = () => {
           </div>
         </div>
       )}
+
       {isErrorModalOpen && callError && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#e9744c] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
-          <h2 className="text-[#e9744c] mb-4 text-2xl">Error</h2>
-          <p className="mb-4 text-lg text-white">{callError}</p>
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-950 border-4 border-orange-500 p-5 rounded-xl z-50 text-center min-w-[300px] shadow-2xl">
+          <h2 className="text-orange-500 mb-4 text-2xl">Error</h2>
+          <p className="mb-4 text-lg text-white">{callError}</p>{" "}
+          {/* This should show the user-friendly message */}
           <button
-            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+            className="bg-orange-400 text-black px-4 py-2 font-bold rounded text-sm hover:bg-orange-300 transition-colors duration-300"
             onClick={() => {
               setIsErrorModalOpen(false);
               setCallError(null);
               if (
+                callError.includes("Invalid game ID") ||
                 callError.includes("No game ID found") ||
                 callError.includes("Failed to load game")
               ) {
@@ -869,6 +990,8 @@ const BingoGame = () => {
           </button>
         </div>
       )}
+
+      {/* Settings Sidebar */}
       {isSettingsOpen && (
         <div
           className="fixed top-0 left-0 w-[300px] h-full bg-[#0f1a4a] z-50 transition-left duration-300 overflow-y-auto shadow-[0_0_15px_rgba(0,0,0,0.5)]"
@@ -893,6 +1016,8 @@ const BingoGame = () => {
           onClick={() => setIsSettingsOpen(false)}
         ></div>
       )}
+
+      {/* Hidden Canvas */}
       <canvas ref={canvasRef} style={{ display: "none" }}></canvas>
     </div>
   );

@@ -11,65 +11,122 @@ import GameLog from "../models/GameLog.js";
 // --- Helper Functions ---
 
 /**
- * Counts completed lines and progress for a bingo card.
+ * Creates a marked grid for the card based on called numbers.
  * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
  * @param {Array<number>} calledNumbers - Array of numbers already called
- * @returns {{ lines: boolean[], lineProgress: number[], lineIndices: number[] }} Object with lines completion status, progress, and indices
+ * @returns {Array<Array<boolean>>} 5x5 grid of marked statuses
  */
-const countCompletedLines = (cardNumbers, calledNumbers) => {
-  const grid = cardNumbers.map((row) => row.map((num) => num.toString()));
-  const isMarked = (num) =>
-    num === "FREE" || calledNumbers.includes(Number(num));
-  const lines = [];
-  const lineProgress = [];
-  const lineIndices = [];
+const getMarkedGrid = (cardNumbers, calledNumbers) => {
+  return cardNumbers.map((row) =>
+    row.map((num) => num === "FREE" || calledNumbers.includes(Number(num)))
+  );
+};
 
-  // Rows (indices 0-4)
-  for (let i = 0; i < 5; i++) {
-    lines.push(grid[i].every(isMarked));
-    lineProgress.push(
-      grid[i].reduce((sum, num) => sum + (isMarked(num) ? 1 : 0), 0)
-    );
-    lineIndices.push(i);
+/**
+ * Checks if a card has bingo based on the pattern.
+ * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
+ * @param {Array<number>} calledNumbers - Array of numbers already called
+ * @param {string} pattern - Pattern type
+ * @returns {{ isBingo: boolean, completedLines: number, lineProgress: number[] }}
+ */
+export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
+  const marked = getMarkedGrid(cardNumbers, calledNumbers);
+  let isBingo = false;
+  let completedLines = 0;
+  const lineProgress = []; // Can expand if needed
+
+  // Helper checks
+  const isFourCornersCenter =
+    marked[0][0] &&
+    marked[0][4] &&
+    marked[4][0] &&
+    marked[4][4] &&
+    marked[2][2];
+  const isCross =
+    marked[1][1] &&
+    marked[1][3] &&
+    marked[3][1] &&
+    marked[3][3] &&
+    marked[2][2];
+  const isMainDiagonal =
+    marked[0][0] &&
+    marked[1][1] &&
+    marked[2][2] &&
+    marked[3][3] &&
+    marked[4][4];
+  const isOtherDiagonal =
+    marked[0][4] &&
+    marked[1][3] &&
+    marked[2][2] &&
+    marked[3][1] &&
+    marked[4][0];
+  const isAnyHorizontal = marked.some((row) => row.every((cell) => cell));
+  const isAnyVertical = [0, 1, 2, 3, 4].some((col) =>
+    marked.every((row) => row[col])
+  );
+  const isAnyDiagonal = isMainDiagonal || isOtherDiagonal;
+
+  switch (pattern) {
+    case "four_corners_center":
+      isBingo = isFourCornersCenter;
+      completedLines = isBingo ? 1 : 0;
+      break;
+    case "cross":
+      isBingo = isCross;
+      completedLines = isBingo ? 1 : 0;
+      break;
+    case "main_diagonal":
+      isBingo = isMainDiagonal;
+      completedLines = isBingo ? 1 : 0;
+      break;
+    case "other_diagonal":
+      isBingo = isOtherDiagonal;
+      completedLines = isBingo ? 1 : 0;
+      break;
+    case "horizontal_line":
+      isBingo = isAnyHorizontal;
+      completedLines = marked.filter((row) => row.every((cell) => cell)).length;
+      break;
+    case "vertical_line":
+      isBingo = isAnyVertical;
+      completedLines = [0, 1, 2, 3, 4].filter((col) =>
+        marked.every((row) => row[col])
+      ).length;
+      break;
+    case "all":
+      isBingo =
+        isFourCornersCenter ||
+        isCross ||
+        isMainDiagonal ||
+        isOtherDiagonal ||
+        isAnyHorizontal ||
+        isAnyVertical;
+      completedLines =
+        (isFourCornersCenter ? 1 : 0) +
+        (isCross ? 1 : 0) +
+        (isMainDiagonal ? 1 : 0) +
+        (isOtherDiagonal ? 1 : 0) +
+        (isAnyHorizontal ? 1 : 0) +
+        (isAnyVertical ? 1 : 0);
+      break;
+    default:
+      // Backward compatibility for old patterns
+      if (pattern === "line") isBingo = isAnyHorizontal;
+      if (pattern === "diagonal") isBingo = isAnyDiagonal;
+      if (pattern === "x_pattern") isBingo = isMainDiagonal && isOtherDiagonal;
+      completedLines = isBingo ? 1 : 0;
   }
 
-  // Columns (indices 5-9)
-  for (let j = 0; j < 5; j++) {
-    lines.push([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][j])));
-    lineProgress.push(
-      [0, 1, 2, 3, 4].reduce(
-        (sum, i) => sum + (isMarked(grid[i][j]) ? 1 : 0),
-        0
-      )
-    );
-    lineIndices.push(j + 5);
-  }
-
-  // Diagonals (indices 10, 11)
-  const diag1 = [0, 1, 2, 3, 4].every((i) => isMarked(grid[i][i]));
-  const diag2 = [0, 1, 2, 3, 4].every((i) => isMarked(grid[i][4 - i]));
-  lines.push(diag1, diag2);
-  lineProgress.push(
-    [0, 1, 2, 3, 4].reduce((sum, i) => sum + (isMarked(grid[i][i]) ? 1 : 0), 0)
-  );
-  lineProgress.push(
-    [0, 1, 2, 3, 4].reduce(
-      (sum, i) => sum + (isMarked(grid[i][4 - i]) ? 1 : 0),
-      0
-    )
-  );
-  lineIndices.push(10, 11);
-
-  return { lines, lineProgress, lineIndices };
+  return { isBingo, completedLines, lineProgress };
 };
 
 /**
  * Extracts numbers from a card based on the specified pattern, prioritizing specific lines when requested.
  * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
- * @param {string} pattern - Pattern type: 'line', 'diagonal', or 'x_pattern'
+ * @param {string} pattern - Pattern type
  * @param {Array<number>} calledNumbers - Array of numbers already called
  * @param {boolean} selectSpecificLine - Whether to select numbers from specific lines
- * @param {number[]} [targetIndices] - Specific line indices to target (e.g., [1] for row 1, [10, 11] for x_pattern)
+ * @param {number[]} [targetIndices] - Specific line indices to target
  * @returns {{ numbers: string[], selectedIndices: number[] }} Array of numbers for the pattern and selected line indices
  */
 const getNumbersForPattern = (
@@ -80,14 +137,9 @@ const getNumbersForPattern = (
   targetIndices = []
 ) => {
   if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
-    console.warn(
-      "[getNumbersForPattern] cardNumbers invalid or empty",
-      cardNumbers
-    );
     return { numbers: [], selectedIndices: [] };
   }
 
-  // Ensure every row is an array
   const grid = cardNumbers.map((row) =>
     Array.isArray(row) ? row.map((num) => num.toString()) : []
   );
@@ -95,74 +147,131 @@ const getNumbersForPattern = (
   const numbers = [];
   let selectedIndices = [];
 
-  const { lineProgress, lineIndices } = countCompletedLines(
-    cardNumbers,
-    calledNumbers || []
-  );
+  const unmarkedFilter = (n) =>
+    n !== "FREE" && !calledNumbers.includes(Number(n));
 
-  if (pattern === "line") {
-    const rows = grid; // Rows (indices 0-4)
-    if (selectSpecificLine && targetIndices.length > 0) {
-      const rowIndex = targetIndices[0];
-      if (rows[rowIndex]) {
-        numbers.push(
-          ...rows[rowIndex].filter(
-            (n) => n !== "FREE" && !calledNumbers.includes(Number(n))
-          )
-        );
-        selectedIndices = [rowIndex];
-      }
-    } else {
-      const rowIndices = [0, 1, 2, 3, 4].filter((i) => rows[i]);
-      const rowProgress = lineProgress.slice(0, rowIndices.length);
-      const maxUnmarked = Math.max(...rowProgress.map((p) => 5 - p));
-      const eligibleRowIndices = rowIndices.filter(
-        (i) => 5 - rowProgress[i] === maxUnmarked
-      );
-      const bestRowIndex =
-        eligibleRowIndices[
-          Math.floor(Math.random() * eligibleRowIndices.length)
-        ] || rowIndices[0];
-      if (rows[bestRowIndex]) {
-        numbers.push(
-          ...rows[bestRowIndex].filter(
-            (n) => n !== "FREE" && !calledNumbers.includes(Number(n))
-          )
-        );
-        selectedIndices = [bestRowIndex];
-      }
-    }
-  } else if (pattern === "diagonal" || pattern === "x_pattern") {
-    const diagonals = [
-      [0, 1, 2, 3, 4].map((i) => grid[i]?.[i]).filter((n) => n !== undefined),
-      [0, 1, 2, 3, 4]
-        .map((i) => grid[i]?.[4 - i])
-        .filter((n) => n !== undefined),
-    ];
-
-    if (selectSpecificLine && targetIndices.length > 0) {
-      for (const diagIndex of targetIndices) {
-        const lineIndex = diagIndex - 10;
-        if (diagonals[lineIndex]) {
-          numbers.push(
-            ...diagonals[lineIndex].filter(
-              (n) => n !== "FREE" && !calledNumbers.includes(Number(n))
-            )
-          );
-        }
-      }
-      selectedIndices = targetIndices;
-    } else {
+  switch (pattern) {
+    case "four_corners_center":
       numbers.push(
-        ...diagonals
-          .flat()
-          .filter((n) => n !== "FREE" && !calledNumbers.includes(Number(n)))
+        ...[grid[0][0], grid[0][4], grid[4][0], grid[4][4], grid[2][2]].filter(
+          unmarkedFilter
+        )
       );
-      selectedIndices = pattern === "x_pattern" ? [10, 11] : [10];
-    }
+      selectedIndices = [0]; // Arbitrary, since not line-based
+      break;
+    case "cross":
+      numbers.push(
+        ...[grid[1][1], grid[1][3], grid[3][1], grid[3][3], grid[2][2]].filter(
+          unmarkedFilter
+        )
+      );
+      selectedIndices = [0];
+      break;
+    case "main_diagonal":
+      numbers.push(
+        ...[0, 1, 2, 3, 4].map((i) => grid[i][i]).filter(unmarkedFilter)
+      );
+      selectedIndices = [10]; // Diagonal index
+      break;
+    case "other_diagonal":
+      numbers.push(
+        ...[0, 1, 2, 3, 4].map((i) => grid[i][4 - i]).filter(unmarkedFilter)
+      );
+      selectedIndices = [11];
+      break;
+    case "horizontal_line":
+      // Similar to old "line"
+      const rows = grid;
+      if (selectSpecificLine && targetIndices.length > 0) {
+        const rowIndex = targetIndices[0];
+        if (rows[rowIndex]) {
+          numbers.push(...rows[rowIndex].filter(unmarkedFilter));
+          selectedIndices = [rowIndex];
+        }
+      } else {
+        // Choose row with max unmarked
+        const rowUnmarked = rows.map(
+          (row) => row.filter(unmarkedFilter).length
+        );
+        const maxUnmarked = Math.max(...rowUnmarked);
+        const eligibleRows = rowUnmarked
+          .map((u, i) => (u === maxUnmarked ? i : null))
+          .filter((i) => i !== null);
+        const bestRow =
+          eligibleRows[Math.floor(Math.random() * eligibleRows.length)];
+        numbers.push(...rows[bestRow].filter(unmarkedFilter));
+        selectedIndices = [bestRow];
+      }
+      break;
+    case "vertical_line":
+      if (selectSpecificLine && targetIndices.length > 0) {
+        const colIndex = targetIndices[0];
+        numbers.push(
+          ...[0, 1, 2, 3, 4]
+            .map((i) => grid[i][colIndex])
+            .filter(unmarkedFilter)
+        );
+        selectedIndices = [colIndex + 5]; // Column indices 5-9
+      } else {
+        const colUnmarked = [0, 1, 2, 3, 4].map(
+          (col) =>
+            [0, 1, 2, 3, 4].filter((i) => unmarkedFilter(grid[i][col])).length
+        );
+        const maxUnmarked = Math.max(...colUnmarked);
+        const eligibleCols = colUnmarked
+          .map((u, j) => (u === maxUnmarked ? j : null))
+          .filter((j) => j !== null);
+        const bestCol =
+          eligibleCols[Math.floor(Math.random() * eligibleCols.length)];
+        numbers.push(
+          ...[0, 1, 2, 3, 4].map((i) => grid[i][bestCol]).filter(unmarkedFilter)
+        );
+        selectedIndices = [bestCol + 5];
+      }
+      break;
+    case "all":
+      // For pattern "all", select a random valid pattern (excluding "all") and get its numbers
+      const patternChoices = [
+        "four_corners_center",
+        "cross",
+        "main_diagonal",
+        "other_diagonal",
+        "horizontal_line",
+        "vertical_line",
+      ];
+      const selectedPattern =
+        patternChoices[Math.floor(Math.random() * patternChoices.length)];
+      const patternResult = getNumbersForPattern(
+        cardNumbers,
+        selectedPattern,
+        calledNumbers,
+        selectSpecificLine,
+        targetIndices
+      );
+      numbers.push(...patternResult.numbers);
+      selectedIndices = patternResult.selectedIndices;
+      break;
+    default:
+      // Backward compatibility for old patterns
+      if (pattern === "line")
+        return getNumbersForPattern(
+          cardNumbers,
+          "horizontal_line",
+          calledNumbers,
+          selectSpecificLine,
+          targetIndices
+        );
+      if (pattern === "diagonal" || pattern === "x_pattern") {
+        const diags = [
+          [0, 1, 2, 3, 4].map((i) => grid[i][i]),
+          [0, 1, 2, 3, 4].map((i) => grid[i][4 - i]),
+        ];
+        numbers.push(...diags.flat().filter(unmarkedFilter));
+        selectedIndices = pattern === "x_pattern" ? [10, 11] : [10];
+      }
   }
 
-  return { numbers, selectedIndices };
+  return { numbers: [...new Set(numbers)], selectedIndices }; // Unique numbers
 };
 
 /**
@@ -250,9 +359,9 @@ export const getCurrentGameNumber = async () => {
   return counter.seq;
 };
 
-const getRandomNumber = (calledNumbers) => {
+const getRandomNumber = (calledNumbers, exclude = []) => {
   const availableNumbers = Array.from({ length: 75 }, (_, i) => i + 1).filter(
-    (n) => !calledNumbers.includes(n)
+    (n) => !calledNumbers.includes(n) && !exclude.includes(n)
   );
   if (availableNumbers.length === 0) return null;
   return availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
@@ -268,7 +377,6 @@ const getRandomNumber = (calledNumbers) => {
 export const createGame = async (req, res, next) => {
   try {
     console.log("[createGame] Creating new game with request body:", req.body);
-
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       console.log("[createGame] Validation errors:", errors.array());
@@ -279,67 +387,92 @@ export const createGame = async (req, res, next) => {
 
     const {
       selectedCards = [],
-      pattern = "line",
+      pattern = "horizontal_line",
       betAmount = 10,
       houseFeePercentage = 15,
       moderatorWinnerCardId = null,
-      jackpotEnabled = true, // Default to true
+      jackpotEnabled = true,
     } = req.body;
 
-    if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
-      return res.status(400).json({ message: "Invalid game pattern" });
+    const validPatterns = [
+      "four_corners_center",
+      "cross",
+      "main_diagonal",
+      "other_diagonal",
+      "horizontal_line",
+      "vertical_line",
+      "all",
+    ];
+
+    if (!validPatterns.includes(pattern)) {
+      console.log(`[createGame] Invalid pattern: ${pattern}`);
+      return res.status(400).json({
+        message: "Invalid pattern type",
+        errorCode: "INVALID_PATTERN",
+      });
     }
 
-    if (!selectedCards.length) {
-      return res.status(400).json({ message: "No cards selected" });
+    // Validate selectedCards
+    if (!Array.isArray(selectedCards) || selectedCards.length === 0) {
+      console.log("[createGame] Invalid card selection");
+      return res.status(400).json({
+        message: "Game must have at least one card",
+        errorCode: "INVALID_CARDS",
+      });
     }
 
-    const cardIds = selectedCards
-      .map((c) =>
-        typeof c === "object" && c !== null && "id" in c
-          ? Number(c.id)
-          : Number(c)
-      )
-      .filter((id) => !isNaN(id));
-
-    const cards = await Card.find({ card_number: { $in: cardIds } }).lean();
-    if (!cards.length) {
-      return res
-        .status(400)
-        .json({ message: "No valid cards found for the provided IDs" });
+    // Validate card data from database
+    const foundCardIds = selectedCards.map((card) => card.id);
+    const cardsFromDB = await Card.find({
+      card_number: { $in: foundCardIds },
+    }).lean();
+    if (cardsFromDB.length !== foundCardIds.length) {
+      console.log(
+        "[createGame] Some cards not found in database:",
+        foundCardIds
+      );
+      return res.status(400).json({
+        message: "Some cards not found in database",
+        errorCode: "CARDS_NOT_FOUND",
+      });
     }
 
-    const foundCardIds = cards.map((c) => c.card_number);
-    const missingCardIds = cardIds.filter((id) => !foundCardIds.includes(id));
-    if (missingCardIds.length) {
-      return res
-        .status(400)
-        .json({ message: `Cards not found: ${missingCardIds.join(", ")}` });
+    // Validate numbers field for each card
+    for (const card of cardsFromDB) {
+      if (
+        !Array.isArray(card.numbers) ||
+        card.numbers.length !== 5 ||
+        card.numbers.some((row) => !Array.isArray(row) || row.length !== 5)
+      ) {
+        console.log(
+          `[createGame] Invalid numbers for card ${card.card_number}`
+        );
+        return res.status(400).json({
+          message: `Invalid numbers for card ${card.card_number}`,
+          errorCode: "INVALID_CARD_NUMBERS",
+        });
+      }
     }
 
-    const gameCards = cards.map((card) => ({
+    // Map cards to include numbers
+    const validatedCards = cardsFromDB.map((card) => ({
       id: card.card_number,
       numbers: card.numbers,
     }));
 
-    // --- Calculate totals ---
-    const totalPot = Number(betAmount) * gameCards.length;
-    const houseFee = (totalPot * Number(houseFeePercentage)) / 100;
-    const potentialJackpot = jackpotEnabled ? totalPot * 0.1 : 0;
-    const prizePool = totalPot - houseFee - potentialJackpot;
-
-    // --- Assign game number first ---
     const assignedGameNumber = await getNextGameNumber();
 
-    // --- Assign winnerCardId and jackpotEnabled ---
+    // Rest of the createGame logic remains unchanged
     let winnerCardId = moderatorWinnerCardId
       ? Number(moderatorWinnerCardId)
       : null;
     let finalJackpotEnabled = jackpotEnabled;
+
     if (!winnerCardId) {
       const futureWinning = await Counter.findOne({
         _id: `futureWinning_${assignedGameNumber}`,
       }).lean();
+
       if (futureWinning && futureWinning.cardId !== undefined) {
         const parsedWinnerCardId = Number(futureWinning.cardId);
         if (foundCardIds.includes(parsedWinnerCardId)) {
@@ -347,7 +480,8 @@ export const createGame = async (req, res, next) => {
           finalJackpotEnabled =
             futureWinning.jackpotEnabled !== undefined
               ? futureWinning.jackpotEnabled
-              : jackpotEnabled; // Use stored jackpotEnabled if available
+              : jackpotEnabled;
+
           console.log(
             `[createGame] Assigned predefined winner for game #${assignedGameNumber}: card ${winnerCardId}, jackpotEnabled: ${finalJackpotEnabled}`
           );
@@ -355,78 +489,112 @@ export const createGame = async (req, res, next) => {
       }
     }
 
-    // --- Determine selectedWinnerRowIndices for winner card ---
     let selectedWinnerRowIndices = [];
+    let forcedPattern = null;
+
     if (winnerCardId) {
-      const winnerCard = gameCards.find((card) => card.id === winnerCardId);
+      const winnerCard = validatedCards.find(
+        (card) => card.id === winnerCardId
+      );
       if (winnerCard) {
+        let usePattern = pattern;
+
+        if (pattern === "all") {
+          const patternChoices = validPatterns.filter((p) => p !== "all");
+          usePattern =
+            patternChoices[Math.floor(Math.random() * patternChoices.length)];
+          forcedPattern = usePattern;
+
+          console.log(
+            `[createGame] Selected random pattern for "all": ${usePattern}`
+          );
+        }
+
         const { selectedIndices } = getNumbersForPattern(
           winnerCard.numbers,
-          pattern,
+          usePattern,
           [],
           true
         );
+
         selectedWinnerRowIndices = selectedIndices;
       }
     }
 
-    // --- Create game ---
+    const totalPot = betAmount * validatedCards.length;
+    const houseFee = (totalPot * houseFeePercentage) / 100;
+    const potentialJackpot = finalJackpotEnabled ? totalPot * 0.1 : 0;
+    const prizePool = totalPot - houseFee - potentialJackpot;
+
     const game = new Game({
       gameNumber: assignedGameNumber,
       betAmount,
       houseFeePercentage,
-      selectedCards: gameCards,
+      houseFee,
+      selectedCards: validatedCards,
       pattern,
       prizePool,
-      potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0, // Adjust based on finalJackpotEnabled
+      potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0,
       status: "pending",
       calledNumbers: [],
       calledNumbersLog: [],
+      forcedCallSequence: [],
       moderatorWinnerCardId: winnerCardId,
       selectedWinnerRowIndices,
+      forcedPattern,
       jackpotEnabled: finalJackpotEnabled,
       winner: null,
     });
 
-    await game.save();
+    const savedGame = await game.save();
+
     console.log(
-      `[createGame] Game created: ID=${game._id}, Number=${game.gameNumber}, WinnerCardId=${winnerCardId}, JackpotEnabled=${game.jackpotEnabled}`
+      `[createGame] Game created: ID=${savedGame._id}, Number=${savedGame.gameNumber}, ` +
+        `WinnerCardId=${winnerCardId}, ForcedPattern=${forcedPattern}, ` +
+        `JackpotEnabled=${savedGame.jackpotEnabled}`
     );
 
-    // --- Cleanup future winner entry if assigned ---
-    if (winnerCardId && !moderatorWinnerCardId) {
+    if (winnerCardId && moderatorWinnerCardId === null) {
       await Counter.deleteOne({ _id: `futureWinning_${assignedGameNumber}` });
       console.log(
         `[createGame] Cleaned up future winner entry for game #${assignedGameNumber}`
       );
     }
 
+    await GameLog.create({
+      gameId: savedGame._id,
+      action: "createGame",
+      status: "success",
+      details: {
+        gameNumber: savedGame.gameNumber,
+        pattern,
+        selectedCardIds: validatedCards.map((card) => card.id),
+        jackpotEnabled: savedGame.jackpotEnabled,
+        forcedPattern: forcedPattern,
+      },
+    });
+
     res.status(201).json({
       message: "Game created successfully",
-      data: {
-        id: game._id.toString(),
-        gameNumber: game.gameNumber,
-        moderatorWinnerCardId: game.moderatorWinnerCardId,
-        pattern: game.pattern,
-        jackpotEnabled: game.jackpotEnabled,
-      },
+      data: savedGame,
     });
   } catch (error) {
     console.error("[createGame] Error creating game:", error);
-    await GameLog.create({
-      gameId: null,
-      action: "createGame",
-      status: "failed",
-      details: { error: error.message || "Internal server error" },
-    });
+    if (!(error.name === "ValidationError")) {
+      await GameLog.create({
+        gameId: null,
+        action: "createGame",
+        status: "failed",
+        details: { error: error.message || "Internal server error" },
+      });
+    }
     next(error);
   }
 };
 
 /**
  * Calls a single number for a bingo game.
- * Forced numbers are called first based on the winner card and selected pattern.
- * Once exhausted, random numbers are called.
+ * Forced numbers are called in a natural mixed sequence with random numbers.
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @param {Function} next - Express next middleware function
@@ -439,60 +607,124 @@ export const callNumber = async (req, res, next) => {
 
     if (!mongoose.isValidObjectId(gameId)) {
       console.log(`[${now()}] [callNumber] Invalid game ID: ${gameId}`);
-      return res.status(400).json({ message: "Invalid game ID format" });
+      return res.status(400).json({
+        message: "Invalid game ID format",
+        errorCode: "INVALID_GAME_ID",
+      });
     }
 
     const game = await Game.findById(gameId);
+
     if (!game) {
       console.log(`[${now()}] [callNumber] Game not found: ${gameId}`);
-      return res.status(404).json({ message: "Game not found" });
+      return res.status(404).json({
+        message: "Game not found",
+        errorCode: "GAME_NOT_FOUND",
+      });
     }
+
     if (game.status !== "active") {
       console.log(`[${now()}] [callNumber] Game not active: ${game.status}`);
-      return res.status(400).json({ message: "Game is not active" });
+      return res.status(400).json({
+        message: "Game is not active",
+        errorCode: "GAME_NOT_ACTIVE",
+      });
     }
 
     let calledNumber = null;
     let isForcedCall = false;
 
-    // --- Forced winner numbers ---
+    // --- Forced winner numbers with natural mixing ---
     if (game.moderatorWinnerCardId) {
       const winnerCard = game.selectedCards.find(
         (c) => c.id === game.moderatorWinnerCardId
       );
+
       if (winnerCard && Array.isArray(winnerCard.numbers)) {
+        // CRITICAL FIX: Only initialize sequence ONCE per game
         if (
-          !Array.isArray(game.forcedNumbersQueue) ||
-          game.forcedNumbersQueue.length === 0
+          !Array.isArray(game.forcedCallSequence) ||
+          game.forcedCallSequence.length === 0
         ) {
-          const { numbers, selectedIndices } = getNumbersForPattern(
+          // Use consistent pattern throughout the game
+          let usePattern = game.forcedPattern || game.pattern;
+
+          // If pattern is "all" but no forcedPattern was set, select and save a specific pattern
+          if (game.pattern === "all" && !game.forcedPattern) {
+            const validPatterns = [
+              "four_corners_center",
+              "cross",
+              "main_diagonal",
+              "other_diagonal",
+              "horizontal_line",
+              "vertical_line",
+            ];
+            usePattern =
+              validPatterns[Math.floor(Math.random() * validPatterns.length)];
+            game.forcedPattern = usePattern;
+
+            // Save the chosen pattern immediately
+            await game.save();
+          }
+
+          const { numbers: forcedNums } = getNumbersForPattern(
             winnerCard.numbers,
-            game.pattern,
+            usePattern,
             game.calledNumbers,
             true,
             game.selectedWinnerRowIndices.length
               ? game.selectedWinnerRowIndices
               : undefined
           );
-          game.forcedNumbersQueue = numbers;
-          if (!game.selectedWinnerRowIndices.length) {
-            game.selectedWinnerRowIndices = selectedIndices;
+
+          // Handle empty forced numbers case
+          if (Array.isArray(forcedNums) && forcedNums.length > 0) {
+            // Create a proper mixed sequence (forced + random numbers)
+            const sequence = createMixedCallSequence(
+              forcedNums,
+              game.calledNumbers
+            );
+
+            game.forcedCallSequence = sequence;
+
+            // Ensure winner row indices are set
+            if (
+              !game.selectedWinnerRowIndices ||
+              game.selectedWinnerRowIndices.length === 0
+            ) {
+              const { selectedIndices } = getNumbersForPattern(
+                winnerCard.numbers,
+                usePattern,
+                game.calledNumbers,
+                true
+              );
+              game.selectedWinnerRowIndices = selectedIndices;
+            }
+
+            console.log(
+              `[${now()}] [callNumber] Forced sequence initialized for pattern ${usePattern}: ${game.forcedCallSequence.join(
+                ", "
+              )}`
+            );
+
+            // Save the game with the new sequence
+            await game.save();
           }
-          console.log(
-            `[${now()}] [callNumber] Forced numbers initialized: ${numbers}`
-          );
         }
 
-        if (game.forcedNumbersQueue.length > 0) {
-          calledNumber = Number(game.forcedNumbersQueue.shift());
+        // Only call from sequence if it exists and has numbers
+        if (
+          Array.isArray(game.forcedCallSequence) &&
+          game.forcedCallSequence.length > 0
+        ) {
+          calledNumber = game.forcedCallSequence.shift();
           isForcedCall = true;
           console.log(
-            `[${now()}] [callNumber] Forced number called: ${calledNumber} (pattern: ${
-              game.pattern
-            }, indices: ${game.selectedWinnerRowIndices}, cardId: ${
-              winnerCard.id
-            })`
+            `[${now()}] [callNumber] Called from sequence: ${calledNumber}`
           );
+
+          // Save the updated sequence after shifting
+          await game.save();
         }
       }
     }
@@ -502,9 +734,10 @@ export const callNumber = async (req, res, next) => {
       const randomNumber = getRandomNumber(game.calledNumbers);
       if (randomNumber === null) {
         console.log(`[${now()}] [callNumber] No uncalled numbers left.`);
-        return res
-          .status(400)
-          .json({ message: "No uncalled numbers available" });
+        return res.status(400).json({
+          message: "No uncalled numbers available",
+          errorCode: "NO_NUMBERS_LEFT",
+        });
       }
       calledNumber = randomNumber;
       console.log(
@@ -522,28 +755,112 @@ export const callNumber = async (req, res, next) => {
         (card) =>
           checkCardBingo(card.numbers, game.calledNumbers, game.pattern).isBingo
       );
+
       if (winnerCard) {
-        game.winner = { cardId: winnerCard.id, prize: game.prizePool };
-        game.status = "completed";
-        console.log(
-          `[${now()}] [callNumber] Winner found! CardId=${
-            winnerCard.id
-          }, Prize=${game.prizePool}`
-        );
+        // If moderator winner is set, only that card can win
+        if (
+          game.moderatorWinnerCardId &&
+          winnerCard.id !== game.moderatorWinnerCardId
+        ) {
+          console.log(
+            `[${now()}] [callNumber] Card ${
+              winnerCard.id
+            } has bingo but is not the designated winner.`
+          );
+        } else {
+          game.winner = {
+            cardId: winnerCard.id,
+            prize:
+              game.prizePool +
+              (game.jackpotEnabled ? game.potentialJackpot : 0),
+          };
+          game.status = "completed";
+          console.log(
+            `[${now()}] [callNumber] Winner found! CardId=${
+              winnerCard.id
+            }, Prize=${game.winner.prize}`
+          );
+        }
       }
     }
 
-    await game.save(); // Only one save per call
-
+    await game.save(); // Final save of game state
     res.json({
       message: `Number ${calledNumber} called`,
-      data: { game, calledNumber, isForcedCall },
+      data: {
+        game,
+        calledNumber,
+        isForcedCall,
+        patternUsed: game.forcedPattern || game.pattern,
+      },
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [callNumber] Error:`, error);
     next(error);
   }
 };
+
+/**
+ * Helper function to create a mixed sequence of forced and random numbers
+ * @param {number[]} forcedNums - The numbers needed for the winner card to win
+ * @param {number[]} calledNumbers - Already called numbers
+ * @returns {number[]} A mixed sequence with forced numbers distributed naturally
+ */
+function createMixedCallSequence(forcedNums, calledNumbers) {
+  const shuffledForced = [...forcedNums].sort(() => Math.random() - 0.5);
+  const numForced = shuffledForced.length;
+
+  // Total calls should be between 20-25, but at least numForced + 1
+  const totalCalls = Math.max(
+    numForced + 1,
+    Math.floor(Math.random() * 6) + 20 // 20-25
+  );
+
+  const numRandom = totalCalls - numForced;
+  const randomNums = [];
+
+  // Generate unique random numbers
+  while (randomNums.length < numRandom) {
+    const rand = getRandomNumber(calledNumbers, [
+      ...shuffledForced,
+      ...randomNums,
+    ]);
+    if (rand !== null && !randomNums.includes(rand)) {
+      randomNums.push(rand);
+    } else {
+      break;
+    }
+  }
+
+  // Create sequence with forced numbers distributed throughout
+  const sequence = new Array(totalCalls).fill(null);
+
+  // Place forced numbers (ensuring last number is forced to trigger win)
+  const forcedPositions = [];
+  while (forcedPositions.length < numForced - 1) {
+    const pos = Math.floor(Math.random() * (totalCalls - 1));
+    if (!forcedPositions.includes(pos)) forcedPositions.push(pos);
+  }
+  forcedPositions.push(totalCalls - 1); // Last position must be forced
+
+  // Fill sequence
+  forcedPositions.forEach((pos, idx) => {
+    sequence[pos] = Number(shuffledForced[idx]);
+  });
+
+  // Fill remaining positions with random numbers
+  let randomIndex = 0;
+  for (let i = 0; i < totalCalls; i++) {
+    if (sequence[i] === null && randomIndex < randomNums.length) {
+      sequence[i] = randomNums[randomIndex++];
+    }
+  }
+
+  // Filter out any null values and ensure uniqueness
+  return sequence
+    .filter((num) => num !== null)
+    .filter((num, index, self) => self.indexOf(num) === index);
+}
 
 /**
  * Finishes the game by setting its status to completed.
@@ -584,17 +901,17 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
-    if (game.status !== "active") {
-      console.log("[finishGame] Game not active:", game.status);
+    if (game.status !== "active" && game.status !== "paused") {
+      console.log("[finishGame] Game not active or paused:", game.status);
       await GameLog.create({
         gameId,
         action: "finishGame",
         status: "failed",
-        details: { error: "Game not active", status: game.status },
+        details: { error: "Game not active or paused", status: game.status },
       });
       return res.status(400).json({
-        message: "Game is not active",
-        errorCode: "GAME_NOT_ACTIVE",
+        message: "Game is not active or paused",
+        errorCode: "GAME_NOT_ACTIVE_OR_PAUSED",
       });
     }
 
@@ -770,7 +1087,7 @@ export const createSequentialGames = async (req, res, next) => {
   try {
     const {
       count,
-      pattern = "line",
+      pattern = "horizontal_line",
       betAmount = 10,
       houseFeePercentage = 15,
       jackpotEnabled = true,
@@ -778,7 +1095,16 @@ export const createSequentialGames = async (req, res, next) => {
       moderatorWinnerCardIds = [],
     } = req.body;
 
-    if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
+    const validPatterns = [
+      "four_corners_center",
+      "cross",
+      "main_diagonal",
+      "other_diagonal",
+      "horizontal_line",
+      "vertical_line",
+      "all",
+    ];
+    if (!validPatterns.includes(pattern)) {
       console.log("[createSequentialGames] Invalid pattern:", pattern);
       return res.status(400).json({ message: "Invalid game pattern" });
     }
@@ -860,16 +1186,24 @@ export const createSequentialGames = async (req, res, next) => {
         continue;
       }
 
-      // Determine selectedWinnerRowIndices for the game
+      // Determine selectedWinnerRowIndices and forcedPattern for the game
       let selectedWinnerRowIndices = [];
+      let forcedPattern = null;
       if (moderatorWinnerCardId) {
         const winnerCard = gameCards.find(
           (card) => card.id === moderatorWinnerCardId
         );
         if (winnerCard) {
+          let usePattern = pattern;
+          if (pattern === "all") {
+            const patternChoices = validPatterns.filter((p) => p !== "all");
+            usePattern =
+              patternChoices[Math.floor(Math.random() * patternChoices.length)];
+            forcedPattern = usePattern;
+          }
           const { selectedIndices } = getNumbersForPattern(
             winnerCard.numbers,
-            pattern,
+            usePattern,
             [],
             true
           );
@@ -886,15 +1220,17 @@ export const createSequentialGames = async (req, res, next) => {
         pattern,
         betAmount,
         houseFeePercentage,
+        houseFee,
         selectedCards: gameCards,
         prizePool,
-        potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0, // Adjust based on finalJackpotEnabled
+        potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0,
         jackpotEnabled: finalJackpotEnabled,
         status: "pending",
         calledNumbers: [],
         calledNumbersLog: [],
         moderatorWinnerCardId,
         selectedWinnerRowIndices,
+        forcedPattern,
         winner: null,
       });
 
@@ -902,6 +1238,19 @@ export const createSequentialGames = async (req, res, next) => {
       console.log(
         `[createSequentialGames] Saved game #${gameNumber} with ID: ${game._id}, JackpotEnabled: ${game.jackpotEnabled}`
       );
+
+      // Create GameLog entry
+      await GameLog.create({
+        gameId: game._id,
+        action: "createGame",
+        status: "success",
+        details: {
+          gameNumber: game.gameNumber,
+          pattern,
+          selectedCardIds: gameCards.map((card) => card.id),
+          jackpotEnabled: game.jackpotEnabled,
+        },
+      });
 
       if (moderatorWinnerCardId && !moderatorWinnerCardIds[i]) {
         await Counter.deleteOne({ _id: `futureWinning_${gameNumber}` });
@@ -923,36 +1272,17 @@ export const createSequentialGames = async (req, res, next) => {
       "[createSequentialGames] Error in createSequentialGames:",
       error
     );
+    // Only log GameLog for non-validation errors
+    if (!(error.name === "ValidationError")) {
+      await GameLog.create({
+        gameId: null,
+        action: "createSequentialGames",
+        status: "failed",
+        details: { error: error.message || "Internal server error" },
+      });
+    }
     next(error);
   }
-};
-/**
- * Checks if a card has bingo based on the pattern.
- * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
- * @param {Array<number>} calledNumbers - Array of numbers already called
- * @param {string} pattern - Pattern type: 'line', 'diagonal', or 'x_pattern'
- * @returns {{ isBingo: boolean, completedLines: number, lineProgress: number[] }}
- */
-export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
-  const { lines, lineProgress } = countCompletedLines(
-    cardNumbers,
-    calledNumbers
-  );
-  let isBingo = false;
-
-  if (pattern === "line") {
-    isBingo = lines.slice(0, 5).some(Boolean); // Check rows
-  } else if (pattern === "diagonal") {
-    isBingo = lines.slice(10, 12).some(Boolean); // Check diagonals
-  } else if (pattern === "x_pattern") {
-    isBingo = lines[10] && lines[11]; // Both diagonals must be complete
-  }
-
-  return {
-    isBingo,
-    completedLines: lines.filter(Boolean).length,
-    lineProgress,
-  };
 };
 
 /**
@@ -997,8 +1327,23 @@ export const checkBingo = async (req, res, next) => {
     if (!card) {
       console.log("[checkBingo] Card not found in game:", numericCardId);
       return res.status(400).json({
-        message: `Card ${numericCardId} not found in game`,
+        message: "The provided card is not in the game",
         errorCode: "INVALID_CARD_ID",
+      });
+    }
+
+    if (
+      !Array.isArray(card.numbers) ||
+      card.numbers.length !== 5 ||
+      card.numbers.some((row) => !Array.isArray(row) || row.length !== 5)
+    ) {
+      console.log(
+        `[checkBingo] Invalid card numbers for cardId: ${numericCardId}`,
+        card.numbers
+      );
+      return res.status(400).json({
+        message: `Invalid card numbers for card ${numericCardId}`,
+        errorCode: "INVALID_CARD_NUMBERS",
       });
     }
 
@@ -1007,8 +1352,11 @@ export const checkBingo = async (req, res, next) => {
       if (
         (game.winner?.cardId && game.winner.cardId === numericCardId) ||
         (game.moderatorWinnerCardId &&
-          game.moderatorWinnerCardId === numericCardId)
+          game.moderatorWinnerCardId === numericCardId) ||
+        (game.jackpotWinner?.cardId &&
+          game.jackpotWinner.cardId === numericCardId)
       ) {
+        const markedGrid = getMarkedGrid(card.numbers, game.calledNumbers);
         console.log(
           `[checkBingo] Winner confirmed for completed game #${game.gameNumber}: Card ${numericCardId}`
         );
@@ -1016,12 +1364,16 @@ export const checkBingo = async (req, res, next) => {
           message: `Bingo! Card ${numericCardId} wins!`,
           data: {
             winner: true,
+            prize: game.winner?.prize || game.jackpotWinner?.prize,
             game,
             winnerCardId: numericCardId,
             isYourCardWinner: true,
+            winnerCardNumbers: card.numbers,
+            markedGrid,
           },
         });
       } else {
+        const markedGrid = getMarkedGrid(card.numbers, game.calledNumbers);
         console.log(
           `[checkBingo] Card ${numericCardId} is not the winner for completed game #${game.gameNumber}`
         );
@@ -1031,19 +1383,24 @@ export const checkBingo = async (req, res, next) => {
             winner: false,
             game,
             winnerCardId:
-              game.winner?.cardId || game.moderatorWinnerCardId || null,
+              game.winner?.cardId ||
+              game.moderatorWinnerCardId ||
+              game.jackpotWinner?.cardId ||
+              null,
             isYourCardWinner: false,
+            winnerCardNumbers: card.numbers,
+            markedGrid,
           },
         });
       }
     }
 
-    // For active games, check bingo and enforce moderatorWinnerCardId if set
-    if (game.status !== "active") {
-      console.log("[checkBingo] Game not active:", game.status);
+    // Allow check for active or paused
+    if (!["active", "paused"].includes(game.status)) {
+      console.log("[checkBingo] Game not checkable:", game.status);
       return res.status(400).json({
         message: `Game is ${game.status}, cannot check bingo`,
-        errorCode: "GAME_NOT_ACTIVE",
+        errorCode: "GAME_NOT_CHECKABLE",
       });
     }
 
@@ -1055,7 +1412,6 @@ export const checkBingo = async (req, res, next) => {
     let winner = null;
 
     if (isBingo) {
-      // If moderatorWinnerCardId is set, only that card can win
       if (game.moderatorWinnerCardId) {
         if (game.moderatorWinnerCardId === numericCardId) {
           winner = {
@@ -1071,6 +1427,7 @@ export const checkBingo = async (req, res, next) => {
           console.log(
             `[checkBingo] Card ${numericCardId} has bingo but is not the designated winner for game #${game.gameNumber}`
           );
+          const markedGrid = getMarkedGrid(card.numbers, game.calledNumbers);
           return res.json({
             message: `Card ${numericCardId} is not the designated winner`,
             data: {
@@ -1078,11 +1435,12 @@ export const checkBingo = async (req, res, next) => {
               game,
               winnerCardId: game.moderatorWinnerCardId,
               isYourCardWinner: false,
+              winnerCardNumbers: card.numbers,
+              markedGrid,
             },
           });
         }
       } else {
-        // No moderatorWinnerCardId, first card with bingo wins
         winner = {
           cardId: numericCardId,
           prize:
@@ -1094,7 +1452,6 @@ export const checkBingo = async (req, res, next) => {
       }
     }
 
-    // Update game if a winner is found
     if (winner && !game.winner) {
       game.winner = winner;
       game.status = "completed";
@@ -1121,15 +1478,19 @@ export const checkBingo = async (req, res, next) => {
       });
     }
 
+    const markedGrid = getMarkedGrid(card.numbers, game.calledNumbers);
     return res.json({
       message: winner
         ? `Bingo! Card ${numericCardId} wins!`
         : `No bingo yet for card ${numericCardId}`,
       data: {
         winner: !!winner,
+        prize: winner ? winner.prize : null,
         game,
         winnerCardId: winner ? winner.cardId : null,
         isYourCardWinner: winner && winner.cardId === numericCardId,
+        winnerCardNumbers: card.numbers,
+        markedGrid,
       },
     });
   } catch (error) {
@@ -1137,7 +1498,6 @@ export const checkBingo = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * Selects a winner for a pending game.
  * @param {Object} req - Express request object
@@ -1209,18 +1569,34 @@ export const selectWinner = async (req, res, next) => {
       });
     }
 
-    // Set selectedWinnerRowIndices when selecting a winner
+    // Set selectedWinnerRowIndices and forcedPattern when selecting a winner
+    let usePattern = game.pattern;
+    let forcedPattern = null;
+    if (game.pattern === "all") {
+      const patternChoices = [
+        "four_corners_center",
+        "cross",
+        "main_diagonal",
+        "other_diagonal",
+        "horizontal_line",
+        "vertical_line",
+      ];
+      usePattern =
+        patternChoices[Math.floor(Math.random() * patternChoices.length)];
+      forcedPattern = usePattern;
+    }
     const { selectedIndices } = getNumbersForPattern(
       card.numbers,
-      game.pattern,
+      usePattern,
       [],
       true
     );
     game.moderatorWinnerCardId = Number(cardId);
     game.selectedWinnerRowIndices = selectedIndices;
+    game.forcedPattern = forcedPattern;
     await game.save();
     console.log(
-      `[selectWinner] Card ${cardId} selected as winner for game ${game.gameNumber}, indices: ${selectedIndices}`
+      `[selectWinner] Card ${cardId} selected as winner for game ${game.gameNumber}, indices: ${selectedIndices}, forcedPattern: ${forcedPattern}`
     );
     res.json({
       message: `Card ${cardId} selected as intended winner for game ${game.gameNumber}`,
@@ -1612,43 +1988,57 @@ export const createFutureGames = async (req, res, next) => {
  * @param {Object} config - Game configuration
  * @returns {Promise<Object>} Created game object
  */
-export const createGameRecord = async (
+export const createGameRecord = async ({
   gameNumber,
   betAmount,
   houseFeePercentage,
-  gameCards,
+  selectedCards,
   pattern,
   prizePool,
   potentialJackpot,
-  winnerCardId,
+  moderatorWinnerCardId,
   selectedWinnerRowIndices = [],
-  jackpotEnabled = true
-) => {
-  if (!gameCards || !Array.isArray(gameCards) || gameCards.length === 0) {
+  jackpotEnabled = true,
+}) => {
+  if (
+    !selectedCards ||
+    !Array.isArray(selectedCards) ||
+    selectedCards.length === 0
+  ) {
     throw new Error("Game cards must be a non-empty array");
   }
 
   // Validate pattern
-  if (!["line", "diagonal", "x_pattern"].includes(pattern)) {
+  const validPatterns = [
+    "four_corners_center",
+    "cross",
+    "main_diagonal",
+    "other_diagonal",
+    "horizontal_line",
+    "vertical_line",
+    "all",
+  ];
+  if (!validPatterns.includes(pattern)) {
     throw new Error("Invalid pattern type");
   }
 
   // Calculate houseFee
-  const houseFee = betAmount * (houseFeePercentage / 100) * gameCards.length;
+  const houseFee =
+    betAmount * (houseFeePercentage / 100) * selectedCards.length;
 
   const game = new Game({
     gameNumber,
     betAmount,
     houseFeePercentage,
-    houseFee, // Set the computed houseFee
-    selectedCards: gameCards,
+    houseFee,
+    selectedCards,
     pattern,
     prizePool,
     potentialJackpot,
     status: "pending",
     calledNumbers: [],
     calledNumbersLog: [],
-    moderatorWinnerCardId: winnerCardId,
+    moderatorWinnerCardId,
     selectedWinnerRowIndices,
     jackpotEnabled,
     winner: null,
@@ -1659,7 +2049,20 @@ export const createGameRecord = async (
     `[createGameRecord] Game created: ID=${game._id}, Number=${game.gameNumber}, Pattern=${pattern}, WinnerCardId=${game.moderatorWinnerCardId}, SelectedIndices=${game.selectedWinnerRowIndices}`
   );
 
-  if (winnerCardId && !moderatorWinnerCardId) {
+  // Create GameLog entry
+  await GameLog.create({
+    gameId: game._id,
+    action: "createGameRecord",
+    status: "success",
+    details: {
+      gameNumber: game.gameNumber,
+      pattern,
+      selectedCardIds: selectedCards.map((card) => card.id),
+      jackpotEnabled: game.jackpotEnabled,
+    },
+  });
+
+  if (moderatorWinnerCardId && !moderatorWinnerCardId) {
     await Counter.deleteOne({ _id: `futureWinning_${gameNumber}` });
     console.log(
       `[createGameRecord] Cleaned up future winner entry for game #${gameNumber}`
@@ -1668,6 +2071,7 @@ export const createGameRecord = async (
 
   return game;
 };
+
 /**
  * Gets report data with filters and aggregations for cashier reports.
  * @param {Object} req - Express request object with query params: status, pattern, startDate, endDate
@@ -1864,15 +2268,6 @@ export const selectJackpotWinner = async (req, res, next) => {
       return res.status(400).json({
         message: "Jackpot winner already selected",
         errorCode: "JACKPOT_WINNER_ALREADY_SELECTED",
-      });
-    }
-
-    const jackpot = await Jackpot.findOne();
-    if (!jackpot) {
-      console.log("[selectJackpotWinner] Jackpot not found");
-      return res.status(404).json({
-        message: "Jackpot not found",
-        errorCode: "JACKPOT_NOT_FOUND",
       });
     }
 

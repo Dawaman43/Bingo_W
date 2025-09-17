@@ -12,9 +12,16 @@ export const validate = [
     .withMessage("House percentage must be between 0 and 100"),
   body("pattern")
     .optional()
-    .isIn(["line", "diagonal", "x_pattern"])
+    .isIn([
+      "four_corners_center",
+      "cross",
+      "main_diagonal",
+      "other_diagonal",
+      "horizontal_line",
+      "vertical_line",
+      "all"
+    ])
     .withMessage("Invalid pattern"),
-
   body("selectedCards")
     .optional()
     .isArray({ min: 1 })
@@ -31,7 +38,10 @@ export const validate = [
     .optional()
     .isInt({ min: 1, max: 75 })
     .withMessage("Number must be between 1 and 75"),
-  body("cardId").optional().isInt().withMessage("Card ID must be an integer"),
+  body("cardId")
+    .optional()
+    .isInt()
+    .withMessage("Card ID must be an integer"),
   body("gameId")
     .optional()
     .isMongoId()
@@ -52,7 +62,10 @@ export const validate = [
     .trim()
     .notEmpty()
     .withMessage("Name is required"),
-  body("email").optional().isEmail().withMessage("Valid email is required"),
+  body("email")
+    .optional()
+    .isEmail()
+    .withMessage("Valid email is required"),
   body("password")
     .optional()
     .isString()
@@ -70,7 +83,10 @@ export const validate = [
     .trim()
     .notEmpty()
     .withMessage("Name is required"),
-  body("email").optional().isEmail().withMessage("Valid email is required"),
+  body("email")
+    .optional()
+    .isEmail()
+    .withMessage("Valid email is required"),
   body("password")
     .optional()
     .isString()
