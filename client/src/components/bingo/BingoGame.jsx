@@ -4,6 +4,7 @@ import { useAuth } from "../../hooks/useAuth";
 import { LanguageContext } from "../../context/LanguageProvider";
 import { useBingoGame } from "../../hooks/useBingoGame";
 import gameService from "../../services/game";
+import moderatorService from "../../services/moderator";
 import SoundService from "../../services/sound";
 
 const BingoGame = () => {
@@ -34,6 +35,7 @@ const BingoGame = () => {
   const [cardId, setCardId] = useState("");
   const [manualNumber, setManualNumber] = useState("");
   const [jackpotAmount, setJackpotAmount] = useState(0);
+  const [prevJackpotAmount, setPrevJackpotAmount] = useState(0);
   const [isJackpotActive, setIsJackpotActive] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
@@ -43,22 +45,37 @@ const BingoGame = () => {
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   const [winningPattern, setWinningPattern] = useState("line");
   const [winningCards, setWinningCards] = useState([]);
-  const [jackpotWinnerCard, setJackpotWinnerCard] = useState(null);
+  const [jackpotWinner, setJackpotWinner] = useState({
+    userId: "--",
+    prize: 0,
+    drawDate: "--",
+  });
   const [lockedCards, setLockedCards] = useState([]);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCallingNumber, setIsCallingNumber] = useState(false);
   const [callError, setCallError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [jackpotCandidates, setJackpotCandidates] = useState([]);
+  const [newCandidate, setNewCandidate] = useState({
+    identifier: "",
+    identifierType: "id",
+    days: 7,
+  });
+  const [jackpotGrow, setJackpotGrow] = useState(false);
 
   // Refs
   const canvasRef = useRef(null);
   const autoIntervalRef = useRef(null);
   const containerRef = useRef(null);
+  const jackpotRef = useRef(null);
 
   // Effects
   useEffect(() => {
-    SoundService.preloadSounds(language);
+    SoundService.preloadSounds(language, [
+      "jackpot_running",
+      "jackpot_congrats",
+    ]);
   }, [language]);
 
   useEffect(() => {
@@ -77,10 +94,11 @@ const BingoGame = () => {
         const fetchedGame = await fetchGame(gameId);
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
-        setIsJackpotActive(fetchedGame.jackpotEnabled);
-        setJackpotWinnerCard(fetchedGame.jackpotWinner?.cardId || null);
         await fetchBingoCards(gameId);
-        await updateJackpotDisplay();
+        await updateJackpotDisplay(); // Fetches accumulated jackpot (contributions added in SelectCard.jsx during game creation)
+        if (user?.role === "moderator") {
+          await fetchJackpotCandidates();
+        }
       } catch (error) {
         setCallError(error.message || "Failed to load game");
         setIsErrorModalOpen(true);
@@ -97,51 +115,7 @@ const BingoGame = () => {
       setGameData(game);
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
-      setJackpotAmount(
-        game.moderatorWinnerCardId
-          ? game.prizePool + (game.jackpotEnabled ? game.potentialJackpot : 0)
-          : game.jackpotEnabled
-          ? game.potentialJackpot
-          : 0
-      );
       setIsGameOver(game.status === "completed");
-      setIsJackpotActive(game.jackpotEnabled);
-      setJackpotWinnerCard(game.jackpotWinner?.cardId || null);
-
-      const cards =
-        game.selectedCards?.map((card) => ({
-          cardId: card.id,
-          cardNumber: card.id,
-          numbers: {
-            B: card.numbers
-              .slice(0, 5)
-              .map((n) => (n === "FREE" ? n : Number(n))),
-            I: card.numbers
-              .slice(5, 10)
-              .map((n) => (n === "FREE" ? n : Number(n))),
-            N: card.numbers
-              .slice(10, 15)
-              .map((n) => (n === "FREE" ? n : Number(n))),
-            G: card.numbers
-              .slice(15, 20)
-              .map((n) => (n === "FREE" ? n : Number(n))),
-            O: card.numbers
-              .slice(20, 25)
-              .map((n) => (n === "FREE" ? n : Number(n))),
-          },
-          markedPositions: {
-            B: new Array(5).fill(false),
-            I: new Array(5).fill(false),
-            N: new Array(5).fill(false).map((_, i) => (i === 2 ? true : false)),
-            G: new Array(5).fill(false),
-            O: new Array(5).fill(false),
-          },
-          isWinner: game.winner?.cardId === card.id,
-          eligibleForWin: game.moderatorWinnerCardId === card.id,
-          eligibleAtNumber: null,
-        })) || [];
-
-      setBingoCards(cards);
     }
   }, [game]);
 
@@ -171,6 +145,24 @@ const BingoGame = () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!isGameOver && isJackpotActive) {
+        await updateJackpotDisplay(); // Periodically fetch jackpot to reflect contributions from new games
+      }
+    }, 10000); // Matches HTML's real-time update interval
+    return () => clearInterval(interval);
+  }, [isGameOver, isJackpotActive]);
+
+  useEffect(() => {
+    if (jackpotAmount > prevJackpotAmount && prevJackpotAmount !== 0) {
+      setJackpotGrow(true);
+      SoundService.playSound("jackpot_running");
+      setTimeout(() => setJackpotGrow(false), 2000);
+    }
+    setPrevJackpotAmount(jackpotAmount);
+  }, [jackpotAmount, prevJackpotAmount]);
 
   // Helper functions
   const fetchBingoCards = async (gameId) => {
@@ -222,25 +214,137 @@ const BingoGame = () => {
 
   const updateJackpotDisplay = async () => {
     try {
-      const jackpot = await gameService.getJackpot();
-      setJackpotAmount(
-        gameData?.moderatorWinnerCardId
-          ? gameData.prizePool +
-              (gameData.jackpotEnabled ? gameData.potentialJackpot : 0)
-          : gameData?.jackpotEnabled
-          ? jackpot.amount
-          : 0
-      );
+      const jackpot = await moderatorService.getJackpot();
+      setJackpotAmount(jackpot.amount || 0);
+      setIsJackpotActive(jackpot.enabled ?? true);
     } catch (error) {
       setCallError(error.message || "Failed to fetch jackpot");
       setIsErrorModalOpen(true);
     }
   };
 
+  const fetchJackpotCandidates = async () => {
+    try {
+      const candidates = await moderatorService.getJackpotCandidates();
+      setJackpotCandidates(candidates);
+    } catch (error) {
+      setCallError(error.message || "Failed to fetch jackpot candidates");
+      setIsErrorModalOpen(true);
+    }
+  };
+
+  const handleToggleJackpot = async () => {
+    try {
+      const newState = !isJackpotActive;
+      await moderatorService.toggleJackpot(newState);
+      setIsJackpotActive(newState);
+      if (newState) {
+        await updateJackpotDisplay();
+        await fetchJackpotCandidates();
+      } else {
+        setJackpotCandidates([]);
+        setJackpotAmount(0); // Reset jackpot when disabled, matching HTML behavior
+      }
+    } catch (error) {
+      setCallError(error.message || "Failed to toggle jackpot");
+      setIsErrorModalOpen(true);
+    }
+  };
+
+  const handleAddJackpotCandidate = async () => {
+    if (!isJackpotActive) {
+      setCallError("Jackpot is disabled");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    if (!newCandidate.identifier) {
+      setCallError("Please enter an identifier");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    try {
+      if (newCandidate.identifierType === "id") {
+        if (
+          !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$|^[0-9]+$/.test(
+            newCandidate.identifier
+          )
+        ) {
+          throw new Error(
+            "Invalid ID format: Must be a valid UUID or numeric ID"
+          );
+        }
+      } else if (newCandidate.identifierType === "phone") {
+        if (!/^\+?251?[0-9]{9}$/.test(newCandidate.identifier)) {
+          throw new Error(
+            "Invalid phone format: Must be 9 digits, optionally starting with +251"
+          );
+        }
+      } else if (newCandidate.identifierType === "name") {
+        if (!/^[a-zA-Z0-9\s]{2,50}$/.test(newCandidate.identifier)) {
+          throw new Error(
+            "Invalid name format: Must be 2-50 alphanumeric characters or spaces"
+          );
+        }
+      }
+      if (![7, 14].includes(Number(newCandidate.days))) {
+        throw new Error("Days must be 7 or 14");
+      }
+      const candidate = await moderatorService.addJackpotCandidate(
+        newCandidate.identifier,
+        newCandidate.identifierType,
+        newCandidate.days
+      );
+      setJackpotCandidates((prev) => [...prev, candidate]);
+      setNewCandidate({ identifier: "", identifierType: "id", days: 7 });
+      setJackpotGrow(true);
+      SoundService.playSound("jackpot_running");
+      setTimeout(() => setJackpotGrow(false), 2000);
+      await updateJackpotDisplay();
+    } catch (error) {
+      setCallError(error.message || "Failed to add jackpot candidate");
+      setIsErrorModalOpen(true);
+    }
+  };
+
+  const handleExplodeJackpot = async () => {
+    if (!isJackpotActive) {
+      setCallError("Jackpot is disabled");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    if (!jackpotCandidates.length) {
+      setCallError("No candidates available to explode jackpot");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    if (!window.confirm("Are you sure you want to explode the jackpot?")) {
+      return;
+    }
+    try {
+      const response = await moderatorService.explodeJackpot();
+      setJackpotWinner({
+        userId: response.winnerUserId || "--",
+        prize: response.prize || 0,
+        drawDate: new Date().toLocaleDateString(),
+      });
+      setIsJackpotWinnerModalOpen(true);
+      setIsJackpotActive(false);
+      setJackpotCandidates([]);
+      setJackpotAmount(0); // Reset jackpot after award, matching HTML behavior
+      await moderatorService.updateJackpot({ amount: 0 }); // Ensure backend reset
+      SoundService.playSound("jackpot_congrats");
+      setTimeout(() => setIsJackpotWinnerModalOpen(false), 5000);
+    } catch (error) {
+      setCallError(error.message || "Failed to explode jackpot");
+      setIsErrorModalOpen(true);
+    }
+  };
+
   const getNumbersForPattern = (cardNumbers, pattern) => {
     const grid = [];
-    for (let i = 0; i < 5; i++)
+    for (let i = 0; i < 5; i++) {
       grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
+    }
     const numbers = [];
     if (pattern === "single_line") {
       numbers.push(...grid[0].filter((n) => n !== "FREE"));
@@ -251,11 +355,40 @@ const BingoGame = () => {
       );
     } else if (pattern === "full_house") {
       numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
+    } else if (pattern === "four_corners_center") {
+      numbers.push(grid[0][0], grid[0][4], grid[4][0], grid[4][4], grid[2][2]);
+    } else if (pattern === "cross") {
+      numbers.push(
+        grid[0][2],
+        grid[1][2],
+        grid[2][0],
+        grid[2][1],
+        grid[2][2],
+        grid[2][3],
+        grid[2][4],
+        grid[3][2],
+        grid[4][2]
+      );
+    } else if (pattern === "main_diagonal") {
+      numbers.push(grid[0][0], grid[1][1], grid[2][2], grid[3][3], grid[4][4]);
+    } else if (pattern === "other_diagonal") {
+      numbers.push(grid[0][4], grid[1][3], grid[2][2], grid[3][1], grid[4][0]);
+    } else if (pattern === "horizontal_line") {
+      for (let i = 0; i < 5; i++) {
+        numbers.push(...grid[i].filter((n) => n !== "FREE"));
+      }
+    } else if (pattern === "vertical_line") {
+      for (let col = 0; col < 5; col++) {
+        for (let row = 0; row < 5; row++) {
+          if (grid[row][col] !== "FREE") numbers.push(grid[row][col]);
+        }
+      }
+    } else if (pattern === "all") {
+      numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
     }
     return numbers.map((n) => (n === "FREE" ? n : Number(n)));
   };
 
-  // Event handlers
   const handleCallNumber = async (manualNum = null) => {
     if (
       isGameOver ||
@@ -324,10 +457,7 @@ const BingoGame = () => {
       }
       const response = await callNumber(gameData._id, { number: numberToCall });
       const calledNumber = response.calledNumber || numberToCall;
-      setCalledNumbers((prev) => {
-        const newCalledNumbers = [...prev, calledNumber];
-        return newCalledNumbers;
-      });
+      setCalledNumbers((prev) => [...prev, calledNumber]);
       setLastCalledNumbers((prev) => [calledNumber, ...prev.slice(0, 4)]);
       setCurrentNumber(calledNumber);
       setGameData(response.game);
@@ -406,14 +536,14 @@ const BingoGame = () => {
   const handleStartNextGame = async () => {
     try {
       setIsLoading(true);
-      const nextGame = await gameService.getNextPendingGame();
+      const nextGame = await moderatorService.getNextPendingGame();
       if (!nextGame || !nextGame._id) {
         setCallError("No pending game available");
         setIsErrorModalOpen(true);
         navigate("/cashier-dashboard");
         return;
       }
-      await gameService.startGame(nextGame._id);
+      await moderatorService.startGame(nextGame._id);
       sessionStorage.setItem("currentGameId", nextGame._id);
       navigate(`/bingo-game?id=${nextGame._id}`);
     } catch (error) {
@@ -429,100 +559,41 @@ const BingoGame = () => {
     SoundService.playSound("shuffle");
   };
 
-  const toggleJackpot = async () => {
-    if (!gameData?._id) {
-      setCallError("Cannot toggle jackpot: Game ID is missing");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    try {
-      const newJackpotEnabled = !isJackpotActive;
-      const response = await gameService.updateGame(gameData._id, {
-        jackpotEnabled: newJackpotEnabled,
-      });
-      setIsJackpotActive(newJackpotEnabled);
-      setGameData((prev) => ({ ...prev, jackpotEnabled: newJackpotEnabled }));
-      setJackpotAmount(
-        newJackpotEnabled
-          ? gameData.moderatorWinnerCardId
-            ? response.prizePool + response.potentialJackpot
-            : response.potentialJackpot || 0
-          : 0
-      );
-      SoundService.playSound(
-        newJackpotEnabled ? "jackpot_running" : "jackpot_congrats"
-      );
-    } catch (error) {
-      setCallError(error.message || "Failed to toggle jackpot");
-      setIsErrorModalOpen(true);
-    }
-  };
-
-  const handleRunJackpot = async () => {
-    if (!gameData?._id || !isJackpotActive || isGameOver) {
-      setCallError("Cannot run jackpot: Game is over or jackpot is not active");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    try {
-      const response = await gameService.selectJackpotWinner(gameData._id);
-      setJackpotWinnerCard(response.jackpotWinner.cardId);
-      setJackpotAmount(response.jackpotWinner.prize);
-      setIsJackpotWinnerModalOpen(true);
-      SoundService.playSound("jackpot_congrats");
-      setTimeout(() => {
-        setIsJackpotWinnerModalOpen(false);
-        setIsJackpotActive(false);
-      }, 5000);
-    } catch (error) {
-      setCallError(error.message || "Failed to select jackpot winner");
-      setIsErrorModalOpen(true);
-    }
-  };
-
   const handleCheckCard = async (cardId) => {
     if (!gameData?._id) {
       setCallError("Invalid game ID");
       setIsErrorModalOpen(true);
       return;
     }
-
     if (!cardId) {
       setCallError("No card selected");
       setIsErrorModalOpen(true);
       return;
     }
-
     const numericCardId = parseInt(cardId, 10);
     if (isNaN(numericCardId) || numericCardId < 1) {
       setCallError("Invalid card ID");
       setIsErrorModalOpen(true);
       return;
     }
-
     const isValidCardInGame = gameData.selectedCards?.some(
       (card) => card.id === numericCardId
     );
-
     if (!isValidCardInGame) {
       setCallError(`Card ${numericCardId} is not playing in this game`);
       setIsErrorModalOpen(true);
       SoundService.playSound("you_didnt_win");
       return;
     }
-
     if (isGameOver || gameData.status === "completed") {
       if (
         (gameData.winner?.cardId && gameData.winner.cardId === numericCardId) ||
         (gameData.moderatorWinnerCardId &&
-          gameData.moderatorWinnerCardId === numericCardId) ||
-        (gameData.jackpotWinner?.cardId &&
-          gameData.jackpotWinner.cardId === numericCardId)
+          gameData.moderatorWinnerCardId === numericCardId)
       ) {
         setIsWinnerModalOpen(true);
         setWinningCards([numericCardId]);
-        const isJackpotWin = gameData.jackpotWinner?.cardId === numericCardId;
-        SoundService.playSound(isJackpotWin ? "jackpot_congrats" : "winner");
+        SoundService.playSound("winner");
       } else {
         setCallError(
           `Card ${numericCardId} is not the winner for Game #${gameData.gameNumber}`
@@ -533,10 +604,8 @@ const BingoGame = () => {
       }
       return;
     }
-
     try {
       const response = await checkBingo(gameData._id, numericCardId);
-      console.log("checkBingo Response:", response); // Debug log to inspect response
       setGameData(response.game);
       if (response.winner) {
         setIsWinnerModalOpen(true);
@@ -544,15 +613,8 @@ const BingoGame = () => {
         setIsGameOver(true);
         setIsPlaying(false);
         setIsAutoCall(false);
-        const isJackpotWin =
-          response.game.jackpotWinner?.cardId === numericCardId;
-        // Update jackpotAmount to reflect the prize
-        setJackpotAmount(
-          isJackpotWin
-            ? response.game.jackpotWinner?.prize || 0
-            : response.game.winner?.prize || 0
-        );
-        SoundService.playSound(isJackpotWin ? "jackpot_congrats" : "winner");
+        setJackpotAmount(response.game.winner?.prize || 0);
+        SoundService.playSound("winner");
       } else {
         setLockedCards((prev) => [...prev, numericCardId]);
         setCallError(
@@ -564,39 +626,18 @@ const BingoGame = () => {
         SoundService.playSound("you_didnt_win");
       }
     } catch (error) {
-      console.log("===== ERROR DEBUGGING =====");
-      console.log("Full error structure:", {
-        errorMessage: error.message,
-        hasResponse: !!error.response,
-        responseData: error.response?.data,
-        responseMessage: error.response?.data?.message,
-        errorObject: error,
-      });
-
-      let userFriendlyMessage;
-      if (error.response?.data?.message) {
-        userFriendlyMessage = error.response.data.message;
-        if (
-          userFriendlyMessage.includes(
-            "The provided card is not in the game"
-          ) ||
-          userFriendlyMessage.includes("Card not found in game")
-        ) {
-          userFriendlyMessage = `Card ${cardId} not found in game #${
-            gameData?.gameNumber || "unknown"
-          }`;
-        }
-      } else if (error.response?.data?.error) {
-        userFriendlyMessage = error.response.data.error;
-      } else if (typeof error.response?.data === "string") {
-        userFriendlyMessage = error.response.data;
-      } else {
-        userFriendlyMessage = error.message || "An unexpected error occurred";
+      let userFriendlyMessage =
+        error.response?.data?.message ||
+        error.message ||
+        "An unexpected error occurred";
+      if (
+        userFriendlyMessage.includes("The provided card is not in the game") ||
+        userFriendlyMessage.includes("Card not found in game")
+      ) {
+        userFriendlyMessage = `Card ${cardId} not found in game #${
+          gameData?.gameNumber || "unknown"
+        }`;
       }
-
-      console.log("Final user-friendly message:", userFriendlyMessage);
-      console.log("==========================");
-
       setCallError(userFriendlyMessage);
       setIsErrorModalOpen(true);
       SoundService.playSound("you_didnt_win");
@@ -717,7 +758,7 @@ const BingoGame = () => {
       {/* Title and Recent Numbers */}
       <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-5xl font-black text-[#f0e14a] text-center">
-          JOCKER BINGO
+          JOKER BINGO
         </h1>
         <div className="flex justify-center items-center gap-2">
           <span className="text-[#e9a64c] text-2xl font-bold mr-1">
@@ -788,15 +829,6 @@ const BingoGame = () => {
             >
               Shuffle
             </button>
-            {user?.role === "moderator" && (
-              <button
-                className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
-                onClick={toggleJackpot}
-                disabled={isGameOver}
-              >
-                Jackpot {isJackpotActive ? "Off" : "On"}
-              </button>
-            )}
           </div>
 
           {/* Card Check Input */}
@@ -818,26 +850,98 @@ const BingoGame = () => {
             </button>
           </div>
 
-          {/* Manual Number Input (Moderator only) */}
+          {/* Moderator Controls */}
           {user?.role === "moderator" && (
-            <div className="flex gap-2 mt-2 w-full justify-center">
-              <input
-                type="number"
-                className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
-                value={manualNumber}
-                onChange={(e) => setManualNumber(e.target.value)}
-                placeholder="Manual Number (1-75)"
-                disabled={!isPlaying || isGameOver}
-                min="1"
-                max="75"
-              />
-              <button
-                className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
-                onClick={handleManualCall}
-                disabled={!isPlaying || isGameOver || !manualNumber}
-              >
-                Call Manual
-              </button>
+            <div className="flex flex-col gap-4 mt-4 w-full max-w-md">
+              <div className="flex gap-2 justify-center">
+                <input
+                  type="number"
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
+                  value={manualNumber}
+                  onChange={(e) => setManualNumber(e.target.value)}
+                  placeholder="Manual Number (1-75)"
+                  disabled={!isPlaying || isGameOver}
+                  min="1"
+                  max="75"
+                />
+                <button
+                  className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+                  onClick={handleManualCall}
+                  disabled={!isPlaying || isGameOver || !manualNumber}
+                >
+                  Call Manual
+                </button>
+              </div>
+              {/* Jackpot Controls */}
+              <div className="flex flex-col gap-2 bg-[#0f1a4a] p-4 rounded-lg">
+                <h3 className="text-[#f0e14a] text-lg font-bold">
+                  Jackpot Controls
+                </h3>
+                <button
+                  className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] ${
+                    isJackpotActive ? "bg-[#4caf50]" : ""
+                  }`}
+                  onClick={handleToggleJackpot}
+                >
+                  Jackpot {isJackpotActive ? "On" : "Off"}
+                </button>
+                <input
+                  type="text"
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.identifier}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      identifier: e.target.value,
+                    })
+                  }
+                  placeholder="ID, Name, or Phone"
+                  disabled={!isJackpotActive}
+                />
+                <select
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.identifierType}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      identifierType: e.target.value,
+                    })
+                  }
+                  disabled={!isJackpotActive}
+                >
+                  <option value="id">ID</option>
+                  <option value="name">Name</option>
+                  <option value="phone">Phone</option>
+                </select>
+                <select
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.days}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      days: Number(e.target.value),
+                    })
+                  }
+                  disabled={!isJackpotActive}
+                >
+                  <option value={7}>7 Days</option>
+                  <option value={14}>14 Days</option>
+                </select>
+                <button
+                  className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
+                  onClick={handleAddJackpotCandidate}
+                  disabled={!isJackpotActive || !newCandidate.identifier}
+                >
+                  Add Candidate
+                </button>
+                <button
+                  className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
+                  onClick={fetchJackpotCandidates}
+                  disabled={!isJackpotActive}
+                >
+                  Refresh Candidates
+                </button>
+              </div>
             </div>
           )}
 
@@ -877,38 +981,67 @@ const BingoGame = () => {
       </div>
 
       {/* Jackpot Display */}
-      {isJackpotActive && !jackpotWinnerCard && (
-        <div className="fixed bottom-5 left-[8.5%] -translate-x-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-20">
+      {isJackpotActive && (
+        <div
+          ref={jackpotRef}
+          className={`fixed bottom-5 left-5 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-50 min-w-[250px] transition-transform duration-1000 ${
+            jackpotGrow ? "scale-150 animate-pulse" : "scale-100"
+          }`}
+        >
           <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
             JACKPOT
           </div>
           <div className="text-3xl font-bold text-[#f0e14a] mb-2">
-            {jackpotAmount} BIRR
+            {isLoading ? "Loading..." : jackpotAmount.toFixed(2)} BIRR
           </div>
-          <button
-            className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full"
-            onClick={handleRunJackpot}
-            disabled={isGameOver || !isJackpotActive || jackpotWinnerCard}
-          >
-            {jackpotWinnerCard ? "Jackpot Awarded" : "Run Jackpot"}
-          </button>
+          <div className="text-sm text-white mb-1">
+            Winner ID: {jackpotWinner.userId}
+          </div>
+          <div className="text-sm text-white mb-1">
+            Prize: {jackpotWinner.prize.toFixed(2)} BIRR
+          </div>
+          <div className="text-sm text-white mb-2">
+            Draw Date: {jackpotWinner.drawDate}
+          </div>
+          {user?.role === "moderator" && (
+            <button
+              className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full ${
+                !jackpotCandidates.length ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+              onClick={handleExplodeJackpot}
+              disabled={!jackpotCandidates.length}
+            >
+              Run Jackpot
+            </button>
+          )}
+          {user?.role === "moderator" && jackpotCandidates.length > 0 && (
+            <div className="mt-2">
+              <div className="text-sm text-[#f0e14a] font-bold mb-1">
+                Active Candidates
+              </div>
+              <ul className="text-sm text-white max-h-32 overflow-y-auto">
+                {jackpotCandidates.map((candidate) => (
+                  <li key={candidate._id} className="mb-1">
+                    {candidate.identifier} ({candidate.identifierType}, Expires:{" "}
+                    {new Date(candidate.expiryDate).toLocaleDateString()})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
       {/* Winner Modal */}
       {isWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
-          <h2 className="text-[#f0e14a] mb-4 text-2xl">
-            {gameData?.jackpotWinner?.cardId === winningCards[0]
-              ? "Jackpot Winner!"
-              : "Winner!"}
-          </h2>
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner!</h2>
           <div className="w-60 aspect-square my-2 mx-auto">
             <canvas ref={canvasRef}></canvas>
           </div>
           <p className="mb-4 text-lg text-white">
             Game #{gameData?.gameNumber}: Card {winningCards[0]} won{" "}
-            {jackpotAmount} BIRR!
+            {gameData?.prizePool?.toFixed(2)} BIRR!
           </p>
           <button
             className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
@@ -925,16 +1058,15 @@ const BingoGame = () => {
       {/* Jackpot Winner Modal */}
       {isJackpotWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
-          <h2 className="text-[#f0e14a] mb-4 text-2xl">Jackpot Winner!</h2>
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Jackpot Exploded!</h2>
           <p className="mb-4 text-lg text-white">
-            Game #{gameData?.gameNumber}: Card {jackpotWinnerCard} won the
-            jackpot of {jackpotAmount} BIRR!
+            User {jackpotWinner.userId} won {jackpotWinner.prize.toFixed(2)}{" "}
+            BIRR!
           </p>
           <button
             className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
             onClick={() => {
               setIsJackpotWinnerModalOpen(false);
-              setIsJackpotActive(false);
             }}
           >
             Close
@@ -957,7 +1089,7 @@ const BingoGame = () => {
               Close
             </button>
             <button
-              className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0854c]"
+              className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
               onClick={handleStartNextGame}
               disabled={isLoading}
             >
@@ -970,8 +1102,7 @@ const BingoGame = () => {
       {isErrorModalOpen && callError && (
         <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-950 border-4 border-orange-500 p-5 rounded-xl z-50 text-center min-w-[300px] shadow-2xl">
           <h2 className="text-orange-500 mb-4 text-2xl">Error</h2>
-          <p className="mb-4 text-lg text-white">{callError}</p>{" "}
-          {/* This should show the user-friendly message */}
+          <p className="mb-4 text-lg text-white">{callError}</p>
           <button
             className="bg-orange-400 text-black px-4 py-2 font-bold rounded text-sm hover:bg-orange-300 transition-colors duration-300"
             onClick={() => {

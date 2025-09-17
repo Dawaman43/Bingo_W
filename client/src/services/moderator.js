@@ -139,6 +139,97 @@ const moderatorService = {
       throw error;
     }
   },
+
+  addJackpotCandidate: async (identifier, identifierType, days) => {
+    try {
+      const response = await API.post("/games/jackpot/candidates", {
+        identifier,
+        identifierType,
+        days,
+      });
+      return response.data.candidate;
+    } catch (error) {
+      console.error(
+        "moderatorService.addJackpotCandidate error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
+  explodeJackpot: async () => {
+    try {
+      const response = await API.post("/games/jackpot/explode");
+      return {
+        winnerUserId: response.data.winnerUserId,
+        winnerName: response.data.winnerName,
+        winnerEmail: response.data.winnerEmail,
+        prize: response.data.prize,
+        remainingJackpot: response.data.remainingJackpot,
+      };
+    } catch (error) {
+      console.error(
+        "moderatorService.explodeJackpot error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
+  getJackpot: async () => {
+    try {
+      const response = await API.get("/games/jackpot");
+      return response.data.data;
+    } catch (error) {
+      console.error(
+        "moderatorService.getJackpot error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
+  getJackpotCandidates: async () => {
+    try {
+      const response = await API.get("/games/jackpot/candidates");
+      return response.data.data;
+    } catch (error) {
+      console.error(
+        "moderatorService.getJackpotCandidates error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
+  toggleJackpot: async (enabled) => {
+    try {
+      const response = await API.patch("/games/jackpot", { enabled });
+      return response.data.data;
+    } catch (error) {
+      console.error(
+        "moderatorService.toggleJackpot error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
+
+  updateJackpot: async (amount) => {
+    try {
+      console.log("updateJackpot sending payload:", { amount });
+      const response = await API.patch("/games/jackpot", {
+        amount: Number(amount),
+      });
+      return response.data.data;
+    } catch (error) {
+      console.error(
+        "moderatorService.updateJackpot error:",
+        error.response?.data || error.message
+      );
+      throw error;
+    }
+  },
 };
 
 export default moderatorService;

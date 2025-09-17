@@ -37,7 +37,7 @@ export default function ModeratorSidebar({ isOpen, toggleSidebar }) {
         </NavLink>
 
         <NavLink
-          to="/reports"
+          to="/jackpot"
           className={({ isActive }) =>
             `flex items-center gap-3 p-2 rounded transition ${
               isActive ? "bg-green-600 text-white" : "hover:bg-gray-800"

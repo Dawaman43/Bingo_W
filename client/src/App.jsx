@@ -11,6 +11,7 @@ import BingoGame from "./components/bingo/BingoGame";
 import CashierDashboard from "./pages/cashier/cashier";
 import SelectCard from "./components/cashier/SelectCard";
 import CashierReport from "./components/cashier/Report";
+import JackpotManager from "./pages/moderator/Jackpot";
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
 
           {/* Moderator */}
           <Route path="/control" element={<Control />} />
+          <Route path="/jackpot" element={<JackpotManager />} />
         </Route>
       </Routes>
     </>

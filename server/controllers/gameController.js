@@ -7,6 +7,8 @@ import Card from "../models/Card.js";
 import Counter from "../models/Counter.js";
 import JackpotLog from "../models/JackpotLog.js";
 import GameLog from "../models/GameLog.js";
+import JackpotCandidate from "../models/JackpotCandidate.js";
+import User from "../models/User.js";
 
 // --- Helper Functions ---
 
@@ -391,7 +393,8 @@ export const createGame = async (req, res, next) => {
       betAmount = 10,
       houseFeePercentage = 15,
       moderatorWinnerCardId = null,
-      jackpotEnabled = true,
+      jackpotEnabled = true, // Default to true if undefined
+      jackpotContribution = betAmount, // Default to betAmount if not provided
     } = req.body;
 
     const validPatterns = [
@@ -462,7 +465,33 @@ export const createGame = async (req, res, next) => {
 
     const assignedGameNumber = await getNextGameNumber();
 
-    // Rest of the createGame logic remains unchanged
+    // Initialize contribution
+    const contribution = parseFloat(jackpotContribution) || betAmount; // Ensure defined
+    let potentialJackpot = 0;
+
+    // Update Jackpot if enabled
+    if (jackpotEnabled) {
+      const totalContribution = contribution * selectedCards.length; // Per card
+      const jackpot = await Jackpot.findOneAndUpdate(
+        {}, // Single global jackpot
+        {
+          $inc: { amount: totalContribution },
+          lastUpdated: new Date(),
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      potentialJackpot = jackpot.amount;
+      await logJackpotUpdate(
+        totalContribution,
+        `Added from game #${assignedGameNumber} with ${selectedCards.length} cards`,
+        null
+      );
+      console.log(
+        `[createGame] Jackpot updated: +${totalContribution}, new amount: ${jackpot.amount}`
+      );
+    }
+
+    // Rest of the game creation logic
     let winnerCardId = moderatorWinnerCardId
       ? Number(moderatorWinnerCardId)
       : null;
@@ -472,7 +501,6 @@ export const createGame = async (req, res, next) => {
       const futureWinning = await Counter.findOne({
         _id: `futureWinning_${assignedGameNumber}`,
       }).lean();
-
       if (futureWinning && futureWinning.cardId !== undefined) {
         const parsedWinnerCardId = Number(futureWinning.cardId);
         if (foundCardIds.includes(parsedWinnerCardId)) {
@@ -481,7 +509,6 @@ export const createGame = async (req, res, next) => {
             futureWinning.jackpotEnabled !== undefined
               ? futureWinning.jackpotEnabled
               : jackpotEnabled;
-
           console.log(
             `[createGame] Assigned predefined winner for game #${assignedGameNumber}: card ${winnerCardId}, jackpotEnabled: ${finalJackpotEnabled}`
           );
@@ -498,33 +525,28 @@ export const createGame = async (req, res, next) => {
       );
       if (winnerCard) {
         let usePattern = pattern;
-
         if (pattern === "all") {
           const patternChoices = validPatterns.filter((p) => p !== "all");
           usePattern =
             patternChoices[Math.floor(Math.random() * patternChoices.length)];
           forcedPattern = usePattern;
-
           console.log(
             `[createGame] Selected random pattern for "all": ${usePattern}`
           );
         }
-
         const { selectedIndices } = getNumbersForPattern(
           winnerCard.numbers,
           usePattern,
           [],
           true
         );
-
         selectedWinnerRowIndices = selectedIndices;
       }
     }
 
-    const totalPot = betAmount * validatedCards.length;
-    const houseFee = (totalPot * houseFeePercentage) / 100;
-    const potentialJackpot = finalJackpotEnabled ? totalPot * 0.1 : 0;
-    const prizePool = totalPot - houseFee - potentialJackpot;
+    // Calculate houseFee
+    const houseFee =
+      betAmount * (houseFeePercentage / 100) * selectedCards.length;
 
     const game = new Game({
       gameNumber: assignedGameNumber,
@@ -532,62 +554,50 @@ export const createGame = async (req, res, next) => {
       houseFeePercentage,
       houseFee,
       selectedCards: validatedCards,
-      pattern,
-      prizePool,
-      potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0,
+      pattern: forcedPattern || pattern,
+      prizePool: betAmount * selectedCards.length - houseFee,
+      potentialJackpot,
       status: "pending",
       calledNumbers: [],
       calledNumbersLog: [],
-      forcedCallSequence: [],
       moderatorWinnerCardId: winnerCardId,
       selectedWinnerRowIndices,
-      forcedPattern,
       jackpotEnabled: finalJackpotEnabled,
       winner: null,
     });
 
-    const savedGame = await game.save();
-
+    await game.save();
     console.log(
-      `[createGame] Game created: ID=${savedGame._id}, Number=${savedGame.gameNumber}, ` +
-        `WinnerCardId=${winnerCardId}, ForcedPattern=${forcedPattern}, ` +
-        `JackpotEnabled=${savedGame.jackpotEnabled}`
+      `[createGame] Game created: ID=${game._id}, Number=${game.gameNumber}, Pattern=${game.pattern}, WinnerCardId=${game.moderatorWinnerCardId}, JackpotEnabled=${game.jackpotEnabled}`
     );
 
-    if (winnerCardId && moderatorWinnerCardId === null) {
-      await Counter.deleteOne({ _id: `futureWinning_${assignedGameNumber}` });
-      console.log(
-        `[createGame] Cleaned up future winner entry for game #${assignedGameNumber}`
-      );
-    }
-
     await GameLog.create({
-      gameId: savedGame._id,
+      gameId: game._id,
       action: "createGame",
       status: "success",
       details: {
-        gameNumber: savedGame.gameNumber,
-        pattern,
+        gameNumber: game.gameNumber,
+        pattern: game.pattern,
         selectedCardIds: validatedCards.map((card) => card.id),
-        jackpotEnabled: savedGame.jackpotEnabled,
-        forcedPattern: forcedPattern,
+        jackpotEnabled: game.jackpotEnabled,
+        jackpotContribution: jackpotEnabled
+          ? contribution * selectedCards.length
+          : 0, // Handle undefined case
       },
     });
 
     res.status(201).json({
       message: "Game created successfully",
-      data: savedGame,
+      data: game,
     });
   } catch (error) {
-    console.error("[createGame] Error creating game:", error);
-    if (!(error.name === "ValidationError")) {
-      await GameLog.create({
-        gameId: null,
-        action: "createGame",
-        status: "failed",
-        details: { error: error.message || "Internal server error" },
-      });
-    }
+    console.error("[createGame] Error in createGame:", error);
+    await GameLog.create({
+      gameId: null,
+      action: "createGame",
+      status: "failed",
+      details: { error: error.message || "Internal server error" },
+    });
     next(error);
   }
 };
@@ -2223,6 +2233,13 @@ export const pauseGame = async (req, res, next) => {
  */
 export const selectJackpotWinner = async (req, res, next) => {
   try {
+    const userId = req.body.userId; // Or fetch: await User.findOne({ /* linked to card */ });
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ message: "User ID required for jackpot winner." });
+    }
+
     const gameId = req.params.id;
     if (!mongoose.isValidObjectId(gameId)) {
       console.log("[selectJackpotWinner] Invalid game ID format:", gameId);
@@ -2307,6 +2324,7 @@ export const selectJackpotWinner = async (req, res, next) => {
     await Result.create({
       gameId: game._id,
       winnerCardId: jackpotWinnerCard.id,
+      userId, // Add this
       prize: jackpot.amount,
       isJackpot: true,
     });
@@ -2330,6 +2348,260 @@ export const selectJackpotWinner = async (req, res, next) => {
       status: "failed",
       details: { error: error.message || "Internal server error" },
     });
+    next(error);
+  }
+};
+
+/**
+ * Adds a jackpot candidate by identifier (ID, name, or phone). Expires in 7 or 14 days.
+ * @param {Object} req - Express request object (body: {identifier, identifierType, days})
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const addJackpotCandidate = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { identifier, identifierType, days } = req.body;
+
+    if (!["id", "name", "phone"].includes(identifierType)) {
+      return res.status(400).json({
+        message: "Invalid identifierType. Must be 'id', 'name', or 'phone'.",
+      });
+    }
+
+    if (![7, 14].includes(days)) {
+      return res.status(400).json({ message: "Days must be 7 or 14." });
+    }
+
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + days);
+
+    // For non-DB users, userId is null
+    const candidate = new JackpotCandidate({
+      userId: null,
+      identifier,
+      identifierType,
+      expiryDate,
+    });
+
+    await candidate.save();
+
+    console.log(
+      `[addJackpotCandidate] Added candidate ${identifier} (expires: ${expiryDate})`
+    );
+
+    res.status(201).json({
+      message: "Jackpot candidate added successfully",
+      candidate,
+    });
+  } catch (error) {
+    console.error("[addJackpotCandidate] Error:", error);
+    next(error);
+  }
+};
+
+/**
+ * Explodes the jackpot: selects a random most-losing (least-winning) active candidate, awards the full jackpot, logs, resets, and clears candidates.
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+
+export const explodeJackpot = async (req, res, next) => {
+  try {
+    const jackpot = await Jackpot.findOne();
+    if (!jackpot) {
+      return res.status(404).json({ message: "Jackpot not found." });
+    }
+
+    if (jackpot.amount <= jackpot.seed) {
+      return res
+        .status(400)
+        .json({ message: "Jackpot amount is too low to explode." });
+    }
+
+    const now = new Date();
+    const activeCandidates = await JackpotCandidate.find({
+      expiryDate: { $gt: now },
+    });
+
+    if (!activeCandidates.length) {
+      return res.status(400).json({ message: "No active jackpot candidates." });
+    }
+
+    // Count wins for candidates with userId; for free-form, assume 0
+    const candidatesWithWins = await Promise.all(
+      activeCandidates.map(async (candidate) => {
+        let winCount = 0;
+        if (candidate.userId) {
+          winCount = await Result.countDocuments({ userId: candidate.userId });
+        }
+        return { candidate, winCount };
+      })
+    );
+
+    // Sort ascending: most losing first
+    candidatesWithWins.sort((a, b) => a.winCount - b.winCount);
+
+    const minWinCount = candidatesWithWins[0].winCount;
+    const mostLosingCandidates = candidatesWithWins.filter(
+      (c) => c.winCount === minWinCount
+    );
+
+    // Pick random among most losing
+    const randomIndex = Math.floor(Math.random() * mostLosingCandidates.length);
+    const selectedCandidate = mostLosingCandidates[randomIndex].candidate;
+
+    const prize = jackpot.amount; // full jackpot
+
+    let winnerName = selectedCandidate.identifier;
+    let winnerEmail = null;
+    if (selectedCandidate.userId) {
+      const user = await User.findById(selectedCandidate.userId);
+      if (user) {
+        winnerName = user.name || winnerName;
+        winnerEmail = user.email || null;
+      }
+    }
+
+    // Save result
+    await Result.create({
+      gameId: null,
+      winnerCardId: null,
+      userId: selectedCandidate.userId || null, // optional
+      identifier: selectedCandidate.identifier, // save name/phone/id
+      prize,
+      isJackpot: true,
+    });
+
+    // Log the explosion
+    await JackpotLog.create({
+      amount: -prize,
+      reason: `Jackpot exploded and awarded to ${selectedCandidate.identifier}`,
+      gameId: null,
+    });
+
+    // Reset jackpot
+    jackpot.amount = jackpot.seed;
+    jackpot.lastUpdated = now;
+    await jackpot.save();
+
+    // Remove all active candidates
+    await JackpotCandidate.deleteMany({ expiryDate: { $gt: now } });
+
+    console.log(
+      `[explodeJackpot] Awarded ${prize} to ${selectedCandidate.identifier}`
+    );
+
+    // Response for frontend
+    res.json({
+      message: "Jackpot exploded successfully",
+      winnerUserId: selectedCandidate.userId || null,
+      winnerName,
+      winnerEmail,
+      prize,
+      remainingJackpot: jackpot.amount,
+    });
+  } catch (error) {
+    console.error("[explodeJackpot] Error:", error);
+    await GameLog.create({
+      gameId: null,
+      action: "explodeJackpot",
+      status: "failed",
+      details: { error: error.message },
+    });
+    next(error);
+  }
+};
+
+/**
+ * Fetches all active jackpot candidates.
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const getJackpotCandidates = async (req, res, next) => {
+  try {
+    const now = new Date();
+    const candidates = await JackpotCandidate.find({
+      expiryDate: { $gt: now },
+    });
+    res.json({
+      message: "Jackpot candidates retrieved successfully",
+      data: candidates,
+    });
+  } catch (error) {
+    console.error("[getJackpotCandidates] Error:", error);
+    next(error);
+  }
+};
+
+/**
+ * Updates the jackpot amount or enabled status.
+ * @param {Object} req - Express request object with body { amount?: number, enabled?: boolean }
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const updateJackpot = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res
+        .status(400)
+        .json({ message: "Validation failed", errors: errors.array() });
+    }
+
+    const jackpot = await Jackpot.findOne();
+    if (!jackpot) {
+      return res.status(404).json({ message: "Jackpot not found" });
+    }
+
+    const { amount, enabled } = req.body;
+    let updated = false;
+
+    if (amount !== undefined) {
+      if (typeof amount !== "number" || amount < 0) {
+        return res.status(400).json({ message: "Invalid amount" });
+      }
+      const change = amount - jackpot.amount;
+      jackpot.amount = amount;
+      updated = true;
+      await JackpotLog.create({
+        amount: change,
+        reason: `Jackpot amount updated by moderator to ${amount}`,
+        gameId: null,
+      });
+    }
+
+    if (enabled !== undefined) {
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ message: "Invalid enabled value" });
+      }
+      jackpot.enabled = enabled;
+      updated = true;
+    }
+
+    if (!updated) {
+      return res.status(400).json({ message: "No fields to update" });
+    }
+
+    jackpot.lastUpdated = new Date();
+    await jackpot.save();
+
+    res.json({
+      message: "Jackpot updated successfully",
+      data: jackpot,
+    });
+  } catch (error) {
+    console.error("[updateJackpot] Error:", error);
     next(error);
   }
 };

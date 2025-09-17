@@ -18,7 +18,11 @@ import {
   createSequentialGames,
   getNextPendingGame,
   getReportData,
-  selectJackpotWinner, // Added import
+  selectJackpotWinner,
+  addJackpotCandidate,
+  explodeJackpot,
+  getJackpotCandidates,
+  updateJackpot, // Added import for new function
 } from "../controllers/gameController.js";
 import { verifyToken } from "../middlewares/auth.js";
 import { validate } from "../middlewares/validate.js";
@@ -27,10 +31,16 @@ const router = express.Router();
 
 // ----------------- Game Routes -----------------
 
-// Static routes (specific paths) should be first
+// Specific jackpot routes first to avoid conflicting with /:id
+router.get("/jackpot", verifyToken, getJackpot);
+router.patch("/jackpot", verifyToken, updateJackpot); // Added route for updating jackpot (amount or enabled)
+router.post("/jackpot/candidates", verifyToken, validate, addJackpotCandidate);
+router.post("/jackpot/explode", verifyToken, validate, explodeJackpot);
+router.get("/jackpot/candidates", verifyToken, getJackpotCandidates);
+
+// Other static routes
 router.get("/report", verifyToken, getReportData);
 router.get("/cards", verifyToken, getAllCards);
-router.get("/jackpot", verifyToken, getJackpot);
 router.get("/", verifyToken, getAllGames);
 router.get("/next-pending", verifyToken, getNextPendingGame);
 router.post("/reset-game-counter", verifyToken, resetGameCounter);
@@ -57,7 +67,7 @@ router.post("/", verifyToken, validate, (req, res, next) => {
   createGame(req, res, next);
 });
 
-// Dynamic routes (with :id) must come after static routes
+// Specific game ID routes (after specific static routes like /jackpot)
 router.get("/:id", verifyToken, (req, res, next) => {
   console.log("Hit /api/games/:id route with id:", req.params.id);
   getGame(req, res, next);
@@ -68,7 +78,7 @@ router.post("/:id/select-winner", verifyToken, validate, selectWinner);
 router.post("/:id/finish", verifyToken, validate, finishGame);
 router.post("/:id/start", verifyToken, startGame);
 router.post("/:id/pause", verifyToken, pauseGame);
-router.post("/:id/select-jackpot-winner", verifyToken, selectJackpotWinner); // Added route
+router.post("/:id/select-jackpot-winner", verifyToken, selectJackpotWinner);
 router.patch("/:id", verifyToken, validate, updateGame);
 
 export default router;

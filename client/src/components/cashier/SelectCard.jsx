@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import gameService from "../../services/game";
+import moderatorService from "../../services/moderator"; // Added import for jackpot update
 
 const SelectCard = () => {
   const navigate = useNavigate();
@@ -134,7 +135,7 @@ const SelectCard = () => {
 
     // Total pot from all bets
     const totalPot = bet * selectedCount;
-    // Jackpot is one card's bet amount if any cards are selected
+    // Jackpot is one card's bet amount if any cards are selected (matches HTML concept)
     const jackpotAmount = selectedCount > 0 ? bet : 0;
     // Remaining amount after deducting jackpot
     const remainingAmount = totalPot - jackpotAmount;
@@ -222,7 +223,7 @@ const SelectCard = () => {
         houseFeePercentage: parseInt(housePercentage),
         pattern,
         selectedCards: selectedCards.map((id) => ({ id: Number(id) })),
-        jackpotContribution: parseFloat(profitData.jackpotAmount),
+        jackpotContribution: parseFloat(profitData.jackpotAmount), // e.g., 10
       };
 
       console.log(
@@ -232,6 +233,15 @@ const SelectCard = () => {
 
       const response = await gameService.createGame(payload);
       console.log("Game created response:", JSON.stringify(response, null, 2));
+
+      // Update accumulated jackpot (matches HTML concept: fetch current, add contribution, update)
+      const jackpotContribution = parseFloat(profitData.jackpotAmount);
+      if (jackpotContribution > 0) {
+        const currentJackpot = await moderatorService.getJackpot(); // Fetch current
+        const newAmount = (currentJackpot.amount || 0) + jackpotContribution; // Accumulate
+        await moderatorService.updateJackpot(newAmount);
+        console.log(`Jackpot updated to ${newAmount}`);
+      }
 
       // Access _id directly from response (since gameService.createGame returns savedGame)
       const gameId = response._id;
@@ -487,7 +497,8 @@ const SelectCard = () => {
                   <div className="font-bold text-right">
                     {profitData.prizePool}
                   </div>
-                  <div>Jackpot Amount:</div>
+                  <div>Jackpot Contribution:</div>{" "}
+                  {/* Updated label to "Contribution" for clarity */}
                   <div className="font-bold text-right">
                     {profitData.jackpotAmount}
                   </div>

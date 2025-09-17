@@ -5,7 +5,7 @@ const gameLogSchema = new mongoose.Schema(
     gameId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Game",
-      required: true,
+      required: false,
     },
     action: { type: String, required: true }, // e.g., "finishGame"
     status: { type: String }, // e.g., "success", "failed"
