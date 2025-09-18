@@ -1,27 +1,32 @@
 import mongoose from "mongoose";
 
 const gameSchema = new mongoose.Schema({
-  gameNumber: { type: Number, required: true, unique: true },
+  gameNumber: { type: Number, required: true }, // Removed unique constraint
+  cashierId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true, // Associate game with cashier
+  },
   betAmount: { type: Number, required: true },
   houseFeePercentage: { type: Number, required: true },
   houseFee: { type: Number, default: 0 },
   selectedCards: [
     {
       id: { type: Number, required: true },
-      numbers: [[{ type: mongoose.Schema.Types.Mixed }]], // 5x5 grid of numbers or "free"
+      numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
     },
   ],
   pattern: {
     type: String,
     required: true,
     enum: [
-      "four_corners_center", // Pattern 1
-      "cross", // Pattern 2
-      "main_diagonal", // Pattern 3
-      "other_diagonal", // Pattern 4
-      "horizontal_line", // Pattern 5
-      "vertical_line", // Pattern 6
-      "all", // Pattern 7
+      "four_corners_center",
+      "cross",
+      "main_diagonal",
+      "other_diagonal",
+      "horizontal_line",
+      "vertical_line",
+      "all",
     ],
   },
   prizePool: { type: Number, required: true, default: 0 },
@@ -31,7 +36,7 @@ const gameSchema = new mongoose.Schema({
     enum: ["pending", "active", "paused", "completed"],
     default: "pending",
   },
-  calledNumbers: [{ type: Number }], // List of called bingo numbers
+  calledNumbers: [{ type: Number }],
   calledNumbersLog: [
     {
       number: { type: Number, required: true },
@@ -56,5 +61,8 @@ gameSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// Ensure unique gameNumber per cashier
+gameSchema.index({ cashierId: 1, gameNumber: 1 }, { unique: true });
 
 export default mongoose.model("Game", gameSchema);

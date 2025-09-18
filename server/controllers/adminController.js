@@ -1,57 +1,135 @@
 import User from "../models/User.js";
 import bcrypt from "bcrypt";
+import mongoose from "mongoose";
 
 export const addUser = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { name, email, password, role } = req.body;
+    const { cashier, moderator } = req.body;
 
-    if (!name || !email || !password || !role) {
-      return res
-        .status(400)
-        .json({ message: "Name, email, password, and role are required" });
+    // Validate input for both cashier and moderator
+    if (
+      !cashier ||
+      !cashier.name ||
+      !cashier.email ||
+      !cashier.password ||
+      !moderator ||
+      !moderator.name ||
+      !moderator.email ||
+      !moderator.password
+    ) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        message:
+          "Name, email, and password are required for both cashier and moderator",
+      });
     }
 
-    if (!["cashier", "moderator"].includes(role)) {
-      return res.status(400).json({ message: "Please choose a valid role" });
+    // Validate roles
+    if (cashier.role !== "cashier" || moderator.role !== "moderator") {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: "Invalid roles specified" });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    // Check for existing emails
+    const existingCashier = await User.findOne({
+      email: cashier.email,
+    }).session(session);
+    const existingModerator = await User.findOne({
+      email: moderator.email,
+    }).session(session);
+    if (existingCashier || existingModerator) {
+      await session.abortTransaction();
+      session.endSession();
       return res
         .status(400)
         .json({ message: "Email already exists in the database" });
     }
 
+    // Hash passwords
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedCashierPassword = await bcrypt.hash(cashier.password, salt);
+    const hashedModeratorPassword = await bcrypt.hash(moderator.password, salt);
 
-    const newUser = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role,
-    });
+    // Create users
+    const newCashier = await User.create(
+      [
+        {
+          name: cashier.name,
+          email: cashier.email,
+          password: hashedCashierPassword,
+          role: "cashier",
+        },
+      ],
+      { session }
+    );
 
-    const { password: _, ...userWithoutPassword } = newUser.toObject();
+    const newModerator = await User.create(
+      [
+        {
+          name: moderator.name,
+          email: moderator.email,
+          password: hashedModeratorPassword,
+          role: "moderator",
+        },
+      ],
+      { session }
+    );
+
+    // Exclude passwords from response
+    const { password: cashierPassword, ...cashierWithoutPassword } =
+      newCashier[0].toObject();
+    const { password: moderatorPassword, ...moderatorWithoutPassword } =
+      newModerator[0].toObject();
+
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
 
     return res.status(201).json({
       success: true,
-      message: "User registered successfully",
-      user: userWithoutPassword,
+      message: "Cashier and Moderator registered successfully",
+      users: [cashierWithoutPassword, moderatorWithoutPassword],
     });
   } catch (error) {
-    console.error("Error adding user:", error);
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Error adding users:", error);
     next(error);
   }
 };
 
-//  Get all users (only cashier and moderator)
+// Get all users (only cashier and moderator)
 export const getUsers = async (req, res, next) => {
   try {
-    const users = await User.find(
-      { role: { $in: ["cashier", "moderator"] } }, // filter only cashier & moderator
-      "-password" // exclude password field
-    ).sort({ createdAt: -1 }); // newest first
+    const requestingUser = req.user; // Assuming req.user is the logged-in user
+    let users;
+
+    if (requestingUser.role === "moderator") {
+      // Find the paired cashier (assuming created at the same time)
+      const pairedCashier = await User.findOne({
+        role: "cashier",
+        createdAt: {
+          $gte: requestingUser.createdAt,
+          $lte: requestingUser.createdAt,
+        },
+      });
+
+      if (!pairedCashier) {
+        return res.status(404).json({ message: "No paired cashier found" });
+      }
+
+      users = [pairedCashier, requestingUser];
+    } else {
+      users = await User.find(
+        { role: { $in: ["cashier", "moderator"] } },
+        "-password"
+      ).sort({ createdAt: -1 });
+    }
 
     return res.status(200).json({
       success: true,
@@ -64,28 +142,64 @@ export const getUsers = async (req, res, next) => {
   }
 };
 
-// Delete user by ID
 export const deleteUser = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { id } = req.params;
 
-    const user = await User.findById(id);
+    const user = await User.findById(id).session(session);
     if (!user) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ message: "User not found" });
     }
 
-    // prevent deleting admin
     if (user.role === "admin") {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(403).json({ message: "Cannot delete an admin" });
     }
 
-    await User.findByIdAndDelete(id);
+    // Find the paired user
+    const pairedRole = user.role === "cashier" ? "moderator" : "cashier";
+    const pairedUser = await User.findOne({
+      role: pairedRole,
+      createdAt: { $gte: user.createdAt, $lte: user.createdAt },
+    }).session(session);
+
+    // Delete associated games if user is cashier
+    if (user.role === "cashier") {
+      await Game.deleteMany({ cashierId: user._id }).session(session);
+      await GameLog.deleteMany({
+        gameId: {
+          $in: await Game.find({ cashierId: user._id }).distinct("_id"),
+        },
+      }).session(session);
+      await JackpotCandidate.deleteMany({
+        gameId: {
+          $in: await Game.find({ cashierId: user._id }).distinct("_id"),
+        },
+      }).session(session);
+    }
+
+    if (pairedUser) {
+      await User.findByIdAndDelete(pairedUser._id).session(session);
+    }
+
+    await User.findByIdAndDelete(id).session(session);
+
+    await session.commitTransaction();
+    session.endSession();
 
     return res.status(200).json({
       success: true,
-      message: "User deleted successfully",
+      message: "User and paired user deleted successfully",
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Error deleting user:", error);
     next(error);
   }

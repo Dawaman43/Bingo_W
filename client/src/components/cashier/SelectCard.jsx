@@ -2,8 +2,11 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import gameService from "../../services/game";
 import moderatorService from "../../services/moderator"; // Added import for jackpot update
+import { useAuth } from "../../context/AuthContext";
 
 const SelectCard = () => {
+  const { user } = useAuth();
+
   const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [selectedCards, setSelectedCards] = useState([]);
@@ -215,7 +218,11 @@ const SelectCard = () => {
       showAlert(validationError, "error");
       return;
     }
+    const cashierId = user.id;
 
+    if (!cashierId) {
+      throw new Error("Missing cashierId – please log in again.");
+    }
     setLoading(true);
     try {
       const payload = {
@@ -223,7 +230,7 @@ const SelectCard = () => {
         houseFeePercentage: parseInt(housePercentage),
         pattern,
         selectedCards: selectedCards.map((id) => ({ id: Number(id) })),
-        jackpotContribution: parseFloat(profitData.jackpotAmount), // e.g., 10
+        jackpotContribution: parseFloat(profitData.jackpotAmount),
       };
 
       console.log(
@@ -237,9 +244,11 @@ const SelectCard = () => {
       // Update accumulated jackpot (matches HTML concept: fetch current, add contribution, update)
       const jackpotContribution = parseFloat(profitData.jackpotAmount);
       if (jackpotContribution > 0) {
-        const currentJackpot = await moderatorService.getJackpot(); // Fetch current
-        const newAmount = (currentJackpot.amount || 0) + jackpotContribution; // Accumulate
-        await moderatorService.updateJackpot(newAmount);
+        const currentJackpot = await moderatorService.getJackpot();
+        const newAmount = (currentJackpot.amount || 0) + jackpotContribution;
+
+        // Pass cashierId explicitly
+        await moderatorService.updateJackpot(newAmount, cashierId);
         console.log(`Jackpot updated to ${newAmount}`);
       }
 

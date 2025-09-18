@@ -275,7 +275,30 @@ const getNumbersForPattern = (
 
   return { numbers: [...new Set(numbers)], selectedIndices }; // Unique numbers
 };
+/**
+ * Get the next sequence number for a specific counter and cashier.
+ * Ensures each cashier has their own independent sequence.
+ *
+ * @param {String} counterType - e.g., "gameNumber" or "cardId"
+ * @param {mongoose.Types.ObjectId} cashierId - The cashier's _id
+ * @param {mongoose.ClientSession} session - Optional mongoose session for transactions
+ * @returns {Number} - The next sequence number
+ */
+export const getNextSequence = async (
+  counterType,
+  cashierId,
+  session = null
+) => {
+  const counterId = `${counterType}_${cashierId.toString()}`; // unique per cashier
 
+  const counter = await Counter.findOneAndUpdate(
+    { _id: counterId, cashierId },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true, session }
+  );
+
+  return counter.seq;
+};
 /**
  * Gets the next game number atomically, ensuring no gaps by checking existing games.
  * @param {number} [startFromGameNumber] - Optional starting game number
@@ -370,238 +393,212 @@ const getRandomNumber = (calledNumbers, exclude = []) => {
 };
 
 /**
- * Creates a new bingo game.
+ * Creates a new game with the provided settings.
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @param {Function} next - Express next middleware function
  * @returns {Promise<void>}
  */
 export const createGame = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    console.log("[createGame] Creating new game with request body:", req.body);
+    const {
+      betAmount,
+      houseFeePercentage,
+      pattern,
+      selectedCards,
+      jackpotContribution,
+    } = req.body;
+    const cashierId = req.user?.id;
+
+    if (!cashierId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res
+        .status(401)
+        .json({ message: "Missing cashierId – please log in again." });
+    }
+
+    console.log(`[createGame] Logged in cashierId: ${cashierId}`);
+    console.log("[createGame] Payload:", req.body);
+
+    // Validate request
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      console.log("[createGame] Validation errors:", errors.array());
+      await session.abortTransaction();
+      session.endSession();
       return res
         .status(400)
         .json({ message: "Validation failed", errors: errors.array() });
     }
 
-    const {
-      selectedCards = [],
-      pattern = "horizontal_line",
-      betAmount = 10,
-      houseFeePercentage = 15,
-      moderatorWinnerCardId = null,
-      jackpotEnabled = true, // Default to true if undefined
-      jackpotContribution = betAmount, // Default to betAmount if not provided
-    } = req.body;
+    // 🔑 Get or initialize cashier-specific jackpot
+    let jackpot = await Jackpot.findOne({ cashierId }).session(session);
 
-    const validPatterns = [
-      "four_corners_center",
-      "cross",
-      "main_diagonal",
-      "other_diagonal",
-      "horizontal_line",
-      "vertical_line",
-      "all",
-    ];
-
-    if (!validPatterns.includes(pattern)) {
-      console.log(`[createGame] Invalid pattern: ${pattern}`);
-      return res.status(400).json({
-        message: "Invalid pattern type",
-        errorCode: "INVALID_PATTERN",
-      });
-    }
-
-    // Validate selectedCards
-    if (!Array.isArray(selectedCards) || selectedCards.length === 0) {
-      console.log("[createGame] Invalid card selection");
-      return res.status(400).json({
-        message: "Game must have at least one card",
-        errorCode: "INVALID_CARDS",
-      });
-    }
-
-    // Validate card data from database
-    const foundCardIds = selectedCards.map((card) => card.id);
-    const cardsFromDB = await Card.find({
-      card_number: { $in: foundCardIds },
-    }).lean();
-    if (cardsFromDB.length !== foundCardIds.length) {
+    if (!jackpot && jackpotContribution > 0) {
       console.log(
-        "[createGame] Some cards not found in database:",
-        foundCardIds
+        "[createGame] No jackpot found, creating new one for cashier."
       );
-      return res.status(400).json({
-        message: "Some cards not found in database",
-        errorCode: "CARDS_NOT_FOUND",
+      jackpot = new Jackpot({
+        cashierId,
+        amount: jackpotContribution,
+        seed: jackpotContribution,
+        enabled: true,
+        lastUpdated: new Date(),
       });
+      await jackpot.save({ session });
+
+      await JackpotLog.create(
+        [
+          {
+            cashierId,
+            amount: jackpotContribution,
+            reason: "Initial jackpot created with user contribution",
+            gameId: null,
+          },
+        ],
+        { session }
+      );
+    } else if (jackpot && jackpotContribution > 0 && jackpot.enabled) {
+      jackpot.amount += jackpotContribution;
+      jackpot.lastUpdated = new Date();
+      await jackpot.save({ session });
+
+      await JackpotLog.create(
+        [
+          {
+            cashierId,
+            amount: jackpotContribution,
+            reason: `Jackpot incremented by ${jackpotContribution}`,
+            gameId: null,
+          },
+        ],
+        { session }
+      );
     }
 
-    // Validate numbers field for each card
-    for (const card of cardsFromDB) {
-      if (
-        !Array.isArray(card.numbers) ||
-        card.numbers.length !== 5 ||
-        card.numbers.some((row) => !Array.isArray(row) || row.length !== 5)
-      ) {
-        console.log(
-          `[createGame] Invalid numbers for card ${card.card_number}`
-        );
-        return res.status(400).json({
-          message: `Invalid numbers for card ${card.card_number}`,
-          errorCode: "INVALID_CARD_NUMBERS",
-        });
-      }
-    }
+    // Get next game number for this cashier
+    const gameNumber = await getNextSequence("gameNumber", cashierId, session);
+    console.log(`[createGame] Next gameNumber for cashier: ${gameNumber}`);
 
-    // Map cards to include numbers
-    const validatedCards = cardsFromDB.map((card) => ({
-      id: card.card_number,
-      numbers: card.numbers,
+    const houseFee = betAmount * (houseFeePercentage / 100);
+    const prizePool = betAmount - houseFee;
+    const potentialJackpot =
+      jackpot && jackpot.enabled ? jackpotContribution : 0;
+
+    const formattedCards = selectedCards.map((c) => ({
+      id: c.id,
+      numbers: [[]], // placeholder until real card numbers
     }));
 
-    const assignedGameNumber = await getNextGameNumber();
-
-    // Initialize contribution
-    const contribution = parseFloat(jackpotContribution) || betAmount; // Ensure defined
-    let potentialJackpot = 0;
-
-    // Update Jackpot if enabled
-    if (jackpotEnabled) {
-      const totalContribution = contribution * selectedCards.length; // Per card
-      const jackpot = await Jackpot.findOneAndUpdate(
-        {}, // Single global jackpot
+    const game = await Game.create(
+      [
         {
-          $inc: { amount: totalContribution },
-          lastUpdated: new Date(),
+          gameNumber,
+          cashierId,
+          betAmount,
+          houseFeePercentage,
+          houseFee,
+          selectedCards: formattedCards,
+          pattern,
+          prizePool,
+          potentialJackpot,
+          jackpotEnabled: jackpot ? jackpot.enabled : true,
+          status: "pending",
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      potentialJackpot = jackpot.amount;
-      await logJackpotUpdate(
-        totalContribution,
-        `Added from game #${assignedGameNumber} with ${selectedCards.length} cards`,
-        null
-      );
-      console.log(
-        `[createGame] Jackpot updated: +${totalContribution}, new amount: ${jackpot.amount}`
-      );
-    }
-
-    // Rest of the game creation logic
-    let winnerCardId = moderatorWinnerCardId
-      ? Number(moderatorWinnerCardId)
-      : null;
-    let finalJackpotEnabled = jackpotEnabled;
-
-    if (!winnerCardId) {
-      const futureWinning = await Counter.findOne({
-        _id: `futureWinning_${assignedGameNumber}`,
-      }).lean();
-      if (futureWinning && futureWinning.cardId !== undefined) {
-        const parsedWinnerCardId = Number(futureWinning.cardId);
-        if (foundCardIds.includes(parsedWinnerCardId)) {
-          winnerCardId = parsedWinnerCardId;
-          finalJackpotEnabled =
-            futureWinning.jackpotEnabled !== undefined
-              ? futureWinning.jackpotEnabled
-              : jackpotEnabled;
-          console.log(
-            `[createGame] Assigned predefined winner for game #${assignedGameNumber}: card ${winnerCardId}, jackpotEnabled: ${finalJackpotEnabled}`
-          );
-        }
-      }
-    }
-
-    let selectedWinnerRowIndices = [];
-    let forcedPattern = null;
-
-    if (winnerCardId) {
-      const winnerCard = validatedCards.find(
-        (card) => card.id === winnerCardId
-      );
-      if (winnerCard) {
-        let usePattern = pattern;
-        if (pattern === "all") {
-          const patternChoices = validPatterns.filter((p) => p !== "all");
-          usePattern =
-            patternChoices[Math.floor(Math.random() * patternChoices.length)];
-          forcedPattern = usePattern;
-          console.log(
-            `[createGame] Selected random pattern for "all": ${usePattern}`
-          );
-        }
-        const { selectedIndices } = getNumbersForPattern(
-          winnerCard.numbers,
-          usePattern,
-          [],
-          true
-        );
-        selectedWinnerRowIndices = selectedIndices;
-      }
-    }
-
-    // Calculate houseFee
-    const houseFee =
-      betAmount * (houseFeePercentage / 100) * selectedCards.length;
-
-    const game = new Game({
-      gameNumber: assignedGameNumber,
-      betAmount,
-      houseFeePercentage,
-      houseFee,
-      selectedCards: validatedCards,
-      pattern: forcedPattern || pattern,
-      prizePool: betAmount * selectedCards.length - houseFee,
-      potentialJackpot,
-      status: "pending",
-      calledNumbers: [],
-      calledNumbersLog: [],
-      moderatorWinnerCardId: winnerCardId,
-      selectedWinnerRowIndices,
-      jackpotEnabled: finalJackpotEnabled,
-      winner: null,
-    });
-
-    await game.save();
-    console.log(
-      `[createGame] Game created: ID=${game._id}, Number=${game.gameNumber}, Pattern=${game.pattern}, WinnerCardId=${game.moderatorWinnerCardId}, JackpotEnabled=${game.jackpotEnabled}`
+      ],
+      { session }
     );
 
-    await GameLog.create({
-      gameId: game._id,
-      action: "createGame",
-      status: "success",
-      details: {
-        gameNumber: game.gameNumber,
-        pattern: game.pattern,
-        selectedCardIds: validatedCards.map((card) => card.id),
-        jackpotEnabled: game.jackpotEnabled,
-        jackpotContribution: jackpotEnabled
-          ? contribution * selectedCards.length
-          : 0, // Handle undefined case
-      },
-    });
+    await GameLog.create(
+      [
+        {
+          gameId: game[0]._id,
+          action: "createGame",
+          status: "success",
+          details: {
+            cashierId,
+            gameNumber,
+            jackpotEnabled: jackpot ? jackpot.enabled : true,
+          },
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log("[createGame] Game created successfully:", game[0]._id);
 
     res.status(201).json({
       message: "Game created successfully",
-      data: game,
+      game: game[0],
     });
   } catch (error) {
-    console.error("[createGame] Error in createGame:", error);
-    await GameLog.create({
-      gameId: null,
-      action: "createGame",
-      status: "failed",
-      details: { error: error.message || "Internal server error" },
-    });
+    await session.abortTransaction();
+    session.endSession();
+    console.error("[createGame] Error creating game:", error);
+
+    if (error.code === 11000 && error.keyPattern?.gameNumber) {
+      return res.status(409).json({
+        message: "Duplicate gameNumber detected for this cashier. Try again.",
+      });
+    }
+
     next(error);
   }
 };
 
+/**
+ * Retrieves a single game by ID.
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>}
+ */
+export const getGameById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      console.log("[getGameById] Invalid game ID format:", id);
+      return res.status(400).json({
+        message: "Invalid game ID format",
+        errorCode: "INVALID_GAME_ID",
+      });
+    }
+
+    const cashierId = req.user?.id; // Use req.user.id to match token payload
+    if (!cashierId) {
+      console.log("[getGameById] Cashier ID not available in token");
+      return res
+        .status(401)
+        .json({ message: "Unauthorized. Cashier ID missing." });
+    }
+
+    const game = await Game.findOne({ _id: id, cashierId }).lean();
+    if (!game) {
+      console.log("[getGameById] Game not found or unauthorized:", id);
+      return res.status(404).json({
+        message: "Game not found or you are not authorized to access it",
+        errorCode: "GAME_NOT_FOUND",
+      });
+    }
+
+    console.log(
+      `[getGameById] Game retrieved: ID=${id}, Number=${game.gameNumber}`
+    );
+    res.json({
+      message: "Game retrieved successfully",
+      game,
+    });
+  } catch (error) {
+    console.error("[getGameById] Error:", error);
+    next(error);
+  }
+};
 /**
  * Calls a single number for a bingo game.
  * Forced numbers are called in a natural mixed sequence with random numbers.
@@ -988,6 +985,22 @@ export const resetGameCounter = async (req, res, next) => {
     next(error);
   }
 };
+export const getGameLogs = async (req, res, next) => {
+  try {
+    const cashierId = req.user._id; // Assuming req.user is the logged-in cashier
+    const logs = await GameLog.find({
+      gameId: { $in: await Game.find({ cashierId }).distinct("_id") },
+    }).sort({ timestamp: -1 });
+
+    res.json({
+      message: "Game logs retrieved successfully",
+      data: logs,
+    });
+  } catch (error) {
+    console.error("[getGameLogs] Error:", error);
+    next(error);
+  }
+};
 
 /**
  * Retrieves a game by ID.
@@ -996,27 +1009,45 @@ export const resetGameCounter = async (req, res, next) => {
  * @param {Function} next - Express next middleware function
  * @returns {Promise<void>}
  */
-export const getGame = async (req, res, next) => {
+export const getGames = async (req, res, next) => {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) {
-      console.log("[getGame] Invalid game ID format:", req.params.id);
-      return res.status(400).json({ message: "Invalid game ID format" });
+    const cashierId = req.user.id;
+    const { id } = req.params; // Get the game ID from URL parameters
+
+    // If an ID is provided in the URL, return just that single game
+    if (id) {
+      // Validate ID format
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          message: "Invalid game ID format",
+        });
+      }
+
+      const game = await Game.findOne({ _id: id, cashierId });
+
+      if (!game) {
+        return res.status(404).json({
+          message: "Game not found",
+        });
+      }
+
+      return res.json({
+        message: "Game retrieved successfully",
+        game,
+      });
     }
-    const game = await Game.findById(req.params.id);
-    if (!game) {
-      console.log("[getGame] Game not found for ID:", req.params.id);
-      return res.status(404).json({ message: "Game not found" });
-    }
-    console.log(
-      "[getGame] Game retrieved: ID=",
-      game._id,
-      "Number=",
-      game.gameNumber
-    );
-    res.json({ message: "Game retrieved successfully", data: game });
+
+    // If no ID provided, return all games for the cashier
+    const games = await Game.find({ cashierId }).sort({ createdAt: -1 });
+
+    res.json({
+      message: "Games retrieved successfully",
+      count: games.length,
+      games,
+    });
   } catch (error) {
-    console.error("[getGame] Error in getGame:", error);
-    res.status(500).json({ message: "Internal server error" });
+    console.error("[getGames] Error:", error);
+    next(error);
   }
 };
 
@@ -1689,16 +1720,48 @@ export const updateGame = async (req, res, next) => {
  */
 export const getJackpot = async (req, res, next) => {
   try {
-    const jackpot = await Jackpot.findOne();
-    if (!jackpot) {
-      console.log("[getJackpot] Jackpot not found");
-      return res.status(404).json({ message: "Jackpot not found" });
+    const cashierId = req.user?.id;
+    if (!cashierId) {
+      console.log("[getJackpot] Cashier ID not available in token");
+      return res
+        .status(401)
+        .json({ message: "Unauthorized. Cashier ID missing." });
     }
-    console.log("[getJackpot] Jackpot retrieved:", jackpot.amount);
-    res.json({ message: "Jackpot retrieved successfully", data: jackpot });
+
+    const jackpot = await Jackpot.findOne({ cashierId });
+
+    const activeGames = await Game.countDocuments({
+      status: { $in: ["active", "pending"] },
+      cashierId,
+    });
+
+    const amount = jackpot ? (activeGames === 0 ? 0 : jackpot.amount) : 0;
+    const enabled = jackpot ? jackpot.enabled : true;
+
+    console.log(
+      "[getJackpot] Cashier ID:",
+      cashierId,
+      "Active games:",
+      activeGames,
+      "Jackpot amount returned:",
+      amount,
+      "Enabled:",
+      enabled
+    );
+
+    res.json({
+      message: "Jackpot retrieved successfully",
+      data: {
+        amount,
+        enabled,
+        lastUpdated: jackpot ? jackpot.lastUpdated : new Date(),
+      },
+    });
   } catch (error) {
     console.error("[getJackpot] Error in getJackpot:", error);
-    next(error);
+    res
+      .status(500)
+      .json({ message: "Internal server error", error: error.message });
   }
 };
 
@@ -2415,27 +2478,25 @@ export const addJackpotCandidate = async (req, res, next) => {
 
 export const explodeJackpot = async (req, res, next) => {
   try {
-    const jackpot = await Jackpot.findOne();
-    if (!jackpot) {
-      return res.status(404).json({ message: "Jackpot not found." });
-    }
-
-    if (jackpot.amount <= jackpot.seed) {
-      return res
-        .status(400)
-        .json({ message: "Jackpot amount is too low to explode." });
-    }
-
+    const cashierId = req.user._id;
     const now = new Date();
+
+    const jackpot = await Jackpot.findOne();
+    if (!jackpot || !jackpot.enabled) {
+      return res.status(400).json({ message: "Jackpot is not enabled." });
+    }
+
+    // Filter candidates by games created by this cashier
     const activeCandidates = await JackpotCandidate.find({
       expiryDate: { $gt: now },
+      gameId: { $in: await Game.find({ cashierId }).distinct("_id") },
     });
 
     if (!activeCandidates.length) {
       return res.status(400).json({ message: "No active jackpot candidates." });
     }
 
-    // Count wins for candidates with userId; for free-form, assume 0
+    // Rest of the logic remains the same
     const candidatesWithWins = await Promise.all(
       activeCandidates.map(async (candidate) => {
         let winCount = 0;
@@ -2446,19 +2507,16 @@ export const explodeJackpot = async (req, res, next) => {
       })
     );
 
-    // Sort ascending: most losing first
     candidatesWithWins.sort((a, b) => a.winCount - b.winCount);
-
     const minWinCount = candidatesWithWins[0].winCount;
     const mostLosingCandidates = candidatesWithWins.filter(
       (c) => c.winCount === minWinCount
     );
 
-    // Pick random among most losing
     const randomIndex = Math.floor(Math.random() * mostLosingCandidates.length);
     const selectedCandidate = mostLosingCandidates[randomIndex].candidate;
 
-    const prize = jackpot.amount; // full jackpot
+    const prize = jackpot.amount;
 
     let winnerName = selectedCandidate.identifier;
     let winnerEmail = null;
@@ -2470,36 +2528,31 @@ export const explodeJackpot = async (req, res, next) => {
       }
     }
 
-    // Save result
     await Result.create({
       gameId: null,
       winnerCardId: null,
-      userId: selectedCandidate.userId || null, // optional
-      identifier: selectedCandidate.identifier, // save name/phone/id
+      userId: selectedCandidate.userId || null,
+      identifier: selectedCandidate.identifier,
       prize,
       isJackpot: true,
     });
 
-    // Log the explosion
     await JackpotLog.create({
       amount: -prize,
       reason: `Jackpot exploded and awarded to ${selectedCandidate.identifier}`,
       gameId: null,
     });
 
-    // Reset jackpot
     jackpot.amount = jackpot.seed;
     jackpot.lastUpdated = now;
     await jackpot.save();
 
-    // Remove all active candidates
     await JackpotCandidate.deleteMany({ expiryDate: { $gt: now } });
 
     console.log(
       `[explodeJackpot] Awarded ${prize} to ${selectedCandidate.identifier}`
     );
 
-    // Response for frontend
     res.json({
       message: "Jackpot exploded successfully",
       winnerUserId: selectedCandidate.userId || null,
@@ -2517,6 +2570,141 @@ export const explodeJackpot = async (req, res, next) => {
       details: { error: error.message },
     });
     next(error);
+  }
+};
+
+// Generate cashier-specific report
+export const getCashierReport = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res
+        .status(400)
+        .json({ message: "Validation failed", errors: errors.array() });
+    }
+
+    console.log(
+      "[getCashierReport] Request reached controller. req.user:",
+      req.user ? { id: req.user.id, role: req.user.role } : "undefined"
+    );
+
+    // Check if user is authenticated
+    if (!req.user || !req.user.id) {
+      // Note: payload uses 'id', not '_id'
+      console.error(
+        "[getCashierReport] No authenticated user found. req.user:",
+        req.user
+      );
+      return res.status(401).json({
+        message: "Unauthorized: No authenticated user",
+        errorCode: "UNAUTHENTICATED",
+      });
+    }
+
+    // Use cashierId from query parameter if provided, otherwise use req.user.id
+    let cashierId = req.query.cashierId || req.user.id; // Changed from req.user._id to req.user.id
+    const role = req.user.role || "cashier";
+
+    console.log(
+      "[getCashierReport] Using cashierId:",
+      cashierId,
+      "User role:",
+      role
+    );
+
+    // Validate cashierId
+    if (!mongoose.isValidObjectId(cashierId)) {
+      console.error("[getCashierReport] Invalid cashier ID format:", cashierId);
+      return res.status(400).json({
+        message: "Invalid cashier ID format",
+        errorCode: "INVALID_CASHIER_ID",
+      });
+    }
+
+    // Restrict cashiers to their own reports
+    if (role === "cashier" && cashierId !== req.user.id) {
+      console.error(
+        "[getCashierReport] Cashier attempted to access another cashier's report:",
+        cashierId
+      );
+      return res.status(403).json({
+        message: "Cashiers can only view their own reports",
+        errorCode: "UNAUTHORIZED",
+      });
+    }
+
+    // For moderators, allow access to any cashier's report, but log if no cashierId is provided
+    if (role === "moderator" && !req.query.cashierId) {
+      console.warn(
+        "[getCashierReport] Moderator did not specify cashierId, using authenticated user ID:",
+        cashierId
+      );
+    }
+
+    // Verify cashier exists
+    const cashier = await User.findById(cashierId);
+    if (!cashier || (cashier.role !== "cashier" && role !== "moderator")) {
+      console.error(
+        "[getCashierReport] Cashier not found or invalid role:",
+        cashierId
+      );
+      return res
+        .status(404)
+        .json({ message: "Cashier not found", errorCode: "CASHIER_NOT_FOUND" });
+    }
+
+    // Get games for the cashier
+    const games = await Game.find({ cashierId }).sort({ gameNumber: 1 });
+
+    // Get counters for the cashier
+    const counters = await Counter.find({ cashierId });
+
+    // Get results for the cashier's games
+    const results = await Result.find({
+      gameId: { $in: games.map((g) => g._id) },
+    });
+
+    // Aggregate statistics (add more if needed for charts)
+    const totalGames = games.length;
+    const totalPrizePool = games.reduce(
+      (sum, g) => sum + (g.prizePool || 0),
+      0
+    );
+    const totalPrizesAwarded = results.reduce(
+      (sum, r) => sum + (r.prize || 0),
+      0
+    );
+    const totalHouseFee = games.reduce(
+      (sum, g) => sum + (parseFloat(g.houseFee) || 0),
+      0
+    );
+
+    console.log(
+      `[getCashierReport] Generated report for cashier ${cashierId}: ${totalGames} games`
+    );
+
+    res.json({
+      message: "Cashier report generated successfully",
+      cashierId,
+      totalGames,
+      totalPrizePool,
+      totalPrizesAwarded,
+      totalHouseFee, // Add for frontend calculations
+      games,
+      counters,
+      results,
+    });
+  } catch (error) {
+    console.error("[getCashierReport] Error:", error);
+    await GameLog.create({
+      gameId: null,
+      action: "getCashierReport",
+      status: "failed",
+      details: { error: error.message || "Internal server error" },
+    });
+    res
+      .status(500)
+      .json({ message: "Internal server error", errorCode: "SERVER_ERROR" });
   }
 };
 
@@ -2559,25 +2747,25 @@ export const updateJackpot = async (req, res, next) => {
         .json({ message: "Validation failed", errors: errors.array() });
     }
 
-    const jackpot = await Jackpot.findOne();
-    if (!jackpot) {
-      return res.status(404).json({ message: "Jackpot not found" });
+    const { amount, enabled, cashierId } = req.body;
+
+    if (!cashierId) {
+      return res.status(400).json({ message: "cashierId is required" });
     }
 
-    const { amount, enabled } = req.body;
-    let updated = false;
+    const update = { lastUpdated: new Date() };
+    const logs = [];
 
     if (amount !== undefined) {
       if (typeof amount !== "number" || amount < 0) {
         return res.status(400).json({ message: "Invalid amount" });
       }
-      const change = amount - jackpot.amount;
-      jackpot.amount = amount;
-      updated = true;
-      await JackpotLog.create({
-        amount: change,
-        reason: `Jackpot amount updated by moderator to ${amount}`,
+      update.$inc = { amount }; // increment instead of replacing
+      logs.push({
+        amount,
+        reason: `Jackpot incremented by ${amount}`,
         gameId: null,
+        cashierId,
       });
     }
 
@@ -2585,16 +2773,26 @@ export const updateJackpot = async (req, res, next) => {
       if (typeof enabled !== "boolean") {
         return res.status(400).json({ message: "Invalid enabled value" });
       }
-      jackpot.enabled = enabled;
-      updated = true;
+      update.enabled = enabled;
+      logs.push({
+        amount: 0,
+        reason: `Jackpot ${enabled ? "enabled" : "disabled"}`,
+        gameId: null,
+        cashierId,
+      });
     }
 
-    if (!updated) {
-      return res.status(400).json({ message: "No fields to update" });
-    }
+    // Use findOneAndUpdate with upsert to avoid duplicates
+    const jackpot = await Jackpot.findOneAndUpdate({ cashierId }, update, {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    });
 
-    jackpot.lastUpdated = new Date();
-    await jackpot.save();
+    // Create logs
+    for (const log of logs) {
+      await JackpotLog.create(log);
+    }
 
     res.json({
       message: "Jackpot updated successfully",

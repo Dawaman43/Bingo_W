@@ -19,7 +19,7 @@ export const validate = [
       "other_diagonal",
       "horizontal_line",
       "vertical_line",
-      "all"
+      "all",
     ])
     .withMessage("Invalid pattern"),
   body("selectedCards")
@@ -38,10 +38,7 @@ export const validate = [
     .optional()
     .isInt({ min: 1, max: 75 })
     .withMessage("Number must be between 1 and 75"),
-  body("cardId")
-    .optional()
-    .isInt()
-    .withMessage("Card ID must be an integer"),
+  body("cardId").optional().isInt().withMessage("Card ID must be an integer"),
   body("gameId")
     .optional()
     .isMongoId()
@@ -62,10 +59,7 @@ export const validate = [
     .trim()
     .notEmpty()
     .withMessage("Name is required"),
-  body("email")
-    .optional()
-    .isEmail()
-    .withMessage("Valid email is required"),
+  body("email").optional().isEmail().withMessage("Valid email is required"),
   body("password")
     .optional()
     .isString()
@@ -83,10 +77,7 @@ export const validate = [
     .trim()
     .notEmpty()
     .withMessage("Name is required"),
-  body("email")
-    .optional()
-    .isEmail()
-    .withMessage("Valid email is required"),
+  body("email").optional().isEmail().withMessage("Valid email is required"),
   body("password")
     .optional()
     .isString()

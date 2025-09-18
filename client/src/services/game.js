@@ -9,7 +9,7 @@ const gameService = {
       );
       const response = await API.post("/games", data);
       console.log("gameService.createGame response:", response.data);
-      return response.data.data;
+      return response.data.game;
     } catch (error) {
       console.error(
         "gameService.createGame error:",
@@ -28,7 +28,11 @@ const gameService = {
       if (!id) throw new Error("Game ID is required");
       console.log("gameService.getGame - Fetching game ID:", id);
       const response = await API.get(`/games/${id}`);
-      return response.data.data;
+      console.log("gameService.getGame response:", response.data);
+      if (!response.data.game) {
+        throw new Error("No game data returned");
+      }
+      return response.data.game;
     } catch (error) {
       console.error(
         "gameService.getGame error:",
@@ -46,7 +50,7 @@ const gameService = {
     try {
       console.log("gameService.getAllGames - Fetching all games");
       const response = await API.get("/games");
-      return response.data.data;
+      return response.data.games;
     } catch (error) {
       console.error(
         "gameService.getAllGames error:",
@@ -66,7 +70,7 @@ const gameService = {
         "gameService.getNextPendingGame - Fetching next pending game"
       );
       const response = await API.get("/games/next-pending");
-      return response.data.data;
+      return response.data.game;
     } catch (error) {
       console.error(
         "gameService.getNextPendingGame error:",
@@ -162,8 +166,6 @@ const gameService = {
           2
         )
       );
-
-      // Preserve the original error object
       throw error;
     }
   },
@@ -250,8 +252,10 @@ const gameService = {
       }
       console.log("gameService.startGame - Starting game with ID:", gameId);
       const response = await API.post(`/games/${gameId}/start`);
-      console.log("gameService.startGame response:", response.data.data);
-      return response.data.data;
+      console.log("gameService.startGame response:", response.data);
+      // Adjusted to return response.data directly, as per backend response structure
+      // (e.g., { message: "Game X started successfully", status: "active" } or full game object)
+      return response.data;
     } catch (error) {
       console.error(
         "gameService.startGame error:",
@@ -287,10 +291,18 @@ const gameService = {
     }
   },
 
-  getJackpot: async () => {
+  getJackpot: async (cashierId) => {
     try {
-      console.log("gameService.getJackpot - Fetching jackpot");
-      const response = await API.get("/games/jackpot");
+      if (!cashierId) throw new Error("Cashier ID is required");
+      console.log(
+        "gameService.getJackpot - Fetching jackpot for cashierId:",
+        cashierId
+      );
+      const response = await API.get(`/games/jackpot?cashierId=${cashierId}`);
+      console.log(
+        "gameService.getJackpot response:",
+        JSON.stringify(response.data, null, 2)
+      );
       return response.data.data;
     } catch (error) {
       console.error(
@@ -399,6 +411,29 @@ const gameService = {
     } catch (error) {
       console.error(
         "gameService.createFutureGames error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  getCashierReport: async (cashierId) => {
+    try {
+      if (!cashierId) throw new Error("Cashier ID is required");
+      console.log(
+        "gameService.getCashierReport - Fetching cashier report for cashierId:",
+        cashierId
+      );
+      const response = await API.get(`/games/report?cashierId=${cashierId}`);
+      console.log("gameService.getCashierReport response:", response.data);
+      return response.data;
+    } catch (error) {
+      console.error(
+        "gameService.getCashierReport error:",
         JSON.stringify(
           error.response?.data || { message: error.message },
           null,

@@ -10,7 +10,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.setWinnerById error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -26,7 +30,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.setWinnerByNumber error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -39,7 +47,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.finishGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -52,7 +64,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.startGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -65,7 +81,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.updateGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -80,7 +100,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.callNumber error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -93,7 +117,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.resetGameCounter error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -106,7 +134,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.configureNextGameNumber error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -121,7 +153,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.configureFutureWinners error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -130,11 +166,15 @@ const moderatorService = {
   getNextPendingGame: async () => {
     try {
       const response = await API.get("/games/next-pending");
-      return response.data.data;
+      return response.data.game; // Adjusted to match response structure
     } catch (error) {
       console.error(
         "moderatorService.getNextPendingGame error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -151,7 +191,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.addJackpotCandidate error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -170,7 +214,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.explodeJackpot error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -183,7 +231,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.getJackpot error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -196,7 +248,11 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.getJackpotCandidates error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
@@ -209,23 +265,53 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.toggleJackpot error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }
   },
 
-  updateJackpot: async (amount) => {
+  updateJackpot: async (amount, cashierId) => {
     try {
-      console.log("updateJackpot sending payload:", { amount });
+      console.log("updateJackpot sending payload:", { amount, cashierId });
       const response = await API.patch("/games/jackpot", {
         amount: Number(amount),
+        cashierId, // include this
       });
       return response.data.data;
     } catch (error) {
       console.error(
         "moderatorService.updateJackpot error:",
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  getCashierReport: async () => {
+    try {
+      console.log(
+        "moderatorService.getCashierReport - Fetching cashier report"
+      );
+      const response = await API.get("/games/report");
+      console.log("moderatorService.getCashierReport response:", response.data);
+      return response.data; // Return the full report data
+    } catch (error) {
+      console.error(
+        "moderatorService.getCashierReport error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
       throw error;
     }

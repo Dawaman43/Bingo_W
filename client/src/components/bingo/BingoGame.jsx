@@ -92,14 +92,22 @@ const BingoGame = () => {
       try {
         setIsLoading(true);
         const fetchedGame = await fetchGame(gameId);
+        console.log(
+          "loadGame fetchedGame:",
+          JSON.stringify(fetchedGame, null, 2)
+        );
+        if (!fetchedGame.gameNumber) {
+          console.warn("loadGame: gameNumber is missing in fetchedGame");
+        }
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
         await fetchBingoCards(gameId);
-        await updateJackpotDisplay(); // Fetches accumulated jackpot (contributions added in SelectCard.jsx during game creation)
+        await updateJackpotDisplay();
         if (user?.role === "moderator") {
           await fetchJackpotCandidates();
         }
       } catch (error) {
+        console.error("loadGame error:", error.message);
         setCallError(error.message || "Failed to load game");
         setIsErrorModalOpen(true);
         setGameData(null);

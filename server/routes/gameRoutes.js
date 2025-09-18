@@ -1,7 +1,7 @@
 import express from "express";
 import {
   createGame,
-  getGame,
+  getGames,
   getAllGames,
   getAllCards,
   callNumber,
@@ -17,12 +17,13 @@ import {
   configureFutureWinners,
   createSequentialGames,
   getNextPendingGame,
-  getReportData,
+  getCashierReport, // Replaced getReportData with getCashierReport
   selectJackpotWinner,
   addJackpotCandidate,
   explodeJackpot,
   getJackpotCandidates,
-  updateJackpot, // Added import for new function
+  updateJackpot,
+  getGameById,
 } from "../controllers/gameController.js";
 import { verifyToken } from "../middlewares/auth.js";
 import { validate } from "../middlewares/validate.js";
@@ -31,15 +32,15 @@ const router = express.Router();
 
 // ----------------- Game Routes -----------------
 
-// Specific jackpot routes first to avoid conflicting with /:id
+// Specific jackpot routes
 router.get("/jackpot", verifyToken, getJackpot);
-router.patch("/jackpot", verifyToken, updateJackpot); // Added route for updating jackpot (amount or enabled)
+router.patch("/jackpot", verifyToken, updateJackpot);
 router.post("/jackpot/candidates", verifyToken, validate, addJackpotCandidate);
 router.post("/jackpot/explode", verifyToken, validate, explodeJackpot);
 router.get("/jackpot/candidates", verifyToken, getJackpotCandidates);
 
 // Other static routes
-router.get("/report", verifyToken, getReportData);
+router.get("/report", verifyToken, getCashierReport); // Updated to use getCashierReport
 router.get("/cards", verifyToken, getAllCards);
 router.get("/", verifyToken, getAllGames);
 router.get("/next-pending", verifyToken, getNextPendingGame);
@@ -67,12 +68,14 @@ router.post("/", verifyToken, validate, (req, res, next) => {
   createGame(req, res, next);
 });
 
-// Specific game ID routes (after specific static routes like /jackpot)
+// Specific game ID routes
 router.get("/:id", verifyToken, (req, res, next) => {
   console.log("Hit /api/games/:id route with id:", req.params.id);
-  getGame(req, res, next);
+  getGames(req, res, next);
 });
+router.get("/games/:id", verifyToken, validate, getGameById);
 router.post("/:id/call-number", verifyToken, validate, callNumber);
+
 router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
 router.post("/:id/select-winner", verifyToken, validate, selectWinner);
 router.post("/:id/finish", verifyToken, validate, finishGame);
