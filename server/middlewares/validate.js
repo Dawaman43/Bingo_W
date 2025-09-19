@@ -38,11 +38,30 @@ export const validate = [
     .optional()
     .isInt({ min: 1, max: 75 })
     .withMessage("Number must be between 1 and 75"),
-  body("cardId").optional().isInt().withMessage("Card ID must be an integer"),
-  body("gameId")
+  body("cardId")
     .optional()
-    .isMongoId()
-    .withMessage("Game ID must be a valid MongoDB ID"),
+    .isInt({ min: 1 })
+    .withMessage("Card ID must be a positive integer"),
+  body("gameId")
+    .optional({ nullable: true }) // Allow null explicitly
+    .custom((value) => {
+      if (value === null) return true; // Allow null
+      if (!mongoose.isValidObjectId(value)) {
+        throw new Error("Game ID must be a valid MongoDB ID");
+      }
+      return true;
+    })
+    .withMessage("Game ID must be a valid MongoDB ID or null"),
+  body("drawAmount")
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage("Draw amount must be a positive number"),
+  body("message")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage("Message must be a string with max 200 characters"),
   param("id")
     .optional()
     .isMongoId()

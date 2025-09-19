@@ -44,6 +44,7 @@ const gameSchema = new mongoose.Schema({
     },
   ],
   moderatorWinnerCardId: { type: Number, default: null },
+  forcedPattern: { type: String, default: null }, // Added for explicit random pattern when "all"
   selectedWinnerRowIndices: { type: [Number], default: [] },
   forcedCallSequence: {
     type: [Number],

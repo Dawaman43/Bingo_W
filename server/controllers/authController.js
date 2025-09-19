@@ -77,11 +77,14 @@ export const login = async (req, res, next) => {
       name: existingUser.name,
       email: existingUser.email,
       role: existingUser.role,
+      managedCashier: existingUser.managedCashier, // Add this
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET_KEY, {
       expiresIn: "7d",
     });
+
+    console.log("[login] Generated token payload:", payload); // Debug log
 
     return res.status(200).json({
       success: true,
@@ -91,11 +94,12 @@ export const login = async (req, res, next) => {
         name: existingUser.name,
         email: existingUser.email,
         role: existingUser.role,
+        managedCashier: existingUser.managedCashier, // Add this
       },
       token,
     });
   } catch (error) {
-    console.error("Error logging in user:", error);
+    console.error("[login] Error:", error);
     next(error);
   }
 };
@@ -112,7 +116,6 @@ export const logout = async (req, res, next) => {
     next(error);
   }
 };
-
 
 export const forgotPassword = async (req, res) => {
   try {
@@ -143,8 +146,10 @@ export const resetPassword = async (req, res) => {
     const user = await User.findOne({ email });
 
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (user.otp !== otp) return res.status(400).json({ message: "Invalid OTP" });
-    if (user.otpExpiry < Date.now()) return res.status(400).json({ message: "OTP expired" });
+    if (user.otp !== otp)
+      return res.status(400).json({ message: "Invalid OTP" });
+    if (user.otpExpiry < Date.now())
+      return res.status(400).json({ message: "OTP expired" });
 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);

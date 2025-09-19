@@ -114,7 +114,11 @@ const gameService = {
       const response = await API.post(`/games/${gameId}/call-number`, {
         number,
       });
-      return response.data.data;
+      console.log("gameService.callNumber response:", response.data);
+
+      // The backend returns: { message, game, calledNumber, callType }
+      // Return the full response data so the component can access all fields
+      return response.data;
     } catch (error) {
       console.error(
         "gameService.callNumber error:",

@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import gameService from "../../services/game";
-import moderatorService from "../../services/moderator"; // Added import for jackpot update
+import moderatorService from "../../services/moderator";
 import { useAuth } from "../../context/AuthContext";
 
 const SelectCard = () => {
-  const { user } = useAuth();
-
+  const { user, loading } = useAuth();
   const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [selectedCards, setSelectedCards] = useState([]);
@@ -21,7 +20,7 @@ const SelectCard = () => {
   );
   const [currentPage, setCurrentPage] = useState(1);
   const [alert, setAlert] = useState({ message: "", type: "" });
-  const [loading, setLoading] = useState(false);
+  const [loadingGame, setLoadingGame] = useState(false);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [profitData, setProfitData] = useState({
     totalPot: 0,
@@ -35,7 +34,6 @@ const SelectCard = () => {
   const cardsPerPage = 100;
   const cardsPerRow = 20;
 
-  // Valid patterns aligned with backend
   const validPatterns = [
     { value: "four_corners_center", label: "Four Corners + Center" },
     { value: "cross", label: "Cross" },
@@ -52,34 +50,24 @@ const SelectCard = () => {
     { value: "all", label: "Any Pattern" },
   ];
 
-  // Fetch cards from backend
   useEffect(() => {
     const fetchCards = async () => {
       setCardsLoading(true);
       try {
-        console.log("Fetching cards from backend...");
+        console.log("[SelectCard] Fetching cards...");
         const data = await gameService.getAllCards();
-        console.log("Fetched cards:", data);
-
+        console.log("[SelectCard] Fetched cards:", data);
         if (data && Array.isArray(data) && data.length > 0) {
           const sortedCards = data
-            .map((c, index) => {
-              const cardId = c.cardId || c.id || c.card_number || index + 1;
-              const cardNumber = c.card_number || cardId;
-              return {
-                id: cardId,
-                card_number: cardNumber,
-              };
-            })
+            .map((c, index) => ({
+              id: c.cardId || c.id || c.card_number || index + 1,
+              card_number: c.card_number || c.id || index + 1,
+            }))
             .sort((a, b) => a.card_number - b.card_number);
           setCards(sortedCards);
           setValidCardIds(sortedCards.map((card) => card.id));
-          console.log(
-            "Valid card IDs:",
-            sortedCards.map((card) => card.id)
-          );
         } else {
-          console.warn("No cards received from backend, using default cards");
+          console.warn("[SelectCard] No cards received, using default cards");
           const defaultCards = Array.from({ length: 100 }, (_, i) => ({
             id: i + 1,
             card_number: i + 1,
@@ -92,20 +80,13 @@ const SelectCard = () => {
           );
         }
       } catch (error) {
-        console.error(
-          "Error fetching cards:",
-          JSON.stringify(
-            error.response?.data || { message: error.message },
-            null,
-            2
-          )
-        );
+        console.error("[SelectCard] Error fetching cards:", error.message);
         const defaultCards = Array.from({ length: 100 }, (_, i) => ({
           id: i + 1,
           card_number: i + 1,
         }));
         setCards(defaultCards);
-        setValidCardIds(defaultCards.map((card) => card.id));
+        setValidCardIds(Array.from({ length: 100 }, (_, i) => i + 1));
         showAlert(
           "Failed to load cards from server, using default set (1-100)",
           "error"
@@ -114,8 +95,37 @@ const SelectCard = () => {
         setCardsLoading(false);
       }
     };
-    fetchCards();
-  }, []);
+    if (!loading && user) fetchCards();
+  }, [loading, user]);
+
+  useEffect(() => {
+    const savedSelectedCards = localStorage.getItem("selectedCards");
+    if (savedSelectedCards) {
+      try {
+        const parsedCards = JSON.parse(savedSelectedCards);
+        const validSavedCards = parsedCards.filter((cardId) =>
+          validCardIds.includes(cardId)
+        );
+        if (validSavedCards.length > 0) {
+          setSelectedCards(validSavedCards);
+          showAlert(
+            `${validSavedCards.length} previously selected cards restored`,
+            "info"
+          );
+        }
+      } catch (error) {
+        console.error("[SelectCard] Error parsing selected cards:", error);
+      }
+    }
+  }, [validCardIds]);
+
+  useEffect(() => {
+    if (selectedCards.length > 0) {
+      localStorage.setItem("selectedCards", JSON.stringify(selectedCards));
+    } else {
+      localStorage.removeItem("selectedCards");
+    }
+  }, [selectedCards]);
 
   useEffect(() => {
     calculateProfit();
@@ -125,7 +135,6 @@ const SelectCard = () => {
     const bet = parseFloat(betAmount) || 0;
     const percentage = parseFloat(housePercentage) || 0;
     const selectedCount = selectedCards.length;
-
     if (bet <= 0 || selectedCount <= 0) {
       setProfitData({
         totalPot: "0.00",
@@ -135,18 +144,11 @@ const SelectCard = () => {
       });
       return;
     }
-
-    // Total pot from all bets
     const totalPot = bet * selectedCount;
-    // Jackpot is one card's bet amount if any cards are selected (matches HTML concept)
-    const jackpotAmount = selectedCount > 0 ? bet : 0;
-    // Remaining amount after deducting jackpot
-    const remainingAmount = totalPot - jackpotAmount;
-    // House fee is calculated on the remaining amount
-    const houseFee = (remainingAmount * percentage) / 100;
-    // Prize pool is what's left after house fee
-    const prizePool = remainingAmount - houseFee;
-
+    const jackpotAmount = bet;
+    const distributableAmount = totalPot - jackpotAmount;
+    const houseFee = (distributableAmount * percentage) / 100;
+    const prizePool = distributableAmount - houseFee;
     setProfitData({
       totalPot: totalPot.toFixed(2),
       houseFee: houseFee.toFixed(2),
@@ -160,7 +162,6 @@ const SelectCard = () => {
       showAlert(`Card #${cardNumber} is not available`, "error");
       return;
     }
-
     setSelectedCards((prev) => {
       const index = prev.indexOf(cardId);
       if (index === -1) {
@@ -181,50 +182,42 @@ const SelectCard = () => {
   const validateGameData = () => {
     const bet = parseFloat(betAmount);
     const percentage = parseInt(housePercentage);
-
-    if (!bet || bet <= 0) {
+    if (!bet || bet <= 0)
       return "Please enter a valid bet amount (must be greater than 0)";
-    }
-
-    if (selectedCards.length === 0) {
-      return "Please select at least one card";
-    }
-
-    if (selectedCards.length > 100) {
-      return "Cannot select more than 100 cards";
-    }
-
-    if (!validPatterns.map((p) => p.value).includes(pattern)) {
+    if (selectedCards.length === 0) return "Please select at least one card";
+    if (selectedCards.length > 100) return "Cannot select more than 100 cards";
+    if (!validPatterns.map((p) => p.value).includes(pattern))
       return "Please select a valid game pattern";
-    }
-
-    if (percentage < 0 || percentage > 100) {
+    if (percentage < 0 || percentage > 100)
       return "House fee percentage must be between 0 and 100";
-    }
-
     const invalidCards = selectedCards.filter(
       (id) => !validCardIds.includes(id)
     );
-    if (invalidCards.length > 0) {
+    if (invalidCards.length > 0)
       return `Invalid card IDs: ${invalidCards.join(", ")}`;
-    }
-
     return null;
   };
 
   const handleStartGame = async () => {
+    if (loading) {
+      showAlert("Please wait, authenticating user...", "warning");
+      return;
+    }
+    if (!user || !user.id) {
+      showAlert("You must be logged in to start a game", "error");
+      navigate("/login");
+      return;
+    }
     const validationError = validateGameData();
     if (validationError) {
       showAlert(validationError, "error");
       return;
     }
-    const cashierId = user.id;
-
-    if (!cashierId) {
-      throw new Error("Missing cashierId – please log in again.");
-    }
-    setLoading(true);
+    setLoadingGame(true);
     try {
+      localStorage.setItem("betAmount", betAmount);
+      localStorage.setItem("housePercentage", housePercentage);
+      localStorage.setItem("gamePattern", pattern);
       const payload = {
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
@@ -232,74 +225,61 @@ const SelectCard = () => {
         selectedCards: selectedCards.map((id) => ({ id: Number(id) })),
         jackpotContribution: parseFloat(profitData.jackpotAmount),
       };
-
       console.log(
-        "Sending payload to createGame:",
+        "[SelectCard] Creating game with payload:",
         JSON.stringify(payload, null, 2)
       );
+      const game = await gameService.createGame(payload);
+      console.log("[SelectCard] Game created:", game);
 
-      const response = await gameService.createGame(payload);
-      console.log("Game created response:", JSON.stringify(response, null, 2));
+      const gameId = game?._id;
+      if (!gameId) throw new Error(`Invalid game ID: ${gameId}`);
 
-      // Update accumulated jackpot (matches HTML concept: fetch current, add contribution, update)
-      const jackpotContribution = parseFloat(profitData.jackpotAmount);
-      if (jackpotContribution > 0) {
-        const currentJackpot = await moderatorService.getJackpot();
-        const newAmount = (currentJackpot.amount || 0) + jackpotContribution;
-
-        // Pass cashierId explicitly
-        await moderatorService.updateJackpot(newAmount, cashierId);
-        console.log(`Jackpot updated to ${newAmount}`);
-      }
-
-      // Access _id directly from response (since gameService.createGame returns savedGame)
-      const gameId = response._id;
       if (
         !gameId ||
         typeof gameId !== "string" ||
         !/^[0-9a-fA-F]{24}$/.test(gameId)
       ) {
-        throw new Error(
-          `Invalid game ID: ${gameId}. Full response: ${JSON.stringify(
-            response,
-            null,
-            2
-          )}`
-        );
+        throw new Error(`Invalid game ID: ${gameId}`);
       }
 
-      console.log("Starting game with ID:", gameId);
+      const jackpotContribution = parseFloat(profitData.jackpotAmount);
+      if (jackpotContribution > 0) {
+        try {
+          const currentJackpot = await moderatorService.getJackpot();
+          const newAmount = (currentJackpot.amount || 0) + jackpotContribution;
+          await moderatorService.updateJackpot(newAmount, user.id);
+          console.log(`[SelectCard] Jackpot updated to ${newAmount}`);
+        } catch (jackpotError) {
+          console.warn(
+            "[SelectCard] Jackpot update failed:",
+            jackpotError.message
+          );
+          showAlert("Game created but jackpot update failed", "warning");
+        }
+      }
+      console.log("[SelectCard] Starting game with ID:", gameId);
       const startedGame = await gameService.startGame(gameId);
       console.log(
-        "Game started response:",
+        "[SelectCard] Game started:",
         JSON.stringify(startedGame, null, 2)
       );
-
       showAlert("Game started successfully!", "success");
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
     } catch (error) {
-      const errorData = error.response?.data || { message: error.message };
-      console.error(
-        "Full error details:",
-        JSON.stringify(
-          {
-            message: error.message,
-            status: error.response?.status,
-            data: errorData,
-            config: error.config,
-          },
-          null,
-          2
-        )
-      );
-
-      const errorMessage = errorData.message || "Unknown error occurred";
-      const errorDetails = errorData.errors
-        ? `\nDetails: ${errorData.errors.map((e) => e.msg).join(", ")}`
-        : "";
-      showAlert(`Error starting game: ${errorMessage}${errorDetails}`, "error");
+      console.error("[SelectCard] Error starting game:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
+      const errorMessage =
+        error.response?.data?.message || error.message || "Unknown error";
+      showAlert(`Error starting game: ${errorMessage}`, "error");
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        navigate("/login");
+      }
     } finally {
-      setLoading(false);
+      setLoadingGame(false);
     }
   };
 
@@ -312,7 +292,6 @@ const SelectCard = () => {
         </div>
       );
     }
-
     if (!cards.length) {
       return (
         <div className="text-center py-8 bg-white dark:bg-gray-800 rounded-lg shadow">
@@ -322,12 +301,10 @@ const SelectCard = () => {
         </div>
       );
     }
-
     const startIndex = (currentPage - 1) * cardsPerPage;
     const endIndex = startIndex + cardsPerPage;
     const paginatedCards = cards.slice(startIndex, endIndex);
     const rows = [];
-
     for (let i = 0; i < paginatedCards.length; i += cardsPerRow) {
       const rowCards = paginatedCards.slice(i, i + cardsPerRow);
       rows.push(
@@ -367,17 +344,27 @@ const SelectCard = () => {
         </div>
       );
     }
-
     return rows;
   };
 
   const handleClearSelection = () => {
     setSelectedCards([]);
+    localStorage.removeItem("selectedCards");
     showAlert("All cards deselected", "info");
   };
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4">
+      {loading && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg">
+            <div className="mx-auto mb-4 w-8 h-8 border-2 border-gray-600 dark:border-gray-400 border-t-indigo-500 rounded-full animate-spin"></div>
+            <p className="text-gray-800 dark:text-gray-200">
+              Authenticating...
+            </p>
+          </div>
+        </div>
+      )}
       {alert.message && (
         <div
           className={`fixed top-4 right-4 p-4 rounded shadow-lg transition-transform duration-300 flex items-center max-w-sm z-50 transform ${
@@ -393,7 +380,6 @@ const SelectCard = () => {
           <div>{alert.message}</div>
         </div>
       )}
-
       <div className="p-6 bg-white dark:bg-gray-800 shadow-sm mb-4 mx-auto max-w-4xl rounded-lg">
         <h2 className="text-xl font-bold mb-4 text-center text-gray-800 dark:text-gray-200">
           Game Settings
@@ -407,10 +393,12 @@ const SelectCard = () => {
               <select
                 value={pattern}
                 onChange={(e) => {
-                  setPattern(e.target.value);
-                  localStorage.setItem("gamePattern", e.target.value);
+                  const newPattern = e.target.value;
+                  setPattern(newPattern);
+                  localStorage.setItem("gamePattern", newPattern);
                 }}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={loading || !user}
               >
                 {validPatterns.map((p) => (
                   <option key={p.value} value={p.value}>
@@ -418,6 +406,9 @@ const SelectCard = () => {
                   </option>
                 ))}
               </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Pattern saved and will be used for all future games
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
@@ -426,11 +417,12 @@ const SelectCard = () => {
               <select
                 value={housePercentage}
                 onChange={(e) => {
-                  const value = e.target.value;
-                  setHousePercentage(value);
-                  localStorage.setItem("housePercentage", value);
+                  const newPercentage = e.target.value;
+                  setHousePercentage(newPercentage);
+                  localStorage.setItem("housePercentage", newPercentage);
                 }}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={loading || !user}
               >
                 <option value="10">10%</option>
                 <option value="15">15%</option>
@@ -438,6 +430,9 @@ const SelectCard = () => {
                 <option value="25">25%</option>
                 <option value="30">30%</option>
               </select>
+              <p className="text-xs text-gray-500 mt-1">
+                House fee saved and will be used for all future games
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
@@ -447,18 +442,22 @@ const SelectCard = () => {
                 type="number"
                 value={betAmount}
                 onChange={(e) => {
-                  const value = e.target.value;
-                  setBetAmount(value);
-                  localStorage.setItem("betAmount", value);
+                  const newBetAmount = e.target.value;
+                  setBetAmount(newBetAmount);
+                  localStorage.setItem("betAmount", newBetAmount);
                 }}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="Enter bet amount"
                 min="1"
                 step="0.01"
+                disabled={loading || !user}
               />
+              <p className="text-xs text-gray-500 mt-1">
+                Bet amount saved and will be used for all future games. Jackpot
+                will always be equal to this amount.
+              </p>
             </div>
           </div>
-
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
@@ -475,11 +474,15 @@ const SelectCard = () => {
                   <button
                     onClick={handleClearSelection}
                     className="ml-4 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                    disabled={loading || !user}
                   >
                     Clear All
                   </button>
                 )}
               </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Your selections are automatically saved and restored on reload
+              </p>
             </div>
             <div>
               <label
@@ -506,8 +509,7 @@ const SelectCard = () => {
                   <div className="font-bold text-right">
                     {profitData.prizePool}
                   </div>
-                  <div>Jackpot Contribution:</div>{" "}
-                  {/* Updated label to "Contribution" for clarity */}
+                  <div>Jackpot Amount:</div>
                   <div className="font-bold text-right">
                     {profitData.jackpotAmount}
                   </div>
@@ -523,32 +525,32 @@ const SelectCard = () => {
             </div>
           </div>
         </div>
-
         <div className="mt-6 text-center">
           <button
             onClick={handleStartGame}
             className={`bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-all duration-200 ${
-              selectedCards.length === 0 || loading
+              selectedCards.length === 0 || loadingGame || loading || !user
                 ? "opacity-50 cursor-not-allowed"
                 : ""
             }`}
-            disabled={selectedCards.length === 0 || loading}
+            disabled={
+              selectedCards.length === 0 || loadingGame || loading || !user
+            }
           >
-            <span className={loading ? "hidden" : ""}>Start Game</span>
-            {loading && (
+            <span className={loadingGame ? "hidden" : ""}>Start Game</span>
+            {loadingGame && (
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
             )}
           </button>
         </div>
       </div>
-
       <div className="max-w-full mx-auto px-4">
         <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-gray-200">
           Select Cards
         </h2>
         <p className="text-gray-600 dark:text-gray-400 mb-4">
           Click on cards to select them for the game. Selected cards will be
-          highlighted in red.
+          highlighted in red. Your selections are automatically saved.
         </p>
         {cards.length > 0 && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
@@ -558,18 +560,7 @@ const SelectCard = () => {
           </p>
         )}
       </div>
-
-      <div className="p-4 max-w-full mx-auto">
-        {cardsLoading ? (
-          <div className="text-center py-8">
-            <div className="mx-auto mb-4 w-6 h-6 border-2 border-gray-600 dark:border-gray-400 border-t-indigo-500 rounded-full animate-spin"></div>
-            <p className="text-gray-500 dark:text-gray-400">Loading cards...</p>
-          </div>
-        ) : (
-          renderCards()
-        )}
-      </div>
-
+      <div className="p-4 max-w-full mx-auto">{renderCards()}</div>
       <div className="flex justify-center gap-4 p-4">
         <button
           onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
