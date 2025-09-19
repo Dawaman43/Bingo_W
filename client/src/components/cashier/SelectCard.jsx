@@ -473,7 +473,7 @@ const SelectCard = () => {
                 {selectedCards.length > 0 && (
                   <button
                     onClick={handleClearSelection}
-                    className="ml-4 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                    className="ml-4 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 cursor-pointer"
                     disabled={loading || !user}
                   >
                     Clear All
@@ -528,7 +528,7 @@ const SelectCard = () => {
         <div className="mt-6 text-center">
           <button
             onClick={handleStartGame}
-            className={`bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-all duration-200 ${
+            className={`bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-indigo-700 flex items-center justify-center space-x-2 transition-all duration-200 cursor-pointer ${
               selectedCards.length === 0 || loadingGame || loading || !user
                 ? "opacity-50 cursor-not-allowed"
                 : ""
