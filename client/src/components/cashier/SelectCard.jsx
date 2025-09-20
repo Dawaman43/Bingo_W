@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import gameService from "../../services/game";
 import moderatorService from "../../services/moderator";
 import { useAuth } from "../../context/AuthContext";
 
 const SelectCard = () => {
+  const dropdownRef = useRef(null); // ✅ This creates the ref
+  const [open, setOpen] = useState(false);
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const [cards, setCards] = useState([]);
@@ -15,6 +17,7 @@ const SelectCard = () => {
   const [housePercentage, setHousePercentage] = useState(
     localStorage.getItem("housePercentage") || "15"
   );
+
   const [pattern, setPattern] = useState(
     localStorage.getItem("gamePattern") || "all"
   );
@@ -53,6 +56,19 @@ const SelectCard = () => {
     { value: "vertical_line", label: "Vertical Line" },
     { value: "all", label: "Any Pattern" },
   ];
+
+  // Close dropdown if clicked outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const options = [10, 15, 20, 25, 30];
 
   // Fetch current jackpot from database (kept secret)
   useEffect(() => {
@@ -721,26 +737,40 @@ const SelectCard = () => {
                 Pattern saved and will be used for all future games
               </p>
             </div>
-            <div>
+            <div className="relative w-full" ref={dropdownRef}>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 House Fee Percentage
               </label>
-              <select
-                value={housePercentage}
-                onChange={(e) => setHousePercentage(e.target.value)}
-                className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                disabled={loading || !user}
+
+              {/* Box */}
+              <div
+                className="w-full h-10 p-2 border-2 border-gray-400 dark:border-gray-600 rounded bg-white dark:bg-gray-700 cursor-pointer"
+                onClick={() => setOpen((prev) => !prev)}
               >
-                <option value="10">10%</option>
-                <option value="15">15%</option>
-                <option value="20">20%</option>
-                <option value="25">25%</option>
-                <option value="30">30%</option>
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                House fee saved and will be used for all future games
-              </p>
+                <span className="text-gray-800 dark:text-gray-200">
+                  {open && housePercentage ? `${housePercentage}%` : ""}
+                </span>
+              </div>
+
+              {/* Dropdown options */}
+              {open && (
+                <div className="absolute left-0 w-full bg-white dark:bg-gray-700 border dark:border-gray-600 rounded mt-1 z-10 shadow-lg">
+                  {options.map((val) => (
+                    <div
+                      key={val}
+                      className="p-2 text-transparent hover:text-gray-800 dark:hover:text-gray-200 hover:bg-indigo-500 hover:text-white cursor-pointer transition-colors"
+                      onClick={() => {
+                        setHousePercentage(val);
+                        setOpen(false);
+                      }}
+                    >
+                      {val}%
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
+
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 Bet Amount

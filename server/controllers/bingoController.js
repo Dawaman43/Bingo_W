@@ -122,6 +122,7 @@ export const callNumber = async (req, res, next) => {
   }
 };
 
+// controllers/gameController.js - Update the checkBingo function
 export const checkBingo = async (req, res, next) => {
   try {
     const { cardId, identifier, preferredPattern } = req.body;
@@ -193,17 +194,6 @@ export const checkBingo = async (req, res, next) => {
       });
     }
 
-    console.log(
-      `[checkBingo] 🧪 DEBUG — lastCalledNumber: ${lastCalledNumber} (${typeof lastCalledNumber})`
-    );
-    console.log(
-      `[checkBingo] 🧪 DEBUG — game.pattern: ${game.pattern}, forcedPattern: ${game.forcedPattern}`
-    );
-    console.log(`[checkBingo] 🧪 DEBUG — card.numbers:`, card.numbers);
-    console.log(
-      `[checkBingo] 🧪 DEBUG — preferredPattern: ${preferredPattern}`
-    );
-
     const validPatterns = [
       "four_corners_center",
       "main_diagonal",
@@ -226,13 +216,9 @@ export const checkBingo = async (req, res, next) => {
     let markedGrid = getMarkedGrid(card.numbers, game.calledNumbers);
     const validBingoPatterns = [];
     const completedPatterns = [];
+    let winningLineInfo = null;
 
     const previousCalledNumbers = game.calledNumbers.slice(0, -1);
-    console.log(
-      `[checkBingo] Previous called: [${previousCalledNumbers
-        .slice(-5)
-        .join(", ")}...]`
-    );
 
     // Check all patterns for completion (to identify late calls)
     for (const pattern of patternsToCheck) {
@@ -325,9 +311,37 @@ export const checkBingo = async (req, res, next) => {
         );
         validBingoPatterns.push(pattern);
 
+        // Store winning line info for the first valid pattern
+        if (!winningLineInfo) {
+          winningLineInfo = {
+            pattern,
+            lineInfo: specificLineInfo,
+            winningNumbers: getNumbersForPattern(
+              card.numbers,
+              pattern,
+              game.calledNumbers,
+              true, // selectSpecificLine
+              specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
+              true // includeMarked
+            ).numbers,
+          };
+        }
+
         if (preferredPattern && preferredPattern === pattern) {
           isBingo = true;
           winningPattern = pattern;
+          winningLineInfo = {
+            pattern,
+            lineInfo: specificLineInfo,
+            winningNumbers: getNumbersForPattern(
+              card.numbers,
+              pattern,
+              game.calledNumbers,
+              true,
+              specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
+              true
+            ).numbers,
+          };
           break;
         }
       } catch (err) {
@@ -373,6 +387,7 @@ export const checkBingo = async (req, res, next) => {
       completedPatterns,
       effectivePattern: winningPattern || patternsToCheck[0],
       lastCalledNumber,
+      winningLineInfo: winningLineInfo || null,
       game: {
         ...game.toObject(),
         winnerCardNumbers: game.winnerCardNumbers || [],
@@ -385,7 +400,7 @@ export const checkBingo = async (req, res, next) => {
       wouldHaveWon: null,
     };
 
-    // Check for late call opportunities (before any early returns)
+    // Check for late call opportunities
     let lateCallMessage = null;
     let wouldHaveWon = null;
     if (completedPatterns.length > 0 || game.status === "completed") {
@@ -450,7 +465,6 @@ export const checkBingo = async (req, res, next) => {
         },
       });
 
-      // Ensure lateCall fields are included in the response
       return res.json(response);
     }
 
@@ -466,10 +480,10 @@ export const checkBingo = async (req, res, next) => {
         response.winner = null;
         response.isBingo = false;
         response.message = "Game already completed with another winner";
-        response.lateCall = false; // Reset lateCall to avoid confusion
+        response.lateCall = false;
         response.lateCallMessage = null;
         response.wouldHaveWon = null;
-        // Re-check late call for this case
+
         if (completedPatterns.length > 0) {
           const lateCallResult = await detectLateCallOpportunity(
             card.numbers,
@@ -533,6 +547,7 @@ export const checkBingo = async (req, res, next) => {
           validBingoPatterns,
           identifier: resultIdentifier,
           completedByLastCall: true,
+          winningLineInfo: winningLineInfo,
           timestamp: new Date(),
         },
       });
@@ -573,7 +588,6 @@ export const checkBingo = async (req, res, next) => {
       });
     }
 
-    // Final response (includes lateCall fields if applicable)
     return res.json(response);
   } catch (err) {
     console.error("[checkBingo] ❌ ERROR:", err);

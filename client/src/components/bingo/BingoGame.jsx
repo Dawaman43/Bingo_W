@@ -790,121 +790,401 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
     }
   };
-  const getNumbersForPattern = (cardNumbers, pattern, calledNumbers = []) => {
-    if (!cardNumbers || !Array.isArray(cardNumbers)) {
+
+  const getNumbersForPattern = (
+    cardNumbers,
+    pattern,
+    calledNumbers = [],
+    selectSpecificLine = false,
+    targetIndices = [],
+    includeMarked = false,
+    lastCalledNumber = null
+  ) => {
+    // ✅ FIXED: More defensive input validation
+    if (
+      !cardNumbers ||
+      (!Array.isArray(cardNumbers) && typeof cardNumbers !== "object")
+    ) {
       console.warn("[BingoGame] Invalid cardNumbers:", cardNumbers);
-      return { numbers: [], selectedIndices: [], rowIndex: null };
+      return {
+        numbers: [],
+        selectedIndices: [],
+        rowIndex: null,
+        colIndex: null,
+        pattern,
+      };
     }
 
-    const grid = [];
-    const flatNumbers = cardNumbers.flat ? cardNumbers.flat() : cardNumbers;
+    // Ensure cardNumbers is a proper 5x5 grid
+    let grid = [];
 
-    for (let row = 0; row < 5; row++) {
-      grid[row] = [];
-      for (let col = 0; col < 5; col++) {
-        const index = row * 5 + col;
-        grid[row][col] = flatNumbers[index];
+    try {
+      if (Array.isArray(cardNumbers) && Array.isArray(cardNumbers[0])) {
+        // Already a 2D grid
+        grid = cardNumbers.map((row) =>
+          row.map((cell) => (cell === "FREE" ? "FREE" : Number(cell)))
+        );
+      } else if (Array.isArray(cardNumbers)) {
+        // Flat array - convert to 2D grid
+        const flatNumbers = cardNumbers.filter(
+          (n) => n !== undefined && n !== null
+        );
+        if (flatNumbers.length >= 25) {
+          for (let row = 0; row < 5; row++) {
+            grid[row] = [];
+            for (let col = 0; col < 5; col++) {
+              const index = row * 5 + col;
+              const num = flatNumbers[index];
+              grid[row][col] =
+                num === "FREE" || num === null ? "FREE" : Number(num);
+            }
+          }
+        } else {
+          // Not enough numbers, create empty grid
+          for (let row = 0; row < 5; row++) {
+            grid[row] = new Array(5).fill("FREE");
+          }
+        }
+      } else {
+        // Invalid format, create empty grid
+        for (let row = 0; row < 5; row++) {
+          grid[row] = new Array(5).fill("FREE");
+        }
+      }
+    } catch (error) {
+      console.error("[getNumbersForPattern] Error creating grid:", error);
+      // Create empty grid as fallback
+      for (let row = 0; row < 5; row++) {
+        grid[row] = new Array(5).fill("FREE");
       }
     }
 
     let numbers = [];
     let selectedIndices = [];
     let rowIndex = null;
+    let colIndex = null;
+
+    // Ensure calledNumbers is an array
+    const safeCalledNumbers = Array.isArray(calledNumbers) ? calledNumbers : [];
+
+    // Filter logic
+    const filterFn = includeMarked
+      ? (n) => n !== "FREE" // Return all non-FREE numbers in pattern
+      : (n) => {
+          const num = Number(n);
+          return (
+            n !== "FREE" && !isNaN(num) && !safeCalledNumbers.includes(num)
+          );
+        }; // Only unmarked
+
+    console.log(
+      `[getNumbersForPattern] Processing pattern "${pattern}" with grid size: ${
+        grid.length
+      }x${grid[0]?.length || 0}`
+    );
 
     try {
-      if (pattern === "horizontal_line") {
+      // Helper function to find line containing lastCalledNumber
+      const findLineContainingNumber = (lastCalledNumber, grid) => {
+        if (!lastCalledNumber) return null;
+
+        const lastCalledStr = String(lastCalledNumber);
+
+        // Check rows first (horizontal lines)
         for (let row = 0; row < grid.length; row++) {
-          const rowNumbers = grid[row].filter((num) => num !== "FREE");
-          const isRowComplete = rowNumbers.every((num) =>
-            calledNumbers.includes(Number(num))
-          );
-          if (isRowComplete) {
-            rowIndex = row;
-            numbers = rowNumbers.map(Number);
-            selectedIndices = Array.from({ length: 5 }, (_, i) => row * 5 + i);
+          for (let col = 0; col < grid[row].length; col++) {
+            if (String(grid[row][col]) === lastCalledStr) {
+              return { type: "row", index: row, col: col };
+            }
+          }
+        }
+
+        // Check columns (vertical lines)
+        for (let col = 0; col < grid[0].length; col++) {
+          for (let row = 0; row < grid.length; row++) {
+            if (String(grid[row][col]) === lastCalledStr) {
+              return { type: "col", index: col, row: row };
+            }
+          }
+        }
+
+        return null;
+      };
+
+      // Helper function to check if a line is complete
+      const isLineComplete = (lineNumbers, calledNumbers) => {
+        return lineNumbers.every((num) => {
+          if (num === "FREE") return true;
+          const numVal = Number(num);
+          return !isNaN(numVal) && calledNumbers.includes(numVal);
+        });
+      };
+
+      switch (pattern) {
+        case "horizontal_line":
+          let selectedRow = null;
+
+          // Step 1: If we have lastCalledNumber, find the exact row that contains it
+          if (lastCalledNumber) {
+            const lineInfo = findLineContainingNumber(lastCalledNumber, grid);
+            if (lineInfo && lineInfo.type === "row") {
+              selectedRow = lineInfo.index;
+              console.log(
+                `[getNumbersForPattern] 🎯 Found lastCalledNumber ${lastCalledNumber} in row ${selectedRow}`
+              );
+            }
+          }
+
+          // Step 2: If no specific row found, check for complete lines
+          if (!selectedRow) {
+            for (let row = 0; row < grid.length; row++) {
+              const rowNumbers = grid[row];
+              if (isLineComplete(rowNumbers, safeCalledNumbers)) {
+                selectedRow = row;
+                console.log(
+                  `[getNumbersForPattern] ✅ Found complete row ${row}: [${rowNumbers.join(
+                    ", "
+                  )}]`
+                );
+                break;
+              }
+            }
+          }
+
+          // Step 3: If still no row found, use specified target or first row as fallback
+          if (
+            !selectedRow &&
+            selectSpecificLine &&
+            Array.isArray(targetIndices) &&
+            targetIndices.length > 0
+          ) {
+            selectedRow = Math.max(0, Math.min(4, targetIndices[0]));
             console.log(
-              `[getNumbersForPattern] ✅ Found complete row ${row}: [${numbers.join(
-                ", "
-              )}]`
+              `[getNumbersForPattern] 📍 Using specified row ${selectedRow}`
             );
-            break;
           }
-        }
-        if (!rowIndex) {
-          console.warn(
-            `[getNumbersForPattern] ⚠️ No complete row found, using default row 0`
+
+          if (selectedRow === null && grid.length > 0) {
+            selectedRow = 0;
+            console.log(
+              `[getNumbersForPattern] ⚠️ No complete/specific row found, using default row 0`
+            );
+          }
+
+          // Step 4: Process the selected row
+          if (
+            selectedRow !== null &&
+            selectedRow >= 0 &&
+            selectedRow < grid.length
+          ) {
+            rowIndex = selectedRow;
+            const rowNumbers = grid[selectedRow].filter(filterFn);
+            numbers.push(...rowNumbers);
+            for (let j = 0; j < 5; j++) {
+              if (filterFn(grid[selectedRow][j])) {
+                selectedIndices.push(selectedRow * 5 + j);
+              }
+            }
+            console.log(
+              `[getNumbersForPattern] ✅ Pattern "horizontal_line" (row ${selectedRow}) → Numbers: [${numbers.join(
+                ", "
+              )}], Indices: [${selectedIndices.join(", ")}]`
+            );
+          }
+          break;
+
+        case "vertical_line":
+          let selectedCol = null;
+
+          // Step 1: If we have lastCalledNumber, find the exact column that contains it
+          if (lastCalledNumber) {
+            const lineInfo = findLineContainingNumber(lastCalledNumber, grid);
+            if (lineInfo && lineInfo.type === "col") {
+              selectedCol = lineInfo.index;
+              console.log(
+                `[getNumbersForPattern] 🎯 Found lastCalledNumber ${lastCalledNumber} in column ${selectedCol}`
+              );
+            }
+          }
+
+          // Step 2: If no specific column found, check for complete lines
+          if (!selectedCol) {
+            for (let col = 0; col < grid[0].length; col++) {
+              const colNumbers = [0, 1, 2, 3, 4].map((row) => grid[row][col]);
+              if (isLineComplete(colNumbers, safeCalledNumbers)) {
+                selectedCol = col;
+                console.log(
+                  `[getNumbersForPattern] ✅ Found complete column ${col}: [${colNumbers.join(
+                    ", "
+                  )}]`
+                );
+                break;
+              }
+            }
+          }
+
+          // Step 3: If still no column found, use specified target or first column as fallback
+          if (
+            !selectedCol &&
+            selectSpecificLine &&
+            Array.isArray(targetIndices) &&
+            targetIndices.length > 0
+          ) {
+            selectedCol = Math.max(0, Math.min(4, targetIndices[0]));
+            console.log(
+              `[getNumbersForPattern] 📍 Using specified column ${selectedCol}`
+            );
+          }
+
+          if (selectedCol === null && grid[0] && grid[0].length > 0) {
+            selectedCol = 0;
+            console.log(
+              `[getNumbersForPattern] ⚠️ No complete/specific column found, using default column 0`
+            );
+          }
+
+          // Step 4: Process the selected column
+          if (
+            selectedCol !== null &&
+            selectedCol >= 0 &&
+            selectedCol < grid[0].length
+          ) {
+            colIndex = selectedCol;
+            const colNumbers = [0, 1, 2, 3, 4]
+              .map((_, row) => grid[row][selectedCol])
+              .filter(filterFn);
+            numbers.push(...colNumbers);
+            for (let i = 0; i < 5; i++) {
+              if (filterFn(grid[i][selectedCol])) {
+                selectedIndices.push(i * 5 + selectedCol);
+              }
+            }
+            console.log(
+              `[getNumbersForPattern] ✅ Pattern "vertical_line" (col ${selectedCol}) → Numbers: [${numbers.join(
+                ", "
+              )}], Indices: [${selectedIndices.join(", ")}]`
+            );
+          }
+          break;
+
+        case "four_corners_center":
+          const cornersAndCenter = [
+            grid[0][0], // top-left (B1)
+            grid[0][4], // top-right (O1)
+            grid[4][0], // bottom-left (B5)
+            grid[4][4], // bottom-right (O5)
+            grid[2][2], // center (N3)
+          ].filter(filterFn);
+          numbers.push(...cornersAndCenter);
+          selectedIndices.push(0, 4, 20, 24, 12);
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "four_corners_center" → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
           );
-          numbers = grid[0].filter((num) => num !== "FREE").map(Number);
-          selectedIndices = [0, 1, 2, 3, 4];
-        }
-      } else if (pattern === "four_corners_center") {
-        numbers = [grid[0][0], grid[0][4], grid[4][0], grid[4][4]];
-        if (grid[2][2] !== "FREE") numbers.push(grid[2][2]);
-        selectedIndices = [0, 4, 20, 24, 12].filter(
-          (_, i) => numbers[i] !== "FREE"
-        );
-      } else if (pattern === "inner_corners") {
-        numbers = [grid[1][1], grid[1][3], grid[3][1], grid[3][3]];
-        selectedIndices = [6, 8, 16, 18];
-      } else if (pattern === "cross") {
-        for (let row = 0; row < 5; row++) {
-          if (grid[row][2] !== "FREE") numbers.push(grid[row][2]);
-        }
-        for (let col = 0; col < 5; col++) {
-          if (col !== 2 && grid[2][col] !== "FREE") numbers.push(grid[2][col]);
-        }
-        selectedIndices = [2, 7, 12, 17, 22, 10, 11, 13, 14].filter(
-          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
-        );
-      } else if (pattern === "main_diagonal") {
-        for (let i = 0; i < 5; i++) {
-          if (grid[i][i] !== "FREE") numbers.push(grid[i][i]);
-        }
-        selectedIndices = [0, 6, 12, 18, 24].filter(
-          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
-        );
-      } else if (pattern === "other_diagonal") {
-        for (let i = 0; i < 5; i++) {
-          if (grid[i][4 - i] !== "FREE") numbers.push(grid[i][4 - i]);
-        }
-        selectedIndices = [4, 8, 12, 16, 20].filter(
-          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
-        );
-      } else if (pattern === "vertical_line") {
-        const targetCol = 2;
-        for (let row = 0; row < 5; row++) {
-          if (grid[row][targetCol] !== "FREE")
-            numbers.push(grid[row][targetCol]);
-        }
-        selectedIndices = [2, 7, 12, 17, 22].filter(
-          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
-        );
-      } else if (pattern === "all") {
-        for (let row = 0; row < 5; row++) {
-          for (let col = 0; col < 5; col++) {
-            if (grid[row][col] !== "FREE") numbers.push(grid[row][col]);
+          break;
+
+        case "inner_corners":
+          const innerCorners = [
+            grid[1][1], // I2 (index 6)
+            grid[1][3], // O2 (index 8)
+            grid[3][1], // I4 (index 16)
+            grid[3][3], // O4 (index 18)
+          ].filter(filterFn);
+          numbers.push(...innerCorners);
+          selectedIndices.push(6, 8, 16, 18);
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "inner_corners" → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+          break;
+
+        case "main_diagonal":
+          const mainDiag = [0, 1, 2, 3, 4]
+            .map((i) => grid[i][i])
+            .filter(filterFn);
+          numbers.push(...mainDiag);
+          selectedIndices.push(0, 6, 12, 18, 24);
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "main_diagonal" → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+          break;
+
+        case "other_diagonal":
+          const otherDiag = [0, 1, 2, 3, 4]
+            .map((i) => grid[i][4 - i])
+            .filter(filterFn);
+          numbers.push(...otherDiag);
+          selectedIndices.push(4, 8, 12, 16, 20);
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "other_diagonal" → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+          break;
+
+        case "all":
+          for (let row = 0; row < 5; row++) {
+            for (let col = 0; col < 5; col++) {
+              if (filterFn(grid[row][col])) {
+                numbers.push(grid[row][col]);
+                selectedIndices.push(row * 5 + col);
+              }
+            }
           }
-        }
-        selectedIndices = Array.from({ length: 25 }, (_, i) => i).filter(
-          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
-        );
+          break;
+
+        default:
+          console.warn(`[getNumbersForPattern] Unknown pattern: "${pattern}"`);
+          return {
+            numbers: [],
+            selectedIndices: [],
+            rowIndex: null,
+            colIndex: null,
+            pattern,
+          };
       }
 
+      // ✅ FIXED: Safe filtering of numbers
       numbers = numbers
-        .filter((n) => typeof n === "number" && n >= 1 && n <= 75)
+        .filter((n) => {
+          if (n === null || n === undefined) return false;
+          const num = Number(n);
+          return !isNaN(num) && num >= 1 && num <= 75;
+        })
         .map(Number);
 
       console.log(
-        `[getNumbersForPattern] ✅ Pattern "${pattern}"${
-          rowIndex != null ? ` (row ${rowIndex})` : ""
+        `[getNumbersForPattern] 🟢 FINAL — Pattern "${pattern}"${
+          rowIndex != null
+            ? ` (row ${rowIndex})`
+            : colIndex != null
+            ? ` (col ${colIndex})`
+            : ""
         } → Numbers: [${numbers.join(", ")}], Indices: [${selectedIndices.join(
           ", "
         )}]`
       );
-      return { numbers, selectedIndices, rowIndex };
+
+      return {
+        numbers,
+        selectedIndices,
+        rowIndex,
+        colIndex,
+        pattern,
+      };
     } catch (error) {
       console.error("[BingoGame] Error in getNumbersForPattern:", error);
-      return { numbers: [], selectedIndices: [], rowIndex: null };
+      return {
+        numbers: [],
+        selectedIndices: [],
+        rowIndex: null,
+        colIndex: null,
+        pattern,
+      };
     }
   };
 
@@ -1368,12 +1648,14 @@ const BingoGame = () => {
 
   const handleCheckCard = async (cardId) => {
     if (!gameData?._id) {
+      console.error("[handleCheckCard] Invalid game ID");
       setCallError("Invalid game ID");
       setIsErrorModalOpen(true);
       return;
     }
 
     if (!cardId) {
+      console.error("[handleCheckCard] No card selected");
       setCallError("No card selected");
       setIsErrorModalOpen(true);
       return;
@@ -1381,6 +1663,7 @@ const BingoGame = () => {
 
     const numericCardId = parseInt(cardId, 10);
     if (isNaN(numericCardId) || numericCardId < 1) {
+      console.error("[handleCheckCard] Invalid card ID:", cardId);
       setCallError("Invalid card ID");
       setIsErrorModalOpen(true);
       return;
@@ -1390,39 +1673,134 @@ const BingoGame = () => {
       (card) => card.id === numericCardId
     );
     if (!isValidCardInGame) {
+      console.error(`[handleCheckCard] Card ${numericCardId} not in game`);
       setCallError(`Card ${numericCardId} is not playing in this game`);
       setIsErrorModalOpen(true);
       try {
         await SoundService.playSound("you_didnt_win");
       } catch (err) {
-        console.error("Failed to play you_didnt_win sound:", err);
+        console.error(
+          "[handleCheckCard] Failed to play you_didnt_win sound:",
+          err
+        );
       }
       return;
     }
 
     try {
       const response = await checkBingo(gameData._id, numericCardId);
-      setGameData(response.game);
+      console.log(
+        "[handleCheckCard] checkBingo response:",
+        JSON.stringify(response, null, 2)
+      );
 
       if (response.isBingo && !response.lateCall) {
-        const patternNumbers = getNumbersForPattern(
-          response.game.winnerCardNumbers?.flat() || [],
-          response.winningPattern
-        ).numbers.map(Number); // Winning numbers
+        console.log("[handleCheckCard] 🎉 BINGO DETECTED!");
 
-        const calledNumbers = response.game.calledNumbers || [];
-        const otherCalledNumbers = calledNumbers.filter(
-          (n) => !patternNumbers.includes(Number(n))
-        );
+        // Use the winningLineInfo from backend if available, otherwise fallback to frontend calculation
+        let patternNumbers, winningIndices;
+
+        if (response.winningLineInfo) {
+          // Use backend-calculated pattern numbers and indices
+          patternNumbers = response.winningLineInfo;
+          winningIndices = patternNumbers.selectedIndices || [];
+          console.log(
+            "[handleCheckCard] Using backend winningLineInfo:",
+            patternNumbers
+          );
+        } else {
+          // ✅ FIXED: Get the winning card data safely
+          const winningCard = gameData.selectedCards?.find(
+            (card) => card.id === numericCardId
+          );
+
+          if (!winningCard || !winningCard.numbers) {
+            console.error(
+              "[handleCheckCard] Winning card not found in game data"
+            );
+            // Fallback to empty arrays
+            patternNumbers = {
+              numbers: [],
+              selectedIndices: [],
+              rowIndex: null,
+              colIndex: null,
+              pattern: response.winningPattern,
+            };
+            winningIndices = [];
+          } else {
+            // Flatten the card numbers for processing
+            const winningCardNumbers = winningCard.numbers.flat();
+            const patternResult = getNumbersForPattern(
+              winningCardNumbers,
+              response.winningPattern,
+              response.game?.calledNumbers || [],
+              true, // selectSpecificLine
+              [], // targetIndices
+              true, // includeMarked
+              response.lastCalledNumber
+            );
+            patternNumbers = patternResult;
+            winningIndices = patternResult.selectedIndices || [];
+            console.log(
+              "[handleCheckCard] Using frontend pattern calculation:",
+              patternResult
+            );
+          }
+        }
+
+        // ✅ FIXED: Safely compute winning numbers
+        const winningNumbers = patternNumbers.numbers
+          ? patternNumbers.numbers
+              .filter((num) => {
+                // Ensure num is valid before checking includes
+                if (!num || isNaN(Number(num))) return false;
+                return (response.game?.calledNumbers || []).includes(
+                  Number(num)
+                );
+              })
+              .map(Number)
+          : [];
+
+        // ✅ FIXED: Safely compute other called numbers
+        const otherCalledNumbers = (response.game?.calledNumbers || [])
+          .filter((num) => {
+            if (!num || isNaN(Number(num))) return false;
+            return !winningNumbers.includes(Number(num));
+          })
+          .map(Number);
+
+        console.log("[handleCheckCard] Final winning data:", {
+          winningPattern: response.winningPattern,
+          winningNumbers,
+          winningIndices,
+          otherCalledNumbers,
+          patternNumbers,
+        });
 
         setBingoStatus({
           lateCall: false,
           pattern: response.winningPattern,
-          winningNumbers: patternNumbers,
+          winningNumbers,
+          winningIndices,
           otherCalledNumbers,
-          prize: gameData?.prizePool?.toFixed(2),
+          prize:
+            response.winner?.prize?.toFixed(2) ||
+            gameData?.prizePool?.toFixed(2) ||
+            "0.00",
+          winnerCardNumbers:
+            response.game?.winnerCardNumbers || winningCard?.numbers || [],
+          patternInfo: patternNumbers,
         });
 
+        setGameData((prev) => ({
+          ...prev,
+          winnerPatternComplete: true,
+          status: "completed",
+          winnerCardNumbers:
+            response.game?.winnerCardNumbers || winningCard?.numbers || [],
+          selectedWinnerNumbers: response.game?.selectedWinnerNumbers || [],
+          lastCalledNumbers: [response.lastCalledNumber],
+        }));
         setIsWinnerModalOpen(true);
         setIsGameOver(true);
         setIsPlaying(false);
@@ -1430,8 +1808,9 @@ const BingoGame = () => {
 
         try {
           await SoundService.playSound("winner");
+          console.log("[handleCheckCard] Played winner sound");
         } catch (err) {
-          console.error("Failed to play winner sound:", err);
+          console.error("[handleCheckCard] Failed to play winner sound:", err);
         }
       } else if (response.lateCall && response.wouldHaveWon) {
         setBingoStatus({
@@ -1441,19 +1820,27 @@ const BingoGame = () => {
         });
         setIsWinnerModalOpen(true);
         setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
+        console.log(
+          "[handleCheckCard] Late call detected:",
+          response.lateCallMessage
+        );
 
         try {
           await SoundService.playSound("late_call");
         } catch (err) {
-          console.error("Failed to play late_call sound:", err);
+          console.error(
+            "[handleCheckCard] Failed to play late_call sound:",
+            err
+          );
           try {
             await SoundService.playSound("you_didnt_win");
           } catch (err2) {
-            console.error("Failed fallback you_didnt_win sound:", err2);
+            console.error(
+              "[handleCheckCard] Failed fallback you_didnt_win sound:",
+              err2
+            );
           }
         }
-
-        // No bingo
       } else {
         setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
         setCallError(`No bingo for card ${numericCardId}`);
@@ -1464,11 +1851,15 @@ const BingoGame = () => {
           numbersMatched: 0,
           numbersLeft: null,
         });
+        console.error(`[handleCheckCard] No bingo for card ${numericCardId}`);
 
         try {
           await SoundService.playSound("you_didnt_win");
         } catch (err) {
-          console.error("Failed to play you_didnt_win sound:", err);
+          console.error(
+            "[handleCheckCard] Failed to play you_didnt_win sound:",
+            err
+          );
         }
       }
     } catch (error) {
@@ -1476,6 +1867,13 @@ const BingoGame = () => {
         error.response?.data?.message ||
         error.message ||
         "An unexpected error occurred";
+      console.error("[handleCheckCard] Error:", {
+        message: userFriendlyMessage,
+        error,
+        response: error.response?.data,
+        cardId,
+        numericCardId,
+      });
 
       if (
         userFriendlyMessage.includes("Card not in game") ||
@@ -1491,7 +1889,10 @@ const BingoGame = () => {
       try {
         await SoundService.playSound("you_didnt_win");
       } catch (err) {
-        console.error("Failed to play you_didnt_win sound:", err);
+        console.error(
+          "[handleCheckCard] Failed to play you_didnt_win sound on error:",
+          err
+        );
       }
     }
   };
@@ -1608,7 +2009,6 @@ const BingoGame = () => {
           </span>
         </button>
       </div>
-
       {/* Title and Recent Numbers */}
       <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-5xl font-black text-[#f0e14a] text-center">
@@ -1621,7 +2021,6 @@ const BingoGame = () => {
           {recentNumbers}
         </div>
       </div>
-
       {/* Game Info */}
       <div className="flex flex-wrap justify-center gap-2 mb-5 w-full">
         <div className="text-[#f0e14a] text-2xl font-bold mr-2">
@@ -1631,12 +2030,10 @@ const BingoGame = () => {
           Called {calledNumbers.length}/75
         </div>
       </div>
-
       {/* Bingo Board */}
       <div className="flex flex-col gap-[5px] mb-5 w-full max-w-[1200px] flex-grow justify-center items-center">
         {generateBoard()}
       </div>
-
       {/* Controls and Last Number */}
       <div className="w-full flex items-center gap-4 max-w-[1200px] max-md:flex-col">
         <div className="flex-1 flex flex-col items-center">
@@ -1843,7 +2240,6 @@ const BingoGame = () => {
           </div>
         </div>
       </div>
-
       {/* Jackpot Display */}
       {isJackpotActive && (
         <div
@@ -1897,15 +2293,15 @@ const BingoGame = () => {
       )}
 
       {isWinnerModalOpen && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[350px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-4 rounded-xl z-50 text-center min-w-[320px] max-w-[380px] max-h-[90vh] overflow-y-auto shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
           {bingoStatus?.lateCall ? (
-            <div className="space-y-4">
-              <div className="text-3xl mb-4 flex items-center justify-center gap-2">
+            <div className="space-y-3">
+              <div className="text-2xl mb-3 flex items-center justify-center gap-2">
                 <span className="text-yellow-400">🕒</span>
                 <span className="text-yellow-400 font-bold">LATE CALL!</span>
               </div>
               <div className="bg-yellow-900/50 border border-yellow-400 p-3 rounded-lg">
-                <h3 className="text-yellow-200 text-lg font-semibold mb-2">
+                <h3 className="text-yellow-200 text-base font-semibold mb-2">
                   You Missed Your Chance! ⏰
                 </h3>
                 <p className="text-yellow-100 text-sm mb-2">
@@ -1940,63 +2336,246 @@ const BingoGame = () => {
                   setIsWinnerModalOpen(false);
                   setBingoStatus(null);
                   setCallError(null);
+                  console.log("[BingoWinnerModal] Closed late call modal");
                 }}
               >
                 I Understand
               </button>
             </div>
           ) : (
-            <div className="space-y-4">
-              <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner! 🎉</h2>
-              <p className="text-white text-lg">
-                Congratulations! Card {cardId} won with pattern{" "}
-                {bingoStatus.pattern.replace("_", " ")}!
+            <div className="space-y-3">
+              <h2 className="text-[#f0e14a] mb-3 text-xl flex items-center justify-center gap-2">
+                <span className="text-2xl">🎉</span>
+                <span>WINNER!</span>
+              </h2>
+              <p className="text-white text-base">
+                Card <span className="text-[#f0e14a] font-bold">{cardId}</span>{" "}
+                won with{" "}
+                <span className="text-green-400 font-bold">
+                  {bingoStatus?.pattern?.replace("_", " ") || "unknown"}
+                </span>
+                !
               </p>
 
-              {/* Winning and other numbers */}
-              <div className="text-white text-sm mb-2 text-left">
-                {bingoStatus.winningNumbers && (
-                  <p>
-                    <strong>Winning numbers:</strong>{" "}
-                    {bingoStatus.winningNumbers.map((n) => (
-                      <span key={n} className="text-green-400 font-bold mr-1">
-                        {n}
-                      </span>
-                    ))}
-                  </p>
-                )}
-                {bingoStatus.otherCalledNumbers &&
-                  bingoStatus.otherCalledNumbers.length > 0 && (
-                    <p>
-                      <strong>Other numbers called:</strong>{" "}
-                      {bingoStatus.otherCalledNumbers.map((n) => (
-                        <span key={n} className="text-white mr-1">
-                          {n}
-                        </span>
+              {/* Full Bingo Card Display with B I N G O Headers */}
+              {(bingoStatus?.winnerCardNumbers || bingoStatus?.patternInfo) && (
+                <div className="mt-3">
+                  <h3 className="text-white text-base font-semibold mb-2 flex items-center justify-center gap-1">
+                    <span className="text-green-400 text-sm">🎯</span>
+                    <span className="text-sm">Winning Pattern</span>
+                  </h3>
+                  <div className="w-full max-w-[260px] mx-auto relative p-1 bg-black/20 rounded-lg">
+                    {/* B I N G O Headers */}
+                    <div className="grid grid-cols-5 gap-0.5 mb-1 justify-items-center">
+                      {["B", "I", "N", "G", "O"].map((letter, index) => (
+                        <div
+                          key={`header-${index}`}
+                          className="w-10 h-8 flex items-center justify-center text-sm font-bold text-[#f0e14a] bg-[#2a3969] rounded border border-[#f0e14a] uppercase tracking-tight"
+                        >
+                          {letter}
+                        </div>
                       ))}
+                    </div>
+
+                    {/* Winning Pattern Line Indicator - FIXED NaN issue */}
+                    {bingoStatus?.patternInfo && (
+                      <div className="absolute top-[-8px] left-1/2 transform -translate-x-1/2">
+                        <div className="bg-gradient-to-r from-green-500 to-green-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold shadow border border-green-400 flex items-center gap-1 whitespace-nowrap">
+                          {(() => {
+                            // ✅ FIXED: Safe row/column display
+                            const rowNum = bingoStatus.patternInfo.rowIndex;
+                            const colNum = bingoStatus.patternInfo.colIndex;
+
+                            if (
+                              rowNum !== null &&
+                              !isNaN(rowNum) &&
+                              rowNum >= 0 &&
+                              rowNum <= 4
+                            ) {
+                              return (
+                                <>
+                                  <span className="text-[8px]">📏</span>
+                                  Row {rowNum + 1}
+                                </>
+                              );
+                            }
+
+                            if (
+                              colNum !== null &&
+                              !isNaN(colNum) &&
+                              colNum >= 0 &&
+                              colNum <= 4
+                            ) {
+                              return (
+                                <>
+                                  <span className="text-[8px]">📐</span>
+                                  Col {colNum + 1}
+                                </>
+                              );
+                            }
+
+                            // Default pattern display
+                            return (
+                              <>
+                                <span className="text-[8px]">✨</span>
+                                <span className="max-w-[80px] truncate">
+                                  {bingoStatus.pattern
+                                    ?.replace("_", " ")
+                                    .toUpperCase() || "PATTERN"}
+                                </span>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Bingo Card Grid - Smaller size */}
+                    <div className="grid grid-cols-5 gap-0.5 pt-0.5 relative">
+                      {(() => {
+                        // ✅ Get card data safely
+                        const cardData = bingoStatus.winnerCardNumbers || [];
+                        const winningIndices = bingoStatus.winningIndices || [];
+                        const allCalledNumbers = [
+                          ...(bingoStatus.winningNumbers || []),
+                          ...(bingoStatus.otherCalledNumbers || []),
+                        ].map(Number);
+
+                        // Ensure we have a 5x5 grid
+                        const cardGrid =
+                          Array.isArray(cardData) && Array.isArray(cardData[0])
+                            ? cardData
+                            : Array(5)
+                                .fill()
+                                .map(() => Array(5).fill("FREE"));
+
+                        return cardGrid.map((row, rowIndex) =>
+                          (row || Array(5).fill("FREE")).map(
+                            (number, colIndex) => {
+                              const cellIndex = rowIndex * 5 + colIndex;
+                              const isFreeSpace = number === "FREE";
+                              const isWinningCell =
+                                winningIndices.includes(cellIndex);
+                              const isCalled =
+                                allCalledNumbers.includes(Number(number)) ||
+                                isWinningCell;
+                              const displayNumber = isFreeSpace
+                                ? "FREE"
+                                : Number(number);
+
+                              // Define styles based on cell type - smaller size
+                              let cellStyle =
+                                "w-10 h-10 flex items-center justify-center text-xs font-bold rounded border transition-all duration-300 shadow-sm relative overflow-hidden";
+
+                              if (isFreeSpace) {
+                                cellStyle +=
+                                  " bg-blue-600 text-white border-blue-400";
+                              } else if (isWinningCell) {
+                                // 🎯 GREEN FILLED WINNING PATTERN - matches main board
+                                cellStyle +=
+                                  " bg-[#0a1174] text-white border-[#2a3969] shadow-green-400/30 relative scale-[1.02]";
+                              } else if (isCalled) {
+                                // Gray called numbers
+                                cellStyle +=
+                                  " bg-gray-600 text-white border-gray-400 shadow-gray-400/30";
+                              } else {
+                                // Uncalled numbers
+                                cellStyle +=
+                                  " bg-white text-black border-gray-300 hover:bg-gray-50";
+                              }
+
+                              return (
+                                <div
+                                  key={`${rowIndex}-${colIndex}`}
+                                  className={cellStyle}
+                                >
+                                  {/* Winning cell special effects - simplified */}
+                                  {isWinningCell && (
+                                    <>
+                                      {/* Subtle green glow */}
+                                      <div className="absolute inset-0 rounded opacity-20 bg-green-400 animate-pulse"></div>
+
+                                      {/* Small sparkle */}
+                                      <div className="absolute -top-[2px] -right-[2px] w-2 h-2 bg-yellow-400 rounded-full text-[6px] flex items-center justify-center font-bold text-black">
+                                        *
+                                      </div>
+                                    </>
+                                  )}
+
+                                  {/* Main number display */}
+                                  <span className="relative z-10 text-center">
+                                    {displayNumber}
+                                  </span>
+                                </div>
+                              );
+                            }
+                          )
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Compact Winning Numbers Summary */}
+              {bingoStatus?.winningNumbers &&
+                bingoStatus.winningNumbers.length > 0 && (
+                  <div className="bg-green-900/30 border border-green-400 p-2 rounded-lg">
+                    <h4 className="text-green-300 font-bold text-xs mb-1 flex items-center gap-1">
+                      <span className="text-sm">🎯</span>
+                      Winning Numbers ({bingoStatus.winningNumbers.length})
+                    </h4>
+                    <div className="flex flex-wrap gap-1 justify-center">
+                      {bingoStatus.winningNumbers.slice(0, 10).map((n) => (
+                        <div
+                          key={n}
+                          className="bg-[#0a1174] text-white px-1.5 py-0.5 rounded text-[10px] font-bold border border-green-400 flex items-center gap-0.5"
+                        >
+                          <span className="text-green-300 text-[8px]">✓</span>
+                          <span>{n}</span>
+                        </div>
+                      ))}
+                      {bingoStatus.winningNumbers.length > 10 && (
+                        <span className="bg-gray-600 text-white px-1.5 py-0.5 rounded text-[10px] font-bold">
+                          +{bingoStatus.winningNumbers.length - 10}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {/* Compact Prize Display */}
+              <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 border border-yellow-400 p-2 rounded-lg">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="text-lg">💰</div>
+                  <div className="text-center">
+                    <p className="text-yellow-300 text-[10px] font-semibold uppercase tracking-wide">
+                      PRIZE
                     </p>
-                  )}
+                    <div className="text-lg font-bold text-yellow-400 bg-black/20 px-2 py-1 rounded border border-yellow-400">
+                      {bingoStatus?.prize || "0.00"} BIRR
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <p className="text-yellow-300 text-lg">
-                <strong>Prize:</strong> {bingoStatus.prize} BIRR
-              </p>
-
+              {/* Compact Action Button */}
               <button
-                className="bg-[#e9744c] text-white border-none px-6 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0854c] w-full"
+                className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
                 onClick={() => {
                   setIsWinnerModalOpen(false);
                   setBingoStatus(null);
                   setCallError(null);
+                  console.log("[BingoWinnerModal] Closed winner modal");
                 }}
               >
-                Close
+                <span>🎊</span>
+                <span>Close</span>
               </button>
             </div>
           )}
         </div>
       )}
-
       {/* Jackpot Winner Modal */}
       {isJackpotWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] z-60">
@@ -2028,7 +2607,6 @@ const BingoGame = () => {
           </div>
         </div>
       )}
-
       {/* Game Finished Modal */}
       {isGameFinishedModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
@@ -2053,7 +2631,6 @@ const BingoGame = () => {
           </div>
         </div>
       )}
-
       {/* Error Modal */}
       {isErrorModalOpen && callError && (
         <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-950 border-4 border-orange-500 p-5 rounded-xl z-50 text-center min-w-[300px] shadow-2xl">
@@ -2077,7 +2654,6 @@ const BingoGame = () => {
           </button>
         </div>
       )}
-
       {/* Settings Sidebar */}
       {isSettingsOpen && (
         <div
@@ -2103,10 +2679,8 @@ const BingoGame = () => {
           onClick={() => setIsSettingsOpen(false)}
         ></div>
       )}
-
       {/* Hidden Canvas */}
       <canvas ref={canvasRef} style={{ display: "none" }}></canvas>
-
       {/* CSS for Fallback Animation */}
       <style jsx>{`
         @keyframes explode1 {

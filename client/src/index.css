@@ -1,1 +1,8 @@
 @import "tailwindcss";
+/* Make dropdown options always visible */
+.custom-select option {
+  color: black;            /* light mode */
+}
+.dark .custom-select option {
+  color: #e5e7eb;          /* gray-200 in dark mode */
+}
