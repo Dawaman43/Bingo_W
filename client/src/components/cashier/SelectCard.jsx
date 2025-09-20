@@ -23,13 +23,17 @@ const SelectCard = () => {
   const [loadingGame, setLoadingGame] = useState(false);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [profitData, setProfitData] = useState({
-    totalPot: 0,
-    houseFee: 0,
-    prizePool: 0,
-    jackpotAmount: 0,
+    totalPot: "0.00",
+    houseFee: "0.00",
+    prizePool: "0.00",
+    jackpotAmount: "0.00",
+    currentJackpot: "0.00",
+    projectedJackpot: "0.00",
   });
   const [showProfit, setShowProfit] = useState(false);
   const [validCardIds, setValidCardIds] = useState([]);
+  // Keep currentJackpot state but make it secret (no UI display)
+  const [currentJackpot, setCurrentJackpot] = useState(0);
 
   const cardsPerPage = 100;
   const cardsPerRow = 20;
@@ -49,6 +53,59 @@ const SelectCard = () => {
     { value: "vertical_line", label: "Vertical Line" },
     { value: "all", label: "Any Pattern" },
   ];
+
+  // Fetch current jackpot from database (kept secret)
+  useEffect(() => {
+    const fetchCurrentJackpot = async () => {
+      if (!user || loading) {
+        return;
+      }
+
+      try {
+        console.log("[SelectCard] Fetching current jackpot for user:", user.id);
+        // Try to get jackpot using gameService first (preferred method)
+        let jackpotData;
+        try {
+          // Get cashierId based on user role
+          let cashierId = user.id;
+          if (user.role === "moderator" && user.managedCashier) {
+            cashierId = user.managedCashier;
+          }
+
+          jackpotData = await gameService.getJackpot(cashierId);
+          console.log(
+            "[SelectCard] Jackpot data from gameService:",
+            jackpotData
+          );
+        } catch (gameServiceError) {
+          console.warn(
+            "[SelectCard] gameService.getJackpot failed, trying moderatorService:",
+            gameServiceError.message
+          );
+          // Fallback to moderatorService
+          jackpotData = await moderatorService.getJackpot();
+          console.log(
+            "[SelectCard] Jackpot data from moderatorService:",
+            jackpotData
+          );
+        }
+
+        const jackpotAmount =
+          jackpotData?.amount || jackpotData?.data?.amount || 0;
+        setCurrentJackpot(jackpotAmount);
+
+        console.log(
+          `[SelectCard] Current jackpot loaded: ${jackpotAmount} Birr`
+        );
+      } catch (error) {
+        console.error("[SelectCard] Failed to fetch current jackpot:", error);
+        setCurrentJackpot(0);
+        console.warn("[SelectCard] Using 0 as fallback jackpot amount");
+      }
+    };
+
+    fetchCurrentJackpot();
+  }, [user, loading]);
 
   useEffect(() => {
     const fetchCards = async () => {
@@ -133,7 +190,7 @@ const SelectCard = () => {
     localStorage.setItem("housePercentage", housePercentage);
     localStorage.setItem("gamePattern", pattern);
     calculateProfit();
-  }, [betAmount, housePercentage, pattern, selectedCards]);
+  }, [betAmount, housePercentage, pattern, selectedCards, currentJackpot]);
 
   const calculateProfit = () => {
     const bet = parseFloat(betAmount) || 0;
@@ -146,21 +203,37 @@ const SelectCard = () => {
         houseFee: "0.00",
         prizePool: "0.00",
         jackpotAmount: "0.00",
+        currentJackpot: currentJackpot.toFixed(2),
+        projectedJackpot: currentJackpot.toFixed(2),
       });
       return;
     }
 
     const totalPot = bet * selectedCount;
-    const jackpotAmount = selectedCount > 0 ? bet : 0;
+    const jackpotAmount = bet; // Jackpot contribution is always the bet amount per game
     const remainingAmount = totalPot - jackpotAmount;
     const houseFee = (remainingAmount * percentage) / 100;
     const prizePool = remainingAmount - houseFee;
+    const projectedJackpot = currentJackpot + jackpotAmount; // Current + new contribution
 
     setProfitData({
       totalPot: totalPot.toFixed(2),
       houseFee: houseFee.toFixed(2),
       prizePool: prizePool.toFixed(2),
       jackpotAmount: jackpotAmount.toFixed(2),
+      currentJackpot: currentJackpot.toFixed(2),
+      projectedJackpot: projectedJackpot.toFixed(2),
+    });
+
+    console.log("[SelectCard] Profit calculation:", {
+      bet,
+      selectedCount,
+      totalPot,
+      jackpotAmount,
+      currentJackpot,
+      projectedJackpot,
+      houseFee,
+      prizePool,
     });
   };
 
@@ -210,6 +283,7 @@ const SelectCard = () => {
       showAlert("Please wait, authenticating user...", "warning");
       return;
     }
+
     if (!user || !user.id) {
       showAlert("You must be logged in to start a game", "error");
       navigate("/login");
@@ -223,72 +297,304 @@ const SelectCard = () => {
     }
 
     setLoadingGame(true);
+    console.log(
+      `[SelectCard] Starting game for user: ${user.id} (${user.role})`
+    );
 
     try {
+      // Step 1: Prepare game payload
+      const betAmountNum = parseFloat(betAmount);
+      const housePercentageNum = parseInt(housePercentage);
+      const jackpotContribution = betAmountNum; // Jackpot contribution = bet amount per game
+
       const payload = {
         startGameNumber: 1,
         numGames: 1,
         pattern,
-        betAmount: parseFloat(betAmount),
-        houseFeePercentage: parseInt(housePercentage),
+        betAmount: betAmountNum,
+        houseFeePercentage: housePercentageNum,
         jackpotEnabled: true,
         cardPool: selectedCards.map((id) => Number(id)),
       };
 
-      console.log("[SelectCard] Creating game with payload:", payload);
+      console.log("[SelectCard] Step 1 - Creating game with payload:", {
+        ...payload,
+        cardPool: `${payload.cardPool.length} cards`, // Don't log all card IDs
+        jackpotContribution,
+      });
 
-      const data = await gameService.createSequentialGames(payload);
-      const game = data?.game || (Array.isArray(data) && data[0]) || data;
+      // Step 2: Create the game
+      const gameData = await gameService.createSequentialGames(payload);
+      const game =
+        gameData?.game || (Array.isArray(gameData) && gameData[0]) || gameData;
+
       if (!game?._id) {
         throw new Error("Invalid game response structure - missing game ID");
       }
 
       const gameId = game._id;
-      console.log("[SelectCard] Valid game ID found:", gameId);
+      console.log(`[SelectCard] Step 2 - Game created successfully: ${gameId}`);
+      console.log(`[SelectCard] Game details:`, {
+        gameNumber: game.gameNumber,
+        status: game.status,
+        betAmount: game.betAmount,
+        selectedCardsCount: game.selectedCards?.length || 0,
+      });
 
+      // Step 3: Start the game
+      console.log(`[SelectCard] Step 3 - Starting game ${gameId}`);
       const startedGame = await gameService.startGame(gameId);
-      console.log("[SelectCard] Game started response:", startedGame);
+      console.log("[SelectCard] Step 3 - Game started response:", {
+        message: startedGame.message,
+        status: startedGame.status || startedGame.game?.status,
+        gameId,
+      });
 
-      const jackpotContribution = parseFloat(profitData.jackpotAmount);
+      // Step 4: Handle jackpot contribution (if enabled and amount > 0)
+      let jackpotUpdatedSuccessfully = false;
+      let finalJackpotAmount = currentJackpot;
+
       if (jackpotContribution > 0) {
-        try {
-          const currentJackpot = await moderatorService.getJackpot();
-          const newAmount = (currentJackpot?.amount || 0) + jackpotContribution;
-          await moderatorService.updateJackpot(newAmount, user.id);
-          console.log(`[SelectCard] Jackpot updated to ${newAmount}`);
-        } catch (jackpotError) {
-          console.warn(
-            "[SelectCard] Jackpot update failed:",
-            jackpotError.message
+        console.log(
+          `[SelectCard] Step 4 - Processing jackpot contribution: ${jackpotContribution} Birr`
+        );
+
+        // Get correct cashierId for jackpot operations
+        let cashierId = user.id;
+        if (user.role === "moderator" && user.managedCashier) {
+          cashierId = user.managedCashier;
+          console.log(
+            `[SelectCard] Moderator detected - using managed cashier: ${cashierId}`
           );
-          showAlert("Game started but jackpot update failed", "warning");
         }
+
+        // Method 1: Primary - Use dedicated jackpot contribution endpoint
+        try {
+          console.log(
+            `[SelectCard] Method 1 - Calling addJackpotContribution for cashier ${cashierId}`
+          );
+          const jackpotResponse = await gameService.addJackpotContribution(
+            gameId,
+            jackpotContribution
+          );
+
+          console.log("[SelectCard] Method 1 - Success:", {
+            message: jackpotResponse.message,
+            newTotal:
+              jackpotResponse.newTotal || jackpotResponse.data?.newTotal,
+            contributionAmount: jackpotResponse.contributionAmount,
+          });
+
+          // Verify the update by fetching current jackpot
+          const verificationData = await gameService.getJackpot(cashierId);
+          finalJackpotAmount =
+            verificationData?.amount ||
+            verificationData?.data?.amount ||
+            currentJackpot + jackpotContribution;
+          setCurrentJackpot(finalJackpotAmount);
+
+          jackpotUpdatedSuccessfully = true;
+          console.log(
+            `[SelectCard] ✅ Method 1 - Jackpot verified: ${finalJackpotAmount.toFixed(
+              2
+            )} Birr`
+          );
+        } catch (method1Error) {
+          console.error(
+            "[SelectCard] Method 1 failed:",
+            method1Error.response?.data || method1Error.message
+          );
+
+          // Method 2: Fallback - Manual jackpot update
+          try {
+            console.log(
+              "[SelectCard] Method 2 - Trying manual jackpot update..."
+            );
+
+            // Get current jackpot amount
+            const currentJackpotData = await gameService.getJackpot(cashierId);
+            const currentAmount =
+              currentJackpotData?.amount ||
+              currentJackpotData?.data?.amount ||
+              0;
+            const newAmount = currentAmount + jackpotContribution;
+
+            console.log(
+              `[SelectCard] Method 2 - Current: ${currentAmount}, Adding: ${jackpotContribution}, New: ${newAmount}`
+            );
+
+            const updateResponse = await gameService.updateJackpot(newAmount);
+            console.log(
+              "[SelectCard] Method 2 - Update response:",
+              updateResponse
+            );
+
+            // Verify the update
+            const verificationData = await gameService.getJackpot(cashierId);
+            finalJackpotAmount =
+              verificationData?.amount ||
+              verificationData?.data?.amount ||
+              newAmount;
+            setCurrentJackpot(finalJackpotAmount);
+
+            jackpotUpdatedSuccessfully = true;
+            console.log(
+              `[SelectCard] ✅ Method 2 - Manual update successful: ${finalJackpotAmount.toFixed(
+                2
+              )} Birr`
+            );
+          } catch (method2Error) {
+            console.error(
+              "[SelectCard] Method 2 failed:",
+              method2Error.response?.data || method2Error.message
+            );
+
+            // Method 3: Final fallback - Direct API call to backend
+            try {
+              console.log(
+                "[SelectCard] Method 3 - Direct API call to /jackpot/contribute..."
+              );
+
+              const directResponse = await API.post(
+                "/jackpot/contribute",
+                {
+                  contributionAmount: jackpotContribution,
+                  gameId: gameId,
+                  cashierId: cashierId, // Include cashierId explicitly
+                },
+                {
+                  headers: {
+                    "Content-Type": "application/json",
+                    // Include any other headers needed for auth
+                  },
+                }
+              );
+
+              console.log(
+                "[SelectCard] Method 3 - Direct response:",
+                directResponse.data
+              );
+
+              // Final verification
+              const finalVerification = await gameService.getJackpot(cashierId);
+              finalJackpotAmount =
+                finalVerification?.amount ||
+                finalVerification?.data?.amount ||
+                currentJackpot + jackpotContribution;
+              setCurrentJackpot(finalJackpotAmount);
+
+              jackpotUpdatedSuccessfully = true;
+              console.log(
+                `[SelectCard] ✅ Method 3 - Direct API successful: ${finalJackpotAmount.toFixed(
+                  2
+                )} Birr`
+              );
+            } catch (method3Error) {
+              console.error(
+                "[SelectCard] Method 3 failed:",
+                method3Error.response?.data || method3Error.message
+              );
+              console.warn(
+                `[SelectCard] ❌ All jackpot update methods failed for contribution: ${jackpotContribution}`
+              );
+              console.warn(
+                "[SelectCard] Game created successfully but jackpot not updated - manual intervention required"
+              );
+
+              // Don't throw error - game creation should still succeed
+              jackpotUpdatedSuccessfully = false;
+            }
+          }
+        }
+      } else {
+        console.log(
+          "[SelectCard] Step 4 - Skipping jackpot (contribution <= 0)"
+        );
       }
 
-      showAlert("Game started successfully!", "success");
+      // Step 5: Success - Clear selections and navigate
+      console.log(
+        `[SelectCard] Step 5 - Game setup complete! Jackpot updated: ${
+          jackpotUpdatedSuccessfully ? "Yes" : "No"
+        }`
+      );
+      console.log(
+        `[SelectCard] Final jackpot amount: ${finalJackpotAmount.toFixed(
+          2
+        )} Birr`
+      );
 
+      // Clear local storage and state
       localStorage.removeItem("selectedCards");
       setSelectedCards([]);
 
-      setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
+      // Show success message
+      const successMessage = jackpotUpdatedSuccessfully
+        ? `Game started successfully!`
+        : "Game started successfully! (Jackpot update pending)";
+
+      showAlert(successMessage, "success");
+
+      // Navigate to game after brief delay
+      setTimeout(() => {
+        console.log(`[SelectCard] Navigating to bingo-game?id=${gameId}`);
+        navigate(`/bingo-game?id=${gameId}`);
+      }, 1500);
     } catch (error) {
-      console.error("[SelectCard] Error starting game:", {
+      console.error("[SelectCard] handleStartGame - CRITICAL ERROR:", {
         message: error.message,
         fullError: error,
+        response: error.response?.data,
+        status: error.response?.status,
+        step: "Unknown",
       });
 
       let errorMessage = "Failed to start game";
-      if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
+
+      // Enhanced error message based on error type
+      if (error.response?.status === 401) {
+        errorMessage = "Authentication failed. Please log in again.";
+        navigate("/login");
+      } else if (error.response?.status === 403) {
+        errorMessage =
+          "Access denied. You don't have permission to start games.";
+      } else if (error.response?.status === 400) {
+        errorMessage =
+          error.response.data.message || "Invalid game data provided.";
       } else if (error.message.includes("Invalid game response")) {
-        errorMessage = "Invalid response from server - game creation failed.";
+        errorMessage = "Server returned invalid game data. Please try again.";
       } else if (error.message.includes("missing game ID")) {
-        errorMessage = "Game ID not found in response. Server issue.";
+        errorMessage =
+          "Game created but ID not received. Server issue - contact support.";
+      } else if (
+        error.message.includes("Network Error") ||
+        error.code === "ECONNABORTED"
+      ) {
+        errorMessage =
+          "Network connection failed. Please check your connection and try again.";
+      } else {
+        errorMessage =
+          error.response?.data?.message ||
+          error.message ||
+          "An unexpected error occurred.";
       }
 
+      console.error(`[SelectCard] Showing error to user: ${errorMessage}`);
       showAlert(errorMessage, "error");
+
+      // Log error for debugging
+      console.error("[SelectCard] Full error details:", {
+        timestamp: new Date().toISOString(),
+        userId: user?.id,
+        userRole: user?.role,
+        betAmount: betAmount,
+        selectedCardsCount: selectedCards.length,
+        error: error.response?.data || error.message,
+      });
     } finally {
+      // Always reset loading state
       setLoadingGame(false);
+      console.log("[SelectCard] handleStartGame - Loading state reset");
     }
   };
 
@@ -450,8 +756,8 @@ const SelectCard = () => {
                 disabled={loading || !user}
               />
               <p className="text-xs text-gray-500 mt-1">
-                Bet amount saved and will be used for all future games. Jackpot
-                will always be equal to this amount.
+                Bet amount saved and will be used for all future games. This
+                amount will be added to the jackpot.
               </p>
             </div>
           </div>
@@ -506,7 +812,7 @@ const SelectCard = () => {
                   <div className="font-bold text-right">
                     {profitData.prizePool}
                   </div>
-                  <div>Jackpot Amount:</div>
+                  <div>Jackpot Contribution:</div>
                   <div className="font-bold text-right">
                     {profitData.jackpotAmount}
                   </div>

@@ -795,14 +795,6 @@ const CashierReport = () => {
               icon: "🏆",
               label: "Current Jackpot", // Updated label
             },
-            {
-              name: "Total Prizes Awarded",
-              value: `${summaryStats.totalPrizesAwarded} Birr`,
-              color:
-                "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300",
-              icon: "🎉",
-              label: "Total Prizes",
-            },
           ].map((stat) => (
             <div
               key={stat.name}

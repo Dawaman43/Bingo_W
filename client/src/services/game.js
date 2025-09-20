@@ -396,6 +396,7 @@ const gameService = {
     }
   },
 
+  // ✅ FIXED: Route matches your backend - /jackpot (no /games/)
   getJackpot: async (cashierId) => {
     try {
       if (!cashierId) throw new Error("Cashier ID is required");
@@ -403,15 +404,81 @@ const gameService = {
         "gameService.getJackpot - Fetching jackpot for cashierId:",
         cashierId
       );
+      // FIXED: Removed /games/ prefix - your route is just /jackpot
       const response = await API.get(`/games/jackpot?cashierId=${cashierId}`);
       console.log(
         "gameService.getJackpot response:",
         JSON.stringify(response.data, null, 2)
       );
-      return response.data.data;
+      // Handle both response.data.data and response.data formats
+      return response.data.data || response.data;
     } catch (error) {
       console.error(
         "gameService.getJackpot error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  // ✅ FIXED: Route matches your backend - /jackpot/contribute (with 'e')
+  addJackpotContribution: async (gameId, contributionAmount) => {
+    try {
+      if (!gameId) throw new Error("Game ID is required");
+      if (!contributionAmount || contributionAmount <= 0)
+        throw new Error("Valid contribution amount required");
+
+      console.log(
+        `gameService.addJackpotContribution - Adding ${contributionAmount} for game ${gameId}`
+      );
+      // FIXED: Route should be /jackpot/contribute (with 'e') to match your backend
+      const response = await API.post("/games/jackpot/contribute", {
+        contributionAmount,
+        gameId,
+      });
+
+      console.log(
+        "gameService.addJackpotContribution response:",
+        JSON.stringify(response.data, null, 2)
+      );
+      // Handle both response.data.data and response.data formats
+      return response.data.data || response.data;
+    } catch (error) {
+      console.error(
+        "gameService.addJackpotContribution error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  // ✅ This one already matches your route - /jackpot
+  updateJackpot: async (amount) => {
+    try {
+      if (typeof amount !== "number" || amount < 0)
+        throw new Error("Valid amount required");
+
+      console.log(`gameService.updateJackpot - Updating to ${amount}`);
+      // Route already correct: PATCH /jackpot
+      const response = await API.patch("/games/jackpot", { amount });
+
+      console.log(
+        "gameService.updateJackpot response:",
+        JSON.stringify(response.data, null, 2)
+      );
+      // Handle both response.data.data and response.data formats
+      return response.data.data || response.data;
+    } catch (error) {
+      console.error(
+        "gameService.updateJackpot error:",
         JSON.stringify(
           error.response?.data || { message: error.message },
           null,
@@ -571,6 +638,7 @@ const gameService = {
       throw error;
     }
   },
+
   updateGameStatus: async (gameId, status) => {
     try {
       if (!gameId) throw new Error("Game ID is required");

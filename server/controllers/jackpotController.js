@@ -14,14 +14,28 @@ export const getJackpot = async (req, res, next) => {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
+    // Fetch the jackpot document for this cashier
     const jackpot = await Jackpot.findOne({ cashierId });
+
+    // Always return the actual jackpot amount from database (persistent across games)
+    // Removed the activeGames check that was resetting to 0 when no active games exist
+    const amount = jackpot ? jackpot.amount : 0;
+    const enabled = jackpot ? jackpot.enabled : true;
+
+    // Optional: Still fetch active games count for informational purposes
+    // but don't use it to reset the jackpot amount
     const activeGames = await Game.countDocuments({
       status: { $in: ["active", "pending"] },
       cashierId,
     });
 
-    const amount = jackpot ? (activeGames === 0 ? 0 : jackpot.amount) : 0;
-    const enabled = jackpot ? jackpot.enabled : true;
+    console.log(`[getJackpot] Retrieved for cashier ${cashierId}:`, {
+      amount,
+      enabled,
+      activeGames,
+      hasJackpotDoc: !!jackpot,
+      lastUpdated: jackpot ? jackpot.lastUpdated : "none",
+    });
 
     res.json({
       message: "Jackpot retrieved successfully",
@@ -30,6 +44,10 @@ export const getJackpot = async (req, res, next) => {
         baseAmount: jackpot ? jackpot.baseAmount : 0,
         enabled,
         lastUpdated: jackpot ? jackpot.lastUpdated : new Date(),
+        // Optional: Include active games count for frontend display
+        activeGames,
+        // Optional: Include whether jackpot exists in DB
+        jackpotExists: !!jackpot,
       },
     });
   } catch (error) {

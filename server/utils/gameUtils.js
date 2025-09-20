@@ -44,132 +44,349 @@ export const getMarkedGrid = (cardNumbers, calledNumbers) => {
   return marked;
 };
 
-export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
+// utils/gameUtils.js - Updated helper functions
+
+/**
+ * Get specific line information for the last called number
+ */
+export const getSpecificLineInfo = (cardNumbers, pattern, lastCalledNumber) => {
+  if (!lastCalledNumber) return null;
+
+  const targetStr = String(lastCalledNumber);
+  const flatNumbers = cardNumbers.flat();
+  const targetIndex = flatNumbers.findIndex((num) => String(num) === targetStr);
+
+  if (targetIndex === -1) return null;
+
+  const row = Math.floor(targetIndex / 5);
+  const col = targetIndex % 5;
+
   console.log(
-    `[checkCardBingo] Checking pattern: ${pattern}, cardNumbers:`,
-    cardNumbers,
-    `calledNumbers:`,
-    calledNumbers
-  );
-
-  const validPatterns = [
-    "four_corners_center",
-    "cross",
-    "main_diagonal",
-    "other_diagonal",
-    "inner_corners",
-    "horizontal_line",
-    "vertical_line",
-    "all",
-  ];
-
-  if (!pattern || !validPatterns.includes(pattern)) {
-    console.error(`[checkCardBingo] Invalid or undefined pattern: ${pattern}`);
-    return [false, null];
-  }
-
-  if (
-    !Array.isArray(cardNumbers) ||
-    cardNumbers.length !== 5 ||
-    cardNumbers.some((row) => !Array.isArray(row) || row.length !== 5)
-  ) {
-    console.error(`[checkCardBingo] Invalid cardNumbers format`);
-    return [false, null];
-  }
-
-  const marked = getMarkedGrid(cardNumbers, calledNumbers);
-  console.log(`[checkCardBingo] Marked grid:`, marked);
-
-  if (
-    !Array.isArray(marked) ||
-    marked.length !== 5 ||
-    marked.some((row) => !Array.isArray(row) || row.length !== 5)
-  ) {
-    console.error(`[checkCardBingo] Invalid marked grid format`);
-    return [false, null];
-  }
-
-  let isBingo = false;
-  let winningPattern = pattern;
-
-  const isFourCornersCenter =
-    marked[0][0] &&
-    marked[0][4] &&
-    marked[4][0] &&
-    marked[4][4] &&
-    (marked[2][2] === null || marked[2][2]);
-  const isCross =
-    marked[1][1] &&
-    marked[1][3] &&
-    marked[3][1] &&
-    marked[3][3] &&
-    (marked[2][2] === null || marked[2][2]);
-  const isMainDiagonal =
-    marked[0][0] &&
-    marked[1][1] &&
-    (marked[2][2] === null || marked[2][2]) &&
-    marked[3][3] &&
-    marked[4][4];
-  const isOtherDiagonal =
-    marked[0][4] &&
-    marked[1][3] &&
-    (marked[2][2] === null || marked[2][2]) &&
-    marked[3][1] &&
-    marked[4][0];
-  const isInnerCorners =
-    marked[1][1] && marked[1][3] && marked[3][1] && marked[3][3];
-  const isAnyHorizontal = marked.some((row) =>
-    row.every((cell) => cell || cell === null)
-  );
-  const isAnyVertical = [0, 1, 2, 3, 4].some((col) =>
-    marked.every((row) => row[col] || row[col] === null)
+    `[getSpecificLineInfo] lastCalledNumber ${lastCalledNumber} found at row ${row}, col ${col}`
   );
 
   switch (pattern) {
-    case "four_corners_center":
-      isBingo = isFourCornersCenter;
-      break;
-    case "cross":
-      isBingo = isCross;
-      break;
-    case "main_diagonal":
-      isBingo = isMainDiagonal;
-      break;
-    case "other_diagonal":
-      isBingo = isOtherDiagonal;
-      break;
-    case "inner_corners":
-      isBingo = isInnerCorners;
-      console.log(
-        `[checkCardBingo] Inner corners check: isBingo=${isBingo}, positions=[1][1]:${marked[1][1]}, [1][3]:${marked[1][3]}, [3][1]:${marked[3][1]}, [3][3]:${marked[3][3]}`
-      );
-      break;
     case "horizontal_line":
-      isBingo = isAnyHorizontal;
-      break;
+      return { lineType: "row", lineIndex: row };
+
     case "vertical_line":
-      isBingo = isAnyVertical;
-      break;
-    case "all":
-      isBingo = marked.every((row, i) =>
-        row.every((cell, j) => cell === true || (i === 2 && j === 2))
+      return { lineType: "column", lineIndex: col };
+
+    case "main_diagonal":
+      if (row === col) {
+        return { lineType: "main_diagonal" };
+      }
+      return null;
+
+    case "other_diagonal":
+      if (row + col === 4) {
+        return { lineType: "other_diagonal" };
+      }
+      return null;
+
+    case "four_corners_center":
+      const positions = [
+        { row: 0, col: 0 }, // top-left
+        { row: 0, col: 4 }, // top-right
+        { row: 4, col: 0 }, // bottom-left
+        { row: 4, col: 4 }, // bottom-right
+        { row: 2, col: 2 }, // center
+      ];
+      const position = positions.find((p) => p.row === row && p.col === col);
+      if (position) {
+        return { lineType: "four_corners_center" };
+      }
+      return null;
+
+    case "inner_corners":
+      const innerPositions = [
+        { row: 1, col: 1 }, // I2
+        { row: 1, col: 3 }, // O2
+        { row: 3, col: 1 }, // I4
+        { row: 3, col: 3 }, // O4
+      ];
+      const innerPosition = innerPositions.find(
+        (p) => p.row === row && p.col === col
       );
-      console.log(
-        `[checkCardBingo] All pattern check: isBingo=${isBingo}, marked grid=${JSON.stringify(
-          marked
-        )}`
-      );
-      break;
+      if (innerPosition) {
+        return { lineType: "inner_corners" };
+      }
+      return null;
+
     default:
-      console.error(`[checkCardBingo] Unknown pattern: "${pattern}"`);
-      return [false, null];
+      return null;
   }
+};
+
+/**
+ * Check if a specific line was complete with given called numbers
+ */
+export const checkSpecificLineCompletion = (
+  cardNumbers,
+  calledNumbers,
+  pattern,
+  lineInfo
+) => {
+  const markedGrid = getMarkedGrid(cardNumbers, calledNumbers);
 
   console.log(
-    `[checkCardBingo] Result: isBingo=${isBingo}, winningPattern=${winningPattern}`
+    `[checkSpecificLineCompletion] Checking ${lineInfo.lineType} for pattern ${pattern}`
   );
-  return [isBingo, winningPattern];
+
+  const isLineComplete = (markedGrid, lineType) => {
+    switch (lineType) {
+      case "row":
+        if (lineInfo.lineIndex !== undefined) {
+          const rowComplete = markedGrid[lineInfo.lineIndex].every(
+            (cell) => cell === true || cell === null
+          );
+          console.log(
+            `[checkSpecificLineCompletion] Row ${
+              lineInfo.lineIndex
+            }: ${markedGrid[lineInfo.lineIndex].join(
+              ", "
+            )} → complete: ${rowComplete}`
+          );
+          return rowComplete;
+        }
+        return false;
+
+      case "column":
+        if (lineInfo.lineIndex !== undefined) {
+          const colComplete = [0, 1, 2, 3, 4].every(
+            (rowIndex) =>
+              markedGrid[rowIndex][lineInfo.lineIndex] === true ||
+              markedGrid[rowIndex][lineInfo.lineIndex] === null
+          );
+          console.log(
+            `[checkSpecificLineCompletion] Col ${lineInfo.lineIndex}: [${[
+              0, 1, 2, 3, 4,
+            ]
+              .map((r) => markedGrid[r][lineInfo.lineIndex])
+              .join(", ")}] → complete: ${colComplete}`
+          );
+          return colComplete;
+        }
+        return false;
+
+      case "main_diagonal":
+        const mainDiagComplete = [0, 1, 2, 3, 4].every(
+          (i) => markedGrid[i][i] === true || markedGrid[i][i] === null
+        );
+        console.log(
+          `[checkSpecificLineCompletion] Main diagonal: [${[0, 1, 2, 3, 4]
+            .map((i) => markedGrid[i][i])
+            .join(", ")}] → complete: ${mainDiagComplete}`
+        );
+        return mainDiagComplete;
+
+      case "other_diagonal":
+        const otherDiagComplete = [0, 1, 2, 3, 4].every(
+          (i) => markedGrid[i][4 - i] === true || markedGrid[i][4 - i] === null
+        );
+        console.log(
+          `[checkSpecificLineCompletion] Other diagonal: [${[0, 1, 2, 3, 4]
+            .map((i) => markedGrid[i][4 - i])
+            .join(", ")}] → complete: ${otherDiagComplete}`
+        );
+        return otherDiagComplete;
+
+      case "four_corners_center":
+        const cornersComplete = [
+          markedGrid[0][0],
+          markedGrid[0][4],
+          markedGrid[4][0],
+          markedGrid[4][4],
+          markedGrid[2][2],
+        ].every((cell) => cell === true || cell === null);
+        console.log(
+          `[checkSpecificLineCompletion] Four corners: [${[
+            markedGrid[0][0],
+            markedGrid[0][4],
+            markedGrid[4][0],
+            markedGrid[4][4],
+            markedGrid[2][2],
+          ].join(", ")}] → complete: ${cornersComplete}`
+        );
+        return cornersComplete;
+
+      case "inner_corners":
+        const innerComplete = [
+          markedGrid[1][1],
+          markedGrid[1][3],
+          markedGrid[3][1],
+          markedGrid[3][3],
+        ].every((cell) => cell === true);
+        console.log(
+          `[checkSpecificLineCompletion] Inner corners: [${[
+            markedGrid[1][1],
+            markedGrid[1][3],
+            markedGrid[3][1],
+            markedGrid[3][3],
+          ].join(", ")}] → complete: ${innerComplete}`
+        );
+        return innerComplete;
+
+      default:
+        console.log(
+          `[checkSpecificLineCompletion] Unknown line type: ${lineType}`
+        );
+        return false;
+    }
+  };
+
+  return isLineComplete(markedGrid, lineInfo.lineType);
 };
+
+export const checkCardBingo = (
+  cardNumbers,
+  calledNumbers,
+  pattern,
+  lastCalledNumber = null
+) => {
+  console.log(
+    `[checkCardBingo] Checking pattern: ${pattern}, lastCalledNumber: ${lastCalledNumber}`
+  );
+
+  const markedGrid = getMarkedGrid(cardNumbers, calledNumbers);
+
+  // 🔑 For line patterns, get the specific line info if lastCalledNumber provided
+  const specificLineInfo = lastCalledNumber
+    ? getSpecificLineInfo(cardNumbers, pattern, lastCalledNumber)
+    : null;
+
+  switch (pattern) {
+    case "four_corners_center":
+      const cornersComplete = [
+        markedGrid[0][0],
+        markedGrid[0][4],
+        markedGrid[4][0],
+        markedGrid[4][4],
+        markedGrid[2][2],
+      ].every((cell) => cell === true || cell === null);
+
+      console.log(
+        `[checkCardBingo] Four corners check: isBingo=${cornersComplete}`
+      );
+      return [cornersComplete, pattern];
+
+    case "inner_corners":
+      const innerCornersComplete = [
+        markedGrid[1][1],
+        markedGrid[1][3],
+        markedGrid[3][1],
+        markedGrid[3][3],
+      ].every((cell) => cell === true);
+
+      console.log(
+        `[checkCardBingo] Inner corners check: isBingo=${innerCornersComplete}`
+      );
+      return [innerCornersComplete, pattern];
+
+    case "main_diagonal":
+      const mainDiagonalComplete = [0, 1, 2, 3, 4]
+        .map((i) => markedGrid[i][i])
+        .every((cell) => cell === true || cell === null);
+
+      console.log(
+        `[checkCardBingo] Main diagonal check: isBingo=${mainDiagonalComplete}`
+      );
+      return [mainDiagonalComplete, pattern];
+
+    case "other_diagonal":
+      const otherDiagonalComplete = [0, 1, 2, 3, 4]
+        .map((i) => markedGrid[i][4 - i])
+        .every((cell) => cell === true || cell === null);
+
+      console.log(
+        `[checkCardBingo] Other diagonal check: isBingo=${otherDiagonalComplete}`
+      );
+      return [otherDiagonalComplete, pattern];
+
+    case "horizontal_line":
+      let horizontalBingo = false;
+
+      // 🔑 If we have lastCalledNumber, check ONLY the specific row containing it
+      if (
+        lastCalledNumber &&
+        specificLineInfo &&
+        specificLineInfo.lineType === "row"
+      ) {
+        const specificRowComplete = markedGrid[
+          specificLineInfo.lineIndex
+        ].every((cell) => cell === true || cell === null);
+        horizontalBingo = specificRowComplete;
+        console.log(
+          `[checkCardBingo] Horizontal line check (specific row ${specificLineInfo.lineIndex}): isBingo=${horizontalBingo}`
+        );
+        return [horizontalBingo, pattern];
+      }
+
+      // If no specific line, check if ANY row is complete (for previous state checks)
+      for (let row = 0; row < 5; row++) {
+        if (markedGrid[row].every((cell) => cell === true || cell === null)) {
+          horizontalBingo = true;
+          console.log(
+            `[checkCardBingo] Horizontal line check (any row ${row}): isBingo=${horizontalBingo}`
+          );
+          break;
+        }
+      }
+
+      console.log(
+        `[checkCardBingo] Horizontal line result: isBingo=${horizontalBingo}`
+      );
+      return [horizontalBingo, pattern];
+
+    case "vertical_line":
+      let verticalBingo = false;
+
+      // 🔑 If we have lastCalledNumber, check ONLY the specific column containing it
+      if (
+        lastCalledNumber &&
+        specificLineInfo &&
+        specificLineInfo.lineType === "column"
+      ) {
+        const specificColComplete = [0, 1, 2, 3, 4].every(
+          (rowIndex) =>
+            markedGrid[rowIndex][specificLineInfo.lineIndex] === true ||
+            markedGrid[rowIndex][specificLineInfo.lineIndex] === null
+        );
+        verticalBingo = specificColComplete;
+        console.log(
+          `[checkCardBingo] Vertical line check (specific col ${specificLineInfo.lineIndex}): isBingo=${verticalBingo}`
+        );
+        return [verticalBingo, pattern];
+      }
+
+      // If no specific line, check if ANY column is complete (for previous state checks)
+      for (let col = 0; col < 5; col++) {
+        if (
+          [0, 1, 2, 3, 4].every(
+            (rowIndex) =>
+              markedGrid[rowIndex][col] === true ||
+              markedGrid[rowIndex][col] === null
+          )
+        ) {
+          verticalBingo = true;
+          console.log(
+            `[checkCardBingo] Vertical line check (any col ${col}): isBingo=${verticalBingo}`
+          );
+          break;
+        }
+      }
+
+      console.log(
+        `[checkCardBingo] Vertical line result: isBingo=${verticalBingo}`
+      );
+      return [verticalBingo, pattern];
+
+    default:
+      console.warn(`[checkCardBingo] Unknown pattern: ${pattern}`);
+      return [false, pattern];
+  }
+};
+
 /**
  * Extracts numbers from a card based on the specified pattern, prioritizing specific lines when requested.
  * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
@@ -185,7 +402,8 @@ export const getNumbersForPattern = (
   calledNumbers = [],
   selectSpecificLine = false,
   targetIndices = [],
-  includeMarked = false // 👈 NEW: if true, returns ALL pattern numbers (ignores calledNumbers)
+  includeMarked = false,
+  lastCalledNumber = null // 👈 NEW: Pass last called number to identify winning line
 ) => {
   // ✅ SAFETY: Block "all" — should never reach here
   if (pattern === "all") {
@@ -198,7 +416,7 @@ export const getNumbersForPattern = (
   console.log(
     `[getNumbersForPattern] 🟡 START — Pattern: "${pattern}", Called: [${calledNumbers.join(
       ", "
-    )}], includeMarked: ${includeMarked}`
+    )}], includeMarked: ${includeMarked}, lastCalledNumber: ${lastCalledNumber}`
   );
 
   if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
@@ -221,6 +439,40 @@ export const getNumbersForPattern = (
 
   console.log(`[getNumbersForPattern] 🟦 Grid prepared:`, grid);
 
+  // 🔑 NEW: Helper function to find line containing lastCalledNumber
+  const findLineContainingNumber = (lastCalledNumber, grid) => {
+    if (!lastCalledNumber) return null;
+
+    const lastCalledStr = String(lastCalledNumber);
+
+    // Check rows first (horizontal lines)
+    for (let row = 0; row < grid.length; row++) {
+      for (let col = 0; col < grid[row].length; col++) {
+        if (grid[row][col] === lastCalledStr) {
+          return { type: "row", index: row, col: col };
+        }
+      }
+    }
+
+    // Check columns (vertical lines)
+    for (let col = 0; col < grid[0].length; col++) {
+      for (let row = 0; row < grid.length; row++) {
+        if (grid[row][col] === lastCalledStr) {
+          return { type: "col", index: col, row: row };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  // 🔑 NEW: Helper function to check if a line is complete (all numbers called)
+  const isLineComplete = (lineNumbers, calledNumbers) => {
+    return lineNumbers.every(
+      (num) => num === "FREE" || calledNumbers.includes(Number(num))
+    );
+  };
+
   switch (pattern) {
     case "four_corners_center":
       const cornersAndCenter = [
@@ -231,7 +483,7 @@ export const getNumbersForPattern = (
         grid[2][2], // center (N3)
       ].filter(filterFn);
       numbers.push(...cornersAndCenter);
-      selectedIndices.push(0, 4, 20, 24, 12); // Indices: 0,4,20,24,12
+      selectedIndices.push(0, 4, 20, 24, 12); // Fixed indices: 0,4,20,24,12
       console.log(
         `[getNumbersForPattern] ✅ Pattern "four_corners_center" → Numbers: [${numbers.join(
           ", "
@@ -247,7 +499,7 @@ export const getNumbersForPattern = (
         grid[3][3], // O4 (index 18)
       ].filter(filterFn);
       numbers.push(...innerCorners);
-      selectedIndices.push(6, 8, 16, 18); // Indices for I2, O2, I4, O4
+      selectedIndices.push(6, 8, 16, 18); // Fixed indices for I2, O2, I4, O4
       console.log(
         `[getNumbersForPattern] ✅ Pattern "inner_corners" → Numbers: [${numbers.join(
           ", "
@@ -258,7 +510,7 @@ export const getNumbersForPattern = (
     case "main_diagonal":
       const mainDiag = [0, 1, 2, 3, 4].map((i) => grid[i][i]).filter(filterFn);
       numbers.push(...mainDiag);
-      selectedIndices.push(0, 6, 12, 18, 24); // Diagonal: B1, I2, N3, G4, O5
+      selectedIndices.push(0, 6, 12, 18, 24); // Fixed diagonal: B1, I2, N3, G4, O5
       console.log(
         `[getNumbersForPattern] ✅ Pattern "main_diagonal" → Numbers: [${numbers.join(
           ", "
@@ -271,7 +523,7 @@ export const getNumbersForPattern = (
         .map((i) => grid[i][4 - i])
         .filter(filterFn);
       numbers.push(...otherDiag);
-      selectedIndices.push(4, 8, 12, 16, 20); // Diagonal: O1, G2, N3, I4, B5
+      selectedIndices.push(4, 8, 12, 16, 20); // Fixed diagonal: O1, G2, N3, I4, B5
       console.log(
         `[getNumbersForPattern] ✅ Pattern "other_diagonal" → Numbers: [${numbers.join(
           ", "
@@ -280,112 +532,146 @@ export const getNumbersForPattern = (
       break;
 
     case "horizontal_line":
-      const rows = grid;
-      let selectedRow;
-      if (selectSpecificLine && targetIndices.length > 0) {
+      let selectedRow = null;
+
+      // 🔑 STEP 1: If we have lastCalledNumber, find the exact row that contains it
+      if (lastCalledNumber) {
+        const lineInfo = findLineContainingNumber(lastCalledNumber, grid);
+        if (lineInfo && lineInfo.type === "row") {
+          selectedRow = lineInfo.index;
+          console.log(
+            `[getNumbersForPattern] 🎯 Found lastCalledNumber ${lastCalledNumber} in row ${selectedRow}`
+          );
+        }
+      }
+
+      // 🔑 STEP 2: If no specific row found, check for complete lines
+      if (!selectedRow) {
+        // Check each row for completion
+        for (let row = 0; row < grid.length; row++) {
+          const rowNumbers = grid[row];
+          if (isLineComplete(rowNumbers, calledNumbers)) {
+            selectedRow = row;
+            console.log(
+              `[getNumbersForPattern] ✅ Found complete row ${row}: [${rowNumbers.join(
+                ", "
+              )}]`
+            );
+            break; // Take first complete row
+          }
+        }
+      }
+
+      // 🔑 STEP 3: If still no row found, use specified target or first row as fallback
+      if (!selectedRow && selectSpecificLine && targetIndices.length > 0) {
         selectedRow = targetIndices[0];
-        if (selectedRow >= 0 && selectedRow < 5) {
-          const rowNumbers = rows[selectedRow].filter(filterFn);
-          numbers.push(...rowNumbers);
-          for (let j = 0; j < 5; j++) {
-            if (filterFn(rows[selectedRow][j])) {
-              selectedIndices.push(selectedRow * 5 + j);
-            }
+        console.log(
+          `[getNumbersForPattern] 📍 Using specified row ${selectedRow}`
+        );
+      }
+
+      if (!selectedRow && grid.length > 0) {
+        selectedRow = 0; // Default to first row
+        console.log(
+          `[getNumbersForPattern] ⚠️ No complete/specific row found, using default row 0`
+        );
+      }
+
+      // 🔑 STEP 4: Process the selected row
+      if (
+        selectedRow !== null &&
+        selectedRow >= 0 &&
+        selectedRow < grid.length
+      ) {
+        const rowNumbers = grid[selectedRow].filter(filterFn);
+        numbers.push(...rowNumbers);
+        for (let j = 0; j < 5; j++) {
+          if (filterFn(grid[selectedRow][j])) {
+            selectedIndices.push(selectedRow * 5 + j);
           }
-          console.log(
-            `[getNumbersForPattern] ✅ Pattern "horizontal_line" (row ${selectedRow}) → Numbers: [${numbers.join(
-              ", "
-            )}], Indices: [${selectedIndices.join(", ")}]`
-          );
-        } else {
-          console.warn(
-            `[getNumbersForPattern] ❌ Invalid row index: ${selectedRow}`
-          );
         }
+        console.log(
+          `[getNumbersForPattern] ✅ Pattern "horizontal_line" (row ${selectedRow}) → Numbers: [${numbers.join(
+            ", "
+          )}], Indices: [${selectedIndices.join(", ")}]`
+        );
       } else {
-        const rowUnmarked = rows.map((row) => row.filter(filterFn).length);
-        const maxUnmarked = Math.max(...rowUnmarked);
-        const eligibleRows = rowUnmarked
-          .map((u, i) => (u === maxUnmarked ? i : -1))
-          .filter((i) => i !== -1);
-        selectedRow =
-          eligibleRows[Math.floor(Math.random() * eligibleRows.length)];
-        if (selectedRow !== undefined && selectedRow !== -1) {
-          const rowNumbers = rows[selectedRow].filter(filterFn);
-          numbers.push(...rowNumbers);
-          for (let j = 0; j < 5; j++) {
-            if (filterFn(rows[selectedRow][j])) {
-              selectedIndices.push(selectedRow * 5 + j);
-            }
-          }
-          console.log(
-            `[getNumbersForPattern] ✅ Pattern "horizontal_line" (random row ${selectedRow}) → Numbers: [${numbers.join(
-              ", "
-            )}], Indices: [${selectedIndices.join(", ")}]`
-          );
-        } else {
-          console.warn(
-            "[getNumbersForPattern] ❌ No valid row found for horizontal_line"
-          );
-        }
+        console.warn(
+          "[getNumbersForPattern] ❌ No valid row found for horizontal_line"
+        );
       }
       break;
 
     case "vertical_line":
-      const cols = [0, 1, 2, 3, 4];
-      let selectedCol;
-      if (selectSpecificLine && targetIndices.length > 0) {
+      let selectedCol = null;
+
+      // 🔑 STEP 1: If we have lastCalledNumber, find the exact column that contains it
+      if (lastCalledNumber) {
+        const lineInfo = findLineContainingNumber(lastCalledNumber, grid);
+        if (lineInfo && lineInfo.type === "col") {
+          selectedCol = lineInfo.index;
+          console.log(
+            `[getNumbersForPattern] 🎯 Found lastCalledNumber ${lastCalledNumber} in column ${selectedCol}`
+          );
+        }
+      }
+
+      // 🔑 STEP 2: If no specific column found, check for complete lines
+      if (!selectedCol) {
+        // Check each column for completion
+        for (let col = 0; col < grid[0].length; col++) {
+          const colNumbers = [0, 1, 2, 3, 4].map((row) => grid[row][col]);
+          if (isLineComplete(colNumbers, calledNumbers)) {
+            selectedCol = col;
+            console.log(
+              `[getNumbersForPattern] ✅ Found complete column ${col}: [${colNumbers.join(
+                ", "
+              )}]`
+            );
+            break; // Take first complete column
+          }
+        }
+      }
+
+      // 🔑 STEP 3: If still no column found, use specified target or first column as fallback
+      if (!selectedCol && selectSpecificLine && targetIndices.length > 0) {
         selectedCol = targetIndices[0];
-        if (selectedCol >= 0 && selectedCol <= 4) {
-          const colNumbers = cols
-            .map((_, row) => grid[row][selectedCol])
-            .filter(filterFn);
-          numbers.push(...colNumbers);
-          for (let i = 0; i < 5; i++) {
-            if (filterFn(grid[i][selectedCol])) {
-              selectedIndices.push(i * 5 + selectedCol);
-            }
-          }
-          console.log(
-            `[getNumbersForPattern] ✅ Pattern "vertical_line" (col ${selectedCol}) → Numbers: [${numbers.join(
-              ", "
-            )}], Indices: [${selectedIndices.join(", ")}]`
-          );
-        } else {
-          console.warn(
-            `[getNumbersForPattern] ❌ Invalid col index: ${selectedCol}`
-          );
-        }
-      } else {
-        const colUnmarked = cols.map(
-          (col) => grid.filter((row) => filterFn(row[col])).length
+        console.log(
+          `[getNumbersForPattern] 📍 Using specified column ${selectedCol}`
         );
-        const maxUnmarkedCol = Math.max(...colUnmarked);
-        const eligibleCols = colUnmarked
-          .map((u, i) => (u === maxUnmarkedCol ? i : -1))
-          .filter((i) => i !== -1);
-        selectedCol =
-          eligibleCols[Math.floor(Math.random() * eligibleCols.length)];
-        if (selectedCol !== undefined && selectedCol !== -1) {
-          const colNumbers = cols
-            .map((_, row) => grid[row][selectedCol])
-            .filter(filterFn);
-          numbers.push(...colNumbers);
-          for (let i = 0; i < 5; i++) {
-            if (filterFn(grid[i][selectedCol])) {
-              selectedIndices.push(i * 5 + selectedCol);
-            }
+      }
+
+      if (!selectedCol && grid[0] && grid[0].length > 0) {
+        selectedCol = 0; // Default to first column
+        console.log(
+          `[getNumbersForPattern] ⚠️ No complete/specific column found, using default column 0`
+        );
+      }
+
+      // 🔑 STEP 4: Process the selected column
+      if (
+        selectedCol !== null &&
+        selectedCol >= 0 &&
+        selectedCol < grid[0].length
+      ) {
+        const colNumbers = [0, 1, 2, 3, 4]
+          .map((_, row) => grid[row][selectedCol])
+          .filter(filterFn);
+        numbers.push(...colNumbers);
+        for (let i = 0; i < 5; i++) {
+          if (filterFn(grid[i][selectedCol])) {
+            selectedIndices.push(i * 5 + selectedCol);
           }
-          console.log(
-            `[getNumbersForPattern] ✅ Pattern "vertical_line" (random col ${selectedCol}) → Numbers: [${numbers.join(
-              ", "
-            )}], Indices: [${selectedIndices.join(", ")}]`
-          );
-        } else {
-          console.warn(
-            "[getNumbersForPattern] ❌ No valid col found for vertical_line"
-          );
         }
+        console.log(
+          `[getNumbersForPattern] ✅ Pattern "vertical_line" (col ${selectedCol}) → Numbers: [${numbers.join(
+            ", "
+          )}], Indices: [${selectedIndices.join(", ")}]`
+        );
+      } else {
+        console.warn(
+          "[getNumbersForPattern] ❌ No valid column found for vertical_line"
+        );
       }
       break;
 
