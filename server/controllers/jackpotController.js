@@ -434,7 +434,6 @@ export const getPairedCashier = async (req, res, next) => {
   }
 };
 
-// Update jackpot amount or status
 export const updateJackpot = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -487,8 +486,8 @@ export const updateJackpot = async (req, res, next) => {
       });
     }
 
-    // If no changes, return error
-    if (!update.amount && !update.enabled) {
+    // ✅ Correct check: both must be undefined to be invalid
+    if (amount === undefined && enabled === undefined) {
       return res.status(400).json({
         message: "No valid updates provided (amount or enabled required)",
       });

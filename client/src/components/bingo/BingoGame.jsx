@@ -31,7 +31,10 @@ const BingoGame = () => {
   const [lastCalledNumbers, setLastCalledNumbers] = useState([]);
   const [currentNumber, setCurrentNumber] = useState(null);
   const [isAutoCall, setIsAutoCall] = useState(false);
-  const [speed, setSpeed] = useState(4);
+  const [speed, setSpeed] = useState(() => {
+    // Load saved speed from localStorage or default to 8
+    return parseInt(localStorage.getItem("bingoAutoCallSpeed")) || 8;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [cardId, setCardId] = useState("");
   const [manualNumber, setManualNumber] = useState("");
@@ -73,6 +76,9 @@ const BingoGame = () => {
   const jackpotRef = useRef(null);
   const socketRef = useRef(null);
   const p5InstanceRef = useRef(null);
+  useEffect(() => {
+    localStorage.setItem("bingoAutoCallSpeed", speed);
+  }, [speed]);
 
   // Initialize Socket.IO client
   useEffect(() => {
@@ -87,13 +93,18 @@ const BingoGame = () => {
       console.log("Connected to Socket.IO server");
     });
 
-    if (gameData?.cashierId) {
-      socketRef.current.emit("joinCashierRoom", gameData.cashierId);
-      console.log(`Joined cashier room: ${gameData.cashierId}`);
-    }
+    socketRef.current.onAny((event, ...args) => {
+      console.log(`Socket event received: ${event}`, args);
+    });
 
     socketRef.current.on("jackpotAwarded", (data) => {
       console.log("Jackpot awarded event received:", data);
+      if (!data.userId || !data.prize) {
+        console.error("Invalid jackpot data:", data);
+        setCallError("Invalid jackpot data received");
+        setIsErrorModalOpen(true);
+        return;
+      }
       setJackpotWinner({
         userId: data.userId || "--",
         prize: data.prize || 0,
@@ -101,11 +112,15 @@ const BingoGame = () => {
         message: data.message || "Jackpot awarded!",
       });
       setIsJackpotWinnerModalOpen(true);
+      console.log("Opening jackpot winner modal");
       setIsJackpotActive(false);
       setJackpotCandidates([]);
       setJackpotAmount(0);
-      SoundService.playSound("jackpot_congrats");
-      setTimeout(() => setIsJackpotWinnerModalOpen(false), 10000);
+      SoundService.playSound("jackpot_congrats").catch((err) => {
+        console.error("Failed to play jackpot_congrats sound:", err);
+        setCallError("Failed to play jackpot sound");
+        setIsErrorModalOpen(true);
+      });
     });
 
     socketRef.current.on("disconnect", () => {
@@ -115,11 +130,49 @@ const BingoGame = () => {
     return () => {
       socketRef.current?.disconnect();
     };
+  }, []);
+  // Join cashier room when gameData is available
+  useEffect(() => {
+    if (gameData?.cashierId && socketRef.current.connected) {
+      socketRef.current.emit("joinCashierRoom", gameData.cashierId);
+      console.log(`Joined cashier room: ${gameData.cashierId}`);
+    }
   }, [gameData?.cashierId]);
+
+  // Preload sounds
+  useEffect(() => {
+    SoundService.preloadSounds(language).catch((err) => {
+      console.error("Failed to preload sounds:", err);
+      setCallError("Failed to load audio files");
+      setIsErrorModalOpen(true);
+    });
+  }, [language]);
+  // Load game data
+  useEffect(() => {
+    const gameId = searchParams.get("id");
+    if (!gameId) {
+      setCallError("No game ID found");
+      setIsErrorModalOpen(true);
+      navigate("/create-game");
+      return;
+    }
+    setIsLoading(true);
+    fetchGame(gameId)
+      .then((response) => {
+        setGameData(response);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        setCallError(err.message);
+        setIsErrorModalOpen(true);
+        setIsLoading(false);
+        navigate("/create-game");
+      });
+  }, [searchParams, fetchGame, navigate]);
 
   // Initialize p5.js for jackpot animation
   useEffect(() => {
-    if (isJackpotWinnerModalOpen && jackpotCanvasRef.current && window.p5) {
+    if (isJackpotWinnerModalOpen && jackpotCanvasRef.current && p5) {
       console.log("Initializing p5.js for jackpot animation");
       const sketch = (p) => {
         let particles = [];
@@ -353,51 +406,42 @@ const BingoGame = () => {
             particle.update();
             particle.display();
           });
-          if (p.frameCount % 3 === 0 && particles.length < 150) {
-            particles.push(new Particle());
-          }
           fireballs = fireballs.filter((fireball) => !fireball.isFinished());
           fireballs.forEach((fireball) => {
             fireball.update();
             fireball.display();
           });
-          if (p.frameCount % 10 === 0 && fireballs.length < 25) {
-            fireballs.push(new Fireball());
-          }
-          confetti = confetti.filter((confetti) => !confetti.isFinished());
-          confetti.forEach((confetti) => {
-            confetti.update();
-            confetti.display();
+          confetti = confetti.filter((conf) => !conf.isFinished());
+          confetti.forEach((conf) => {
+            conf.update();
+            conf.display();
           });
-          if (p.frameCount % 5 === 0 && confetti.length < 100) {
-            confetti.push(new Confetti());
-          }
           sparkles = sparkles.filter((sparkle) => !sparkle.isFinished());
           sparkles.forEach((sparkle) => {
             sparkle.update();
             sparkle.display();
           });
-          if (p.frameCount % 8 === 0 && sparkles.length < 50) {
+
+          if (particles.length < 100) {
+            particles.push(new Particle());
+          }
+          if (fireballs.length < 20) {
+            fireballs.push(new Fireball());
+          }
+          if (confetti.length < 50) {
+            confetti.push(new Confetti());
+          }
+          if (sparkles.length < 30) {
             sparkles.push(new Sparkle());
           }
         };
       };
-
-      try {
-        p5InstanceRef.current = new window.p5(sketch, jackpotCanvasRef.current);
-        console.log("p5.js instance created successfully");
-      } catch (error) {
-        console.error("Failed to initialize p5.js:", error);
-        setCallError("Failed to load jackpot animation");
-        setIsErrorModalOpen(true);
-      }
+      p5InstanceRef.current = new p5(sketch, jackpotCanvasRef.current);
     }
-
     return () => {
       if (p5InstanceRef.current) {
-        console.log("Removing p5.js instance");
         p5InstanceRef.current.remove();
-        p5InstanceRef.current = null;
+        console.log("Cleaned up p5.js instance");
       }
     };
   }, [isJackpotWinnerModalOpen]);
@@ -1744,16 +1788,13 @@ const BingoGame = () => {
         {/* Last Number Container */}
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-center">
-            <p className="text-[#f0e14a] text-sm font-bold mb-1">
-              Current Number
-            </p>
-            <p className="w-16 h-16 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
+            <p className="w-36 h-36 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
               {currentNumber || "-"}
             </p>
           </div>
           <div className="flex flex-col items-center">
             <p className="text-[#f0e14a] text-sm font-bold mb-1">Prize Pool</p>
-            <p className="w-16 h-16 flex justify-center items-center bg-[#e9744c] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-white">
+            <p className="w-26 h-26 flex justify-center items-center bg-[#e9744c] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-white">
               {gameData?.prizePool?.toFixed(2) || 0}
             </p>
           </div>
@@ -1847,14 +1888,12 @@ const BingoGame = () => {
 
       {/* Jackpot Winner Modal */}
       {isJackpotWinnerModalOpen && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] z-50">
-          {/* Animation Canvas */}
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] z-60">
           <canvas
             ref={jackpotCanvasRef}
             className="absolute inset-0 w-full h-full"
           ></canvas>
-          {/* Modal Content */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-8 border-[#f0e14a] p-8 rounded-2xl text-center min-w-[400px] shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-10">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-8 border-[#f0e14a] p-8 rounded-2xl text-center min-w-[400px] shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-65">
             <h2 className="text-[#f0e14a] mb-4 text-5xl font-extrabold uppercase tracking-wider bg-[#1a2a6c] py-3 px-6 rounded-lg shadow-inner">
               JACKPOT EXPLODED!
             </h2>
@@ -1871,9 +1910,7 @@ const BingoGame = () => {
             </div>
             <button
               className="bg-[#e9744c] text-white border-none px-6 py-3 font-bold rounded-lg cursor-pointer text-base transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 shadow-[0_0_15px_rgba(233,116,76,0.5)]"
-              onClick={() => {
-                setIsJackpotWinnerModalOpen(false);
-              }}
+              onClick={() => setIsJackpotWinnerModalOpen(false)}
             >
               Close
             </button>

@@ -128,13 +128,18 @@ const SelectCard = () => {
   }, [selectedCards]);
 
   useEffect(() => {
+    // Save settings to localStorage whenever they change
+    localStorage.setItem("betAmount", betAmount);
+    localStorage.setItem("housePercentage", housePercentage);
+    localStorage.setItem("gamePattern", pattern);
     calculateProfit();
-  }, [betAmount, housePercentage, selectedCards]);
+  }, [betAmount, housePercentage, pattern, selectedCards]);
 
   const calculateProfit = () => {
     const bet = parseFloat(betAmount) || 0;
     const percentage = parseFloat(housePercentage) || 0;
     const selectedCount = selectedCards.length;
+
     if (bet <= 0 || selectedCount <= 0) {
       setProfitData({
         totalPot: "0.00",
@@ -144,10 +149,13 @@ const SelectCard = () => {
       });
       return;
     }
+
     const totalPot = bet * selectedCount;
-    const jackpotAmount = bet * selectedCount * 0.1; // 10% for jackpot
-    const houseFee = (totalPot * percentage) / 100;
-    const prizePool = totalPot - houseFee - jackpotAmount;
+    const jackpotAmount = selectedCount > 0 ? bet : 0;
+    const remainingAmount = totalPot - jackpotAmount;
+    const houseFee = (remainingAmount * percentage) / 100;
+    const prizePool = remainingAmount - houseFee;
+
     setProfitData({
       totalPot: totalPot.toFixed(2),
       houseFee: houseFee.toFixed(2),
@@ -217,15 +225,9 @@ const SelectCard = () => {
     setLoadingGame(true);
 
     try {
-      // Save settings locally
-      localStorage.setItem("betAmount", betAmount);
-      localStorage.setItem("housePercentage", housePercentage);
-      localStorage.setItem("gamePattern", pattern);
-
-      // Prepare payload
       const payload = {
         startGameNumber: 1,
-        numGames: 1, // always create 1 game
+        numGames: 1,
         pattern,
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
@@ -235,11 +237,7 @@ const SelectCard = () => {
 
       console.log("[SelectCard] Creating game with payload:", payload);
 
-      // Call backend service
       const data = await gameService.createSequentialGames(payload);
-      console.log("[SelectCard] Raw create game response:", data);
-
-      // Extract game object
       const game = data?.game || (Array.isArray(data) && data[0]) || data;
       if (!game?._id) {
         throw new Error("Invalid game response structure - missing game ID");
@@ -248,11 +246,9 @@ const SelectCard = () => {
       const gameId = game._id;
       console.log("[SelectCard] Valid game ID found:", gameId);
 
-      // Start the game
       const startedGame = await gameService.startGame(gameId);
       console.log("[SelectCard] Game started response:", startedGame);
 
-      // Handle jackpot contribution
       const jackpotContribution = parseFloat(profitData.jackpotAmount);
       if (jackpotContribution > 0) {
         try {
@@ -271,11 +267,9 @@ const SelectCard = () => {
 
       showAlert("Game started successfully!", "success");
 
-      // Clear local state
       localStorage.removeItem("selectedCards");
       setSelectedCards([]);
 
-      // Navigate to game page
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
     } catch (error) {
       console.error("[SelectCard] Error starting game:", {
@@ -407,11 +401,7 @@ const SelectCard = () => {
               </label>
               <select
                 value={pattern}
-                onChange={(e) => {
-                  const newPattern = e.target.value;
-                  setPattern(newPattern);
-                  localStorage.setItem("gamePattern", newPattern);
-                }}
+                onChange={(e) => setPattern(e.target.value)}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 disabled={loading || !user}
               >
@@ -431,11 +421,7 @@ const SelectCard = () => {
               </label>
               <select
                 value={housePercentage}
-                onChange={(e) => {
-                  const newPercentage = e.target.value;
-                  setHousePercentage(newPercentage);
-                  localStorage.setItem("housePercentage", newPercentage);
-                }}
+                onChange={(e) => setHousePercentage(e.target.value)}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 disabled={loading || !user}
               >
@@ -456,11 +442,7 @@ const SelectCard = () => {
               <input
                 type="number"
                 value={betAmount}
-                onChange={(e) => {
-                  const newBetAmount = e.target.value;
-                  setBetAmount(newBetAmount);
-                  localStorage.setItem("betAmount", newBetAmount);
-                }}
+                onChange={(e) => setBetAmount(e.target.value)}
                 className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-600 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="Enter bet amount"
                 min="1"
