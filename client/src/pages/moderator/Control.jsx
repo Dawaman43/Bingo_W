@@ -401,12 +401,6 @@ export default function ModeratorDashboard() {
           <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-white tracking-tight">
             Moderator Dashboard
           </h2>
-          <button
-            onClick={() => navigate("/logout")}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-all duration-200 text-sm font-medium"
-          >
-            Logout
-          </button>
         </div>
 
         {cashierInfo && (
@@ -801,7 +795,7 @@ export default function ModeratorDashboard() {
                   <button
                     onClick={handleSetWinner}
                     disabled={modalLoading || !selectedWinnerId}
-                    className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center font-medium"
+                    className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center font-medium cursor-pointer"
                   >
                     {modalLoading && (
                       <svg
