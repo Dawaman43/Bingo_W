@@ -62,7 +62,7 @@ const Sidebar = ({ selected, setSelected, isOpen, toggleSidebar }) => {
           )}
           <button
             onClick={toggleSidebar}
-            className="p-2 rounded-lg hover:bg-gray-700 focus:outline-none transition-colors"
+            className="p-2 rounded-lg hover:bg-gray-700 focus:outline-none transition-colors cursor-pointer"
           >
             {isOpen ? (
               <svg
@@ -143,7 +143,7 @@ const Sidebar = ({ selected, setSelected, isOpen, toggleSidebar }) => {
       <div className="p-4 border-t border-gray-700">
         <button
           onClick={logoutUser}
-          className={`flex items-center p-3 rounded-lg w-full transition-colors duration-200 ${
+          className={`flex items-center p-3 rounded-lg w-full transition-colors duration-200 cursor-pointer ${
             isOpen ? "justify-start" : "justify-center"
           } bg-red-600 hover:bg-red-700 shadow-md`}
           title={isOpen ? "" : "Logout"} // Tooltip for collapsed state
