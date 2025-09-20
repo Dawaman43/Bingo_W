@@ -123,14 +123,12 @@ export const addUser = async (req, res, next) => {
   }
 };
 
-// Get all users (only cashier and moderator)
 export const getUsers = async (req, res, next) => {
   try {
-    const requestingUser = req.user; // Assuming req.user is the logged-in user
+    const requestingUser = req.user;
     let users;
 
     if (requestingUser.role === "moderator") {
-      // Find the paired cashier using managedCashier
       const pairedCashier = await User.findById(requestingUser.managedCashier);
 
       if (!pairedCashier) {
@@ -176,7 +174,6 @@ export const deleteUser = async (req, res, next) => {
       return res.status(403).json({ message: "Cannot delete an admin" });
     }
 
-    // Identify linked pair
     let cashier = null;
     let moderator = null;
 
@@ -188,7 +185,6 @@ export const deleteUser = async (req, res, next) => {
       cashier = await User.findById(user.managedCashier).session(session);
     }
 
-    // If deleting a cashier -> cleanup games
     if (cashier) {
       const gameIds = await Game.find({ cashierId: cashier._id })
         .distinct("_id")
@@ -203,7 +199,6 @@ export const deleteUser = async (req, res, next) => {
       }
     }
 
-    // Delete both sides of the pair safely
     if (cashier) {
       await User.findByIdAndDelete(cashier._id).session(session);
     }
@@ -226,7 +221,6 @@ export const deleteUser = async (req, res, next) => {
   }
 };
 
-// Get all games (admin only)
 export const getAllGames = async (req, res, next) => {
   try {
     const games = await Game.find().sort({ gameNumber: 1 });
@@ -238,7 +232,6 @@ export const getAllGames = async (req, res, next) => {
   }
 };
 
-// Get next pending game
 export const getNextPendingGame = async (req, res, next) => {
   try {
     const game = await Game.findOne({ status: "pending" })
@@ -254,7 +247,6 @@ export const getNextPendingGame = async (req, res, next) => {
   }
 };
 
-// Get all cards
 export const getAllCards = async (req, res, next) => {
   try {
     const cards = await Card.find().sort({ card_number: 1 });
@@ -265,7 +257,6 @@ export const getAllCards = async (req, res, next) => {
   }
 };
 
-// Create sequential games
 export const createSequentialGames = async (req, res, next) => {
   try {
     const {
@@ -343,25 +334,27 @@ export const createSequentialGames = async (req, res, next) => {
 
     // Mark future winner as used
     if (futureWinner) {
-      console.log(`[createSequentialGames] futureWinner BEFORE saving:`, {
-        playableNumbers: futureWinner.playableNumbers,
-        forcedCallSequence: futureWinner.forcedCallSequence,
-        pattern: futureWinner.pattern,
-      });
+      await FutureWinner.findByIdAndUpdate(
+        futureWinner._id,
+        { $set: { used: true } },
+        { new: true }
+      );
+      console.log(
+        `[createSequentialGames] Marked FutureWinner for game ${gameNumber} as used`
+      );
     } else {
       console.log(
-        `[createSequentialGame] 🎲 No future winner, Game ${gameNumber} is random`
+        `[createSequentialGames] 🎲 No future winner, Game ${gameNumber} is random`
       );
     }
 
     res.json({ message: "Game created successfully", game });
   } catch (err) {
-    console.error("[createSequentialGame] Error:", err);
+    console.error("[createSequentialGames] Error:", err);
     next(err);
   }
 };
 
-// Moderator configure next game number
 export const moderatorConfigureNextGameNumber = async (req, res, next) => {
   try {
     const { startNumber } = req.body;
@@ -434,7 +427,6 @@ export const moderatorConfigureNextGameNumber = async (req, res, next) => {
   }
 };
 
-// Get finished games
 export const getFinishedGames = async (req, res, next) => {
   try {
     const finishedGames = await Game.find({ status: "completed" })
@@ -454,7 +446,6 @@ export const getFinishedGames = async (req, res, next) => {
   }
 };
 
-// Get game logs
 export const getGameLogs = async (req, res, next) => {
   try {
     await getCashierIdFromUser(req, res, () => {});
@@ -529,7 +520,6 @@ export const configureFutureWinners = async (req, res) => {
         numbers: card.numbers,
       });
 
-      // Convert "all" to a real pattern
       let chosenPattern = pattern;
       if (pattern === "all") {
         const easyPatterns = [
@@ -546,12 +536,11 @@ export const configureFutureWinners = async (req, res) => {
         );
       }
 
-      // Get numbers for the chosen pattern
       const { selectedNumbers, selectedIndices } = getNumbersForPattern(
         card.numbers,
         chosenPattern,
         [],
-        true // select full line
+        true
       );
 
       console.log(
@@ -564,7 +553,6 @@ export const configureFutureWinners = async (req, res) => {
         throw new Error(`No numbers returned for pattern "${chosenPattern}"`);
       }
 
-      // Generate quick win sequence
       const forcedCallSequence = generateQuickWinSequence(
         selectedNumbers.map(Number),
         selectedNumbers.length,
@@ -577,7 +565,6 @@ export const configureFutureWinners = async (req, res) => {
         forcedCallSequence
       );
 
-      // Sync forced sequence into the Game document safely
       const gameDoc = await Game.findOneAndUpdate(
         { gameNumber },
         {
@@ -613,7 +600,7 @@ export const configureFutureWinners = async (req, res) => {
         fullCardNumbers: card.numbers.map((row) =>
           row.map((v) => (v === "FREE" ? null : v))
         ),
-        playableNumbers: selectedNumbers, // only what's needed to win
+        playableNumbers: selectedNumbers,
         forcedCallSequence,
         pattern: chosenPattern,
         jackpotEnabled,

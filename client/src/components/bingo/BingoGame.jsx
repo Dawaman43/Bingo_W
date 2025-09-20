@@ -9,6 +9,7 @@ import SoundService from "../../services/sound";
 import io from "socket.io-client";
 
 const BingoGame = () => {
+  const [bingoStatus, setBingoStatus] = useState(null);
   const navigate = useNavigate();
   const { user } = useAuth();
   const { language, translations, toggleLanguage } =
@@ -115,7 +116,7 @@ const BingoGame = () => {
       console.log("Opening jackpot winner modal");
       setIsJackpotActive(false);
       setJackpotCandidates([]);
-      setJackpotAmount(0);
+      setJackpotAmount(100); // Set to a base amount instead of 0
       SoundService.playSound("jackpot_congrats").catch((err) => {
         console.error("Failed to play jackpot_congrats sound:", err);
         setCallError("Failed to play jackpot sound");
@@ -139,14 +140,19 @@ const BingoGame = () => {
     }
   }, [gameData?.cashierId]);
 
-  // Preload sounds
   useEffect(() => {
+    let isMounted = true;
     SoundService.preloadSounds(language).catch((err) => {
-      console.error("Failed to preload sounds:", err);
-      setCallError("Failed to load audio files");
-      setIsErrorModalOpen(true);
+      if (isMounted) {
+        console.error("Failed to preload sounds:", err);
+        setCallError("Failed to load audio files");
+        setIsErrorModalOpen(true);
+      }
     });
-  }, [language]);
+    return () => {
+      isMounted = false;
+    };
+  }, []); // Remove `language` dependency if sounds are language-agnostic
   // Load game data
   useEffect(() => {
     const gameId = searchParams.get("id");
@@ -445,10 +451,12 @@ const BingoGame = () => {
       }
     };
   }, [isJackpotWinnerModalOpen]);
-
-  // Existing useEffect hooks
   useEffect(() => {
-    SoundService.preloadSounds(language);
+    SoundService.preloadSounds(language).catch((err) => {
+      console.error("Failed to preload sounds:", err);
+      setCallError("Failed to load audio files. Sound may not play.");
+      setIsErrorModalOpen(true);
+    });
   }, [language]);
 
   useEffect(() => {
@@ -690,7 +698,6 @@ const BingoGame = () => {
         await fetchJackpotCandidates();
       } else {
         setJackpotCandidates([]);
-        setJackpotAmount(0);
       }
     } catch (error) {
       setCallError(error.message || "Failed to toggle jackpot");
@@ -783,11 +790,10 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
     }
   };
-
-  const getNumbersForPattern = (cardNumbers, pattern) => {
+  const getNumbersForPattern = (cardNumbers, pattern, calledNumbers = []) => {
     if (!cardNumbers || !Array.isArray(cardNumbers)) {
       console.warn("[BingoGame] Invalid cardNumbers:", cardNumbers);
-      return [];
+      return { numbers: [], selectedIndices: [], rowIndex: null };
     }
 
     const grid = [];
@@ -801,14 +807,45 @@ const BingoGame = () => {
       }
     }
 
-    const numbers = [];
+    let numbers = [];
+    let selectedIndices = [];
+    let rowIndex = null;
 
     try {
-      if (pattern === "four_corners_center") {
-        numbers.push(grid[0][0], grid[0][4], grid[4][0], grid[4][4]);
+      if (pattern === "horizontal_line") {
+        for (let row = 0; row < grid.length; row++) {
+          const rowNumbers = grid[row].filter((num) => num !== "FREE");
+          const isRowComplete = rowNumbers.every((num) =>
+            calledNumbers.includes(Number(num))
+          );
+          if (isRowComplete) {
+            rowIndex = row;
+            numbers = rowNumbers.map(Number);
+            selectedIndices = Array.from({ length: 5 }, (_, i) => row * 5 + i);
+            console.log(
+              `[getNumbersForPattern] ✅ Found complete row ${row}: [${numbers.join(
+                ", "
+              )}]`
+            );
+            break;
+          }
+        }
+        if (!rowIndex) {
+          console.warn(
+            `[getNumbersForPattern] ⚠️ No complete row found, using default row 0`
+          );
+          numbers = grid[0].filter((num) => num !== "FREE").map(Number);
+          selectedIndices = [0, 1, 2, 3, 4];
+        }
+      } else if (pattern === "four_corners_center") {
+        numbers = [grid[0][0], grid[0][4], grid[4][0], grid[4][4]];
         if (grid[2][2] !== "FREE") numbers.push(grid[2][2]);
+        selectedIndices = [0, 4, 20, 24, 12].filter(
+          (_, i) => numbers[i] !== "FREE"
+        );
       } else if (pattern === "inner_corners") {
-        numbers.push(grid[1][1], grid[1][3], grid[3][1], grid[3][3]);
+        numbers = [grid[1][1], grid[1][3], grid[3][1], grid[3][3]];
+        selectedIndices = [6, 8, 16, 18];
       } else if (pattern === "cross") {
         for (let row = 0; row < 5; row++) {
           if (grid[row][2] !== "FREE") numbers.push(grid[row][2]);
@@ -816,43 +853,58 @@ const BingoGame = () => {
         for (let col = 0; col < 5; col++) {
           if (col !== 2 && grid[2][col] !== "FREE") numbers.push(grid[2][col]);
         }
+        selectedIndices = [2, 7, 12, 17, 22, 10, 11, 13, 14].filter(
+          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
+        );
       } else if (pattern === "main_diagonal") {
         for (let i = 0; i < 5; i++) {
           if (grid[i][i] !== "FREE") numbers.push(grid[i][i]);
         }
+        selectedIndices = [0, 6, 12, 18, 24].filter(
+          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
+        );
       } else if (pattern === "other_diagonal") {
         for (let i = 0; i < 5; i++) {
           if (grid[i][4 - i] !== "FREE") numbers.push(grid[i][4 - i]);
         }
-      } else if (pattern === "horizontal_line") {
-        const targetRow = 2;
-        for (let col = 0; col < 5; col++) {
-          if (grid[targetRow][col] !== "FREE") {
-            numbers.push(grid[targetRow][col]);
-          }
-        }
+        selectedIndices = [4, 8, 12, 16, 20].filter(
+          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
+        );
       } else if (pattern === "vertical_line") {
         const targetCol = 2;
         for (let row = 0; row < 5; row++) {
-          if (grid[row][targetCol] !== "FREE") {
+          if (grid[row][targetCol] !== "FREE")
             numbers.push(grid[row][targetCol]);
-          }
         }
+        selectedIndices = [2, 7, 12, 17, 22].filter(
+          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
+        );
       } else if (pattern === "all") {
         for (let row = 0; row < 5; row++) {
           for (let col = 0; col < 5; col++) {
-            if (grid[row][col] !== "FREE") {
-              numbers.push(grid[row][col]);
-            }
+            if (grid[row][col] !== "FREE") numbers.push(grid[row][col]);
           }
         }
+        selectedIndices = Array.from({ length: 25 }, (_, i) => i).filter(
+          (i) => grid[Math.floor(i / 5)][i % 5] !== "FREE"
+        );
       }
-      return numbers
+
+      numbers = numbers
         .filter((n) => typeof n === "number" && n >= 1 && n <= 75)
-        .map((n) => Number(n));
+        .map(Number);
+
+      console.log(
+        `[getNumbersForPattern] ✅ Pattern "${pattern}"${
+          rowIndex != null ? ` (row ${rowIndex})` : ""
+        } → Numbers: [${numbers.join(", ")}], Indices: [${selectedIndices.join(
+          ", "
+        )}]`
+      );
+      return { numbers, selectedIndices, rowIndex };
     } catch (error) {
       console.error("[BingoGame] Error in getNumbersForPattern:", error);
-      return [];
+      return { numbers: [], selectedIndices: [], rowIndex: null };
     }
   };
 
@@ -871,7 +923,7 @@ const BingoGame = () => {
       isCallingNumber ||
       !isPlaying ||
       calledNumbers.length >= 75 ||
-      gameData?.status !== "active" // Check if game is not active
+      gameData?.status !== "active"
     ) {
       if (calledNumbers.length >= 75) {
         console.log("[BingoGame] All numbers called - finishing game");
@@ -953,11 +1005,15 @@ const BingoGame = () => {
             (c) => c.id === gameData.moderatorWinnerCardId
           );
           if (winningCard) {
-            // Extract numbers from winner card, excluding FREE
-            const winningNumbers = getNumbersForPattern(
+            // ✅ FIX: use .numbers from getNumbersForPattern
+            const { numbers: patternNumbers } = getNumbersForPattern(
               winningCard.numbers.flat(),
               gameData.pattern
-            ).filter((num) => !calledNumbers.includes(num));
+            );
+
+            const winningNumbers = patternNumbers.filter(
+              (num) => !calledNumbers.includes(num)
+            );
 
             console.log(
               "[BingoGame] Winner numbers available:",
@@ -967,10 +1023,10 @@ const BingoGame = () => {
             if (winningNumbers.length > 0) {
               // Bias towards winner numbers (3:1 ratio)
               numberPool = [
-                ...winningNumbers, // Winner numbers
-                ...winningNumbers, // Winner numbers
-                ...winningNumbers, // Winner numbers
-                ...availableNumbers, // Random numbers
+                ...winningNumbers,
+                ...winningNumbers,
+                ...winningNumbers,
+                ...availableNumbers,
               ];
             }
           }
@@ -1048,7 +1104,6 @@ const BingoGame = () => {
               const letter = letters[col];
               const number = card.numbers[letter][row];
 
-              // Mark if this card has the called number (skip FREE)
               if (typeof number === "number" && number === calledNumber) {
                 newCard.markedPositions[letter][row] = true;
               }
@@ -1087,7 +1142,6 @@ const BingoGame = () => {
         stack: error.stack,
       });
 
-      // Enhanced error handling
       let userMessage = "Failed to call number";
 
       if (error.message.includes("Invalid number")) {
@@ -1113,7 +1167,6 @@ const BingoGame = () => {
       setCallError(userMessage);
       setIsErrorModalOpen(true);
 
-      // Auto-stop on critical errors
       if (
         error.message.includes("Invalid number") ||
         error.message.includes("Game is over") ||
@@ -1203,13 +1256,13 @@ const BingoGame = () => {
 
     await handleCallNumber(cleanNumber);
   };
-
   const handlePlayPause = async () => {
     const willPause = isPlaying;
+    // Play sound immediately for instant feedback
+    SoundService.playSound(willPause ? "game_pause" : "game_start");
     setIsPlaying((prev) => !prev);
-    setIsAutoCall(false); // Disable auto-call immediately
+    setIsAutoCall(false);
 
-    // Clear any existing auto-call interval
     if (autoIntervalRef.current) {
       clearInterval(autoIntervalRef.current);
       autoIntervalRef.current = null;
@@ -1219,13 +1272,11 @@ const BingoGame = () => {
     if (!gameData?._id) {
       setCallError("Cannot pause/play game: Game ID is missing");
       setIsErrorModalOpen(true);
-      setIsPlaying(willPause); // Revert state on error
+      setIsPlaying(willPause);
       return;
     }
 
     const newStatus = willPause ? "paused" : "active";
-
-    // Skip API call if status is already what we want
     if (gameData.status === newStatus) {
       console.log(`[BingoGame] Game already ${newStatus}, skipping update`);
       return;
@@ -1240,15 +1291,11 @@ const BingoGame = () => {
         `[BingoGame] Game status updated to ${newStatus}`,
         updatedGame
       );
-
       setGameData((prev) => ({
         ...prev,
         status: newStatus,
       }));
-
-      SoundService.playSound(willPause ? "game_pause" : "game_start");
     } catch (error) {
-      // Handle 400 STATUS_UNCHANGED gracefully
       if (error.response?.data?.errorCode === "STATUS_UNCHANGED") {
         console.warn(`[BingoGame] Game already ${newStatus}`);
         setGameData((prev) => ({
@@ -1257,11 +1304,10 @@ const BingoGame = () => {
         }));
         return;
       }
-
       console.error("[BingoGame] Error updating game status:", error);
       setCallError(error.message || "Failed to update game status");
       setIsErrorModalOpen(true);
-      setIsPlaying(willPause); // Revert state on error
+      setIsPlaying(willPause);
     }
   };
 
@@ -1346,100 +1392,91 @@ const BingoGame = () => {
     if (!isValidCardInGame) {
       setCallError(`Card ${numericCardId} is not playing in this game`);
       setIsErrorModalOpen(true);
-      SoundService.playSound("you_didnt_win");
+      try {
+        await SoundService.playSound("you_didnt_win");
+      } catch (err) {
+        console.error("Failed to play you_didnt_win sound:", err);
+      }
       return;
     }
 
     try {
-      console.log(
-        `[BingoGame] Checking bingo for card ${numericCardId} in game ${gameData._id}`
-      );
       const response = await checkBingo(gameData._id, numericCardId);
-      console.log(`[BingoGame] checkBingo response:`, response);
-
       setGameData(response.game);
 
-      if (response.isBingo) {
-        // Find the winning card's numbers
-        const winningCard = gameData.selectedCards.find(
-          (card) => card.id === numericCardId
-        );
-        const cardNumbers =
-          winningCard?.numbers?.flat().filter((num) => num !== "FREE") || [];
+      if (response.isBingo && !response.lateCall) {
+        const patternNumbers = getNumbersForPattern(
+          response.game.winnerCardNumbers?.flat() || [],
+          response.winningPattern
+        ).numbers.map(Number); // Winning numbers
 
-        // Determine the specific pattern completed by the last called number
-        const lastCalledNumber = calledNumbers[calledNumbers.length - 1];
-        let specificWinningPattern =
-          response.winningPattern || gameData.pattern || "unknown";
-        let patternNumbers = [];
-
-        if (response.validBingoPatterns && lastCalledNumber) {
-          // Prioritize inner_corners first, then other patterns
-          const prioritizedPatterns = [
-            "inner_corners",
-            "four_corners_center",
-            "main_diagonal",
-            "other_diagonal",
-            "horizontal_line",
-            "vertical_line",
-          ];
-          for (const pattern of prioritizedPatterns) {
-            if (response.validBingoPatterns.includes(pattern)) {
-              const numbersForPattern = getNumbersForPattern(
-                winningCard.numbers,
-                pattern
-              );
-              // Check if all numbers for the pattern are called and include the last called number
-              const allPatternNumbersCalled = numbersForPattern.every((num) =>
-                calledNumbers.includes(Number(num))
-              );
-              if (
-                allPatternNumbersCalled &&
-                numbersForPattern.includes(lastCalledNumber)
-              ) {
-                specificWinningPattern = pattern;
-                patternNumbers = numbersForPattern;
-                break;
-              }
-            }
-          }
-        }
-
-        // Calculate called and remaining numbers based on the winning pattern
-        const calledNumbersOnCard =
-          patternNumbers.length > 0
-            ? patternNumbers
-            : cardNumbers.filter((num) => calledNumbers.includes(Number(num)));
-        const remainingNumbersOnCard = cardNumbers.filter(
-          (num) => !calledNumbersOnCard.includes(Number(num))
+        const calledNumbers = response.game.calledNumbers || [];
+        const otherCalledNumbers = calledNumbers.filter(
+          (n) => !patternNumbers.includes(Number(n))
         );
 
-        setWinningCards([
-          {
-            cardId: numericCardId,
-            calledNumbers: calledNumbersOnCard,
-            remainingNumbers: remainingNumbersOnCard,
-            winningPattern: specificWinningPattern,
-          },
-        ]);
-        setWinningPattern(specificWinningPattern);
+        setBingoStatus({
+          lateCall: false,
+          pattern: response.winningPattern,
+          winningNumbers: patternNumbers,
+          otherCalledNumbers,
+          prize: gameData?.prizePool?.toFixed(2),
+        });
+
         setIsWinnerModalOpen(true);
         setIsGameOver(true);
         setIsPlaying(false);
         setIsAutoCall(false);
-        setJackpotAmount(response.winner?.prize || gameData.prizePool || 0);
-        SoundService.playSound("winner");
+
+        try {
+          await SoundService.playSound("winner");
+        } catch (err) {
+          console.error("Failed to play winner sound:", err);
+        }
+      } else if (response.lateCall && response.wouldHaveWon) {
+        setBingoStatus({
+          lateCall: true,
+          lateCallMessage: response.lateCallMessage,
+          wouldHaveWon: response.wouldHaveWon,
+        });
+        setIsWinnerModalOpen(true);
+        setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
+
+        try {
+          await SoundService.playSound("late_call");
+        } catch (err) {
+          console.error("Failed to play late_call sound:", err);
+          try {
+            await SoundService.playSound("you_didnt_win");
+          } catch (err2) {
+            console.error("Failed fallback you_didnt_win sound:", err2);
+          }
+        }
+
+        // No bingo
       } else {
         setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
         setCallError(`No bingo for card ${numericCardId}`);
         setIsErrorModalOpen(true);
-        SoundService.playSound("you_didnt_win");
+        setBingoStatus({
+          lateCall: false,
+          pattern: null,
+          numbersMatched: 0,
+          numbersLeft: null,
+        });
+
+        try {
+          await SoundService.playSound("you_didnt_win");
+        } catch (err) {
+          console.error("Failed to play you_didnt_win sound:", err);
+        }
       }
     } catch (error) {
       let userFriendlyMessage =
         error.response?.data?.message ||
         error.message ||
         "An unexpected error occurred";
+
       if (
         userFriendlyMessage.includes("Card not in game") ||
         userFriendlyMessage.includes("Card not found")
@@ -1448,11 +1485,17 @@ const BingoGame = () => {
           gameData?.gameNumber || "unknown"
         }`;
       }
+
       setCallError(userFriendlyMessage);
       setIsErrorModalOpen(true);
-      SoundService.playSound("you_didnt_win");
+      try {
+        await SoundService.playSound("you_didnt_win");
+      } catch (err) {
+        console.error("Failed to play you_didnt_win sound:", err);
+      }
     }
   };
+
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch((err) => {
@@ -1854,35 +1897,103 @@ const BingoGame = () => {
       )}
 
       {isWinnerModalOpen && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
-          <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner!</h2>
-          <div className="w-60 aspect-square my-2 mx-auto">
-            <canvas ref={canvasRef}></canvas>
-          </div>
-          <p className="mb-4 text-lg text-white">
-            Game #{gameData?.gameNumber}: Card {winningCards[0]?.cardId} won{" "}
-            {gameData?.prizePool?.toFixed(2)} BIRR!
-          </p>
-          <p className="text-[#f0e14a] text-sm mb-2">
-            Winning Pattern:{" "}
-            {winningCards[0]?.winningPattern?.replace("_", " ") || "unknown"}
-          </p>
-          {winningCards[0]?.calledNumbers?.length > 0 && (
-            <p className="text-white text-sm mb-2">
-              Called Numbers: {winningCards[0].calledNumbers.join(", ")}
-            </p>
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[350px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          {bingoStatus?.lateCall ? (
+            <div className="space-y-4">
+              <div className="text-3xl mb-4 flex items-center justify-center gap-2">
+                <span className="text-yellow-400">🕒</span>
+                <span className="text-yellow-400 font-bold">LATE CALL!</span>
+              </div>
+              <div className="bg-yellow-900/50 border border-yellow-400 p-3 rounded-lg">
+                <h3 className="text-yellow-200 text-lg font-semibold mb-2">
+                  You Missed Your Chance! ⏰
+                </h3>
+                <p className="text-yellow-100 text-sm mb-2">
+                  {bingoStatus.lateCallMessage ||
+                    "You missed your chance to claim the win!"}
+                </p>
+                {bingoStatus.wouldHaveWon && (
+                  <div className="text-xs text-yellow-200 space-y-1">
+                    <p>
+                      <strong>Would have won with:</strong>{" "}
+                      {bingoStatus.wouldHaveWon.pattern?.replace("_", " ") ||
+                        "unknown"}
+                    </p>
+                    <p>
+                      <strong>On call:</strong> #
+                      {bingoStatus.wouldHaveWon.callIndex}
+                    </p>
+                    <p>
+                      <strong>With number:</strong>{" "}
+                      {bingoStatus.wouldHaveWon.completingNumber}
+                    </p>
+                    <p className="text-yellow-300">
+                      <strong>Prize:</strong> {gameData?.prizePool?.toFixed(2)}{" "}
+                      BIRR
+                    </p>
+                  </div>
+                )}
+              </div>
+              <button
+                className="bg-yellow-600 text-white border-none px-6 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-yellow-500 w-full"
+                onClick={() => {
+                  setIsWinnerModalOpen(false);
+                  setBingoStatus(null);
+                  setCallError(null);
+                }}
+              >
+                I Understand
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner! 🎉</h2>
+              <p className="text-white text-lg">
+                Congratulations! Card {cardId} won with pattern{" "}
+                {bingoStatus.pattern.replace("_", " ")}!
+              </p>
+
+              {/* Winning and other numbers */}
+              <div className="text-white text-sm mb-2 text-left">
+                {bingoStatus.winningNumbers && (
+                  <p>
+                    <strong>Winning numbers:</strong>{" "}
+                    {bingoStatus.winningNumbers.map((n) => (
+                      <span key={n} className="text-green-400 font-bold mr-1">
+                        {n}
+                      </span>
+                    ))}
+                  </p>
+                )}
+                {bingoStatus.otherCalledNumbers &&
+                  bingoStatus.otherCalledNumbers.length > 0 && (
+                    <p>
+                      <strong>Other numbers called:</strong>{" "}
+                      {bingoStatus.otherCalledNumbers.map((n) => (
+                        <span key={n} className="text-white mr-1">
+                          {n}
+                        </span>
+                      ))}
+                    </p>
+                  )}
+              </div>
+
+              <p className="text-yellow-300 text-lg">
+                <strong>Prize:</strong> {bingoStatus.prize} BIRR
+              </p>
+
+              <button
+                className="bg-[#e9744c] text-white border-none px-6 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0854c] w-full"
+                onClick={() => {
+                  setIsWinnerModalOpen(false);
+                  setBingoStatus(null);
+                  setCallError(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
           )}
-          {winningCards[0]?.remainingNumbers?.length > 0 && (
-            <p className="text-white text-sm mb-2">
-              Remaining Numbers: {winningCards[0].remainingNumbers.join(", ")}
-            </p>
-          )}
-          <button
-            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
-            onClick={() => setIsWinnerModalOpen(false)}
-          >
-            Close
-          </button>
         </div>
       )}
 

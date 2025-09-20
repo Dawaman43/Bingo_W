@@ -237,7 +237,173 @@ export const checkSpecificLineCompletion = (
 
   return isLineComplete(markedGrid, lineInfo.lineType);
 };
+// 🔑 Check if a card would have won (for late call detection)
+export const checkIfCardWouldHaveWon = async (
+  cardNumbers,
+  calledNumbers,
+  patternsToCheck,
+  lastCalledNumber
+) => {
+  const validBingoPatterns = [];
+  let winningPattern = null;
 
+  for (const pattern of patternsToCheck) {
+    try {
+      // Get specific line info for this pattern
+      const specificLineInfo = getSpecificLineInfo(
+        cardNumbers,
+        pattern,
+        lastCalledNumber
+      );
+
+      if (!specificLineInfo) {
+        continue; // Last number not in this pattern
+      }
+
+      // Check if the specific line is complete NOW
+      const currentLineComplete = checkSpecificLineCompletion(
+        cardNumbers,
+        calledNumbers,
+        pattern,
+        specificLineInfo
+      );
+
+      if (!currentLineComplete) {
+        continue; // Specific line not complete
+      }
+
+      // For late call detection, we don't check previous state
+      // Just confirm it would have been a valid win
+      validBingoPatterns.push(pattern);
+
+      if (!winningPattern) {
+        winningPattern = pattern; // Take first valid pattern
+      }
+    } catch (err) {
+      console.error(
+        `[checkIfCardWouldHaveWon] Error with pattern ${pattern}:`,
+        err
+      );
+    }
+  }
+
+  return {
+    isBingo: validBingoPatterns.length > 0,
+    winningPattern: winningPattern || null,
+    validBingoPatterns,
+  };
+};
+
+export const detectLateCallOpportunity = async (
+  cardNumbers,
+  calledNumbers,
+  calledNumbersLog,
+  patterns
+) => {
+  let hasMissedOpportunity = false;
+  let earliestCallIndex = Infinity;
+  let details = null;
+
+  for (const pattern of patterns) {
+    const [isComplete, lineInfo] = checkCardBingo(
+      cardNumbers,
+      calledNumbers,
+      pattern
+    );
+    if (!isComplete) continue;
+
+    // Use lineInfo to determine specific line indices for patterns like horizontal_line or vertical_line
+    const specificLineIndices =
+      (pattern === "horizontal_line" || pattern === "vertical_line") &&
+      lineInfo?.lineIndex != null
+        ? [lineInfo.lineIndex]
+        : [];
+
+    // Use includeMarked: true to get all numbers in the pattern
+    const { numbers: patternNumbers } = getNumbersForPattern(
+      cardNumbers,
+      pattern,
+      calledNumbers,
+      true, // Select specific line if applicable
+      specificLineIndices, // Pass the line index from checkCardBingo
+      true // Include marked numbers to get the actual pattern numbers
+    );
+
+    const patternNumbersNumeric = patternNumbers
+      .map(Number)
+      .filter((num) => !isNaN(num) && num !== "FREE");
+    if (patternNumbersNumeric.length === 0) {
+      console.warn(
+        `[detectLateCallOpportunity] No valid numbers for pattern ${pattern}`
+      );
+      continue;
+    }
+
+    // Find the call indices for the pattern numbers
+    const calledPatternNumbers = calledNumbersLog.filter((log) =>
+      patternNumbersNumeric.includes(log.number)
+    );
+    if (calledPatternNumbers.length === patternNumbersNumeric.length) {
+      const callIndices = calledPatternNumbers.map((log) =>
+        calledNumbers.indexOf(log.number)
+      );
+      if (callIndices.length === 0) continue;
+
+      const completingCallIndex = Math.max(...callIndices);
+      const completingNumber = calledNumbers[completingCallIndex];
+
+      // Ensure the pattern wasn't completed by the last call
+      const lastCalledNumber = calledNumbers[calledNumbers.length - 1];
+      if (completingCallIndex < calledNumbers.length - 1) {
+        // Late call: pattern was completed before the last call
+        hasMissedOpportunity = true;
+        if (completingCallIndex < earliestCallIndex) {
+          earliestCallIndex = completingCallIndex;
+          details = {
+            pattern,
+            completingNumber,
+            callIndex: completingCallIndex + 1,
+            validPatterns: [pattern],
+            rowIndex: lineInfo?.lineIndex != null ? lineInfo.lineIndex : null,
+          };
+        }
+      }
+    }
+  }
+
+  if (hasMissedOpportunity) {
+    const message = `You won before with ${details.pattern.replace(
+      "_",
+      " "
+    )} pattern${
+      details.rowIndex != null ? ` on row ${details.rowIndex + 1}` : ""
+    } on call #${details.callIndex} (number ${details.completingNumber})`;
+    console.log("[detectLateCallOpportunity] Result:", {
+      hasMissedOpportunity,
+      message,
+      details,
+      earliestCallIndex,
+    });
+    return {
+      hasMissedOpportunity,
+      message,
+      details,
+      earliestCallIndex,
+    };
+  }
+
+  return { hasMissedOpportunity: false };
+};
+
+const findCompleteRow = (cardNumbers, calledNumbers) => {
+  for (let row = 0; row < 5; row++) {
+    const isRowComplete = cardNumbers[row].every(
+      (num) => num === "FREE" || calledNumbers.includes(num)
+    );
+    if (isRowComplete) return row;
+  }
+  return 0;
+};
 export const checkCardBingo = (
   cardNumbers,
   calledNumbers,

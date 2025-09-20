@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import ModeratorLayout from "../../components/moderator/ModeratorLayout";
 import gameService from "../../services/game";
 import moderatorService from "../../services/moderator";
+import { toast } from "react-toastify";
 
 export default function ModeratorDashboard() {
   const navigate = useNavigate();
@@ -27,9 +28,17 @@ export default function ModeratorDashboard() {
   const [allCards, setAllCards] = useState([]);
   const [futureWinnerModalOpen, setFutureWinnerModalOpen] = useState(false);
   const [futureWinners, setFutureWinners] = useState([
-    { gameNumber: "", cardId: "", jackpotEnabled: true },
+    { gameNumber: "", cardId: "", jackpotEnabled: true, pattern: "all" },
   ]);
   const [cashierInfo, setCashierInfo] = useState(null);
+  const [reconfigureModalOpen, setReconfigureModalOpen] = useState(false);
+  const [reconfigureWinner, setReconfigureWinner] = useState(null);
+  const [reconfigureForm, setReconfigureForm] = useState({
+    gameNumber: "",
+    cardId: "",
+    jackpotEnabled: true,
+    pattern: "all",
+  });
 
   const fetchCashierInfo = async () => {
     try {
@@ -49,10 +58,14 @@ export default function ModeratorDashboard() {
     setError(null);
     try {
       const cashierId = await fetchCashierInfo();
+      console.log("[fetchGames] Fetched cashierId:", cashierId);
+      if (!cashierId) {
+        throw new Error("No cashierId returned from fetchCashierInfo");
+      }
+
       console.log("[fetchGames] Fetching report for cashierId:", cashierId);
       const report = await moderatorService.getCashierReport(cashierId);
       console.log("[fetchGames] Fetched report:", report);
-      console.log("[fetchGames] Raw games array:", report.games);
       const allGames = report.games || [];
       if (!Array.isArray(allGames)) {
         throw new Error("No valid games data returned from service");
@@ -66,6 +79,7 @@ export default function ModeratorDashboard() {
           moderatorWinnerCardId: g.moderatorWinnerCardId,
         }))
       );
+
       setActiveGames(allGames.filter((g) => g.status === "active"));
       setFinishedGames(
         allGames.filter(
@@ -73,10 +87,55 @@ export default function ModeratorDashboard() {
         )
       );
       setPendingGames(allGames.filter((g) => g.status === "pending"));
-      setConfiguredWinnerGames(allGames.filter((g) => g.moderatorWinnerCardId));
+
+      let futureWinners = [];
+      try {
+        console.log(
+          "[fetchGames] Fetching future winners for cashierId:",
+          cashierId
+        );
+        futureWinners = await moderatorService.getFutureWinners(cashierId);
+        console.log("[fetchGames] Fetched future winners:", futureWinners);
+      } catch (err) {
+        console.warn(
+          "[fetchGames] Failed to fetch future winners, using empty array:",
+          {
+            message: err.message,
+            response: err.response?.data,
+          }
+        );
+        futureWinners = [];
+      }
+
+      const configuredFutureWinners = futureWinners.filter((winner) => {
+        const game = allGames.find((g) => g.gameNumber === winner.gameNumber);
+        return !game || game.status === "pending";
+      });
+
+      setConfiguredWinnerGames(
+        configuredFutureWinners.map((winner) => ({
+          _id: winner._id,
+          gameNumber: winner.gameNumber,
+          cardId: winner.cardId,
+          pattern: winner.pattern || "Not set",
+          jackpotEnabled: winner.jackpotEnabled,
+          status: allGames.find((g) => g.gameNumber === winner.gameNumber)
+            ? "pending"
+            : "not created",
+        }))
+      );
     } catch (err) {
-      setError("Failed to fetch games. Please try again.");
-      console.error("[fetchGames] Error:", err);
+      const errorMessage =
+        err.message ||
+        "Failed to fetch games or future winners. Please try again.";
+      setError(errorMessage);
+      console.error("[fetchGames] Detailed Error:", {
+        message: err.message,
+        stack: err.stack,
+        response: err.response
+          ? { status: err.response.status, data: err.response.data }
+          : null,
+      });
     } finally {
       setLoading(false);
     }
@@ -96,6 +155,10 @@ export default function ModeratorDashboard() {
   useEffect(() => {
     fetchGames();
     fetchAllCards();
+    const intervalId = setInterval(() => {
+      fetchGames();
+    }, 5000);
+    return () => clearInterval(intervalId);
   }, []);
 
   const handleToggleJackpot = async (gameId, currentEnabled) => {
@@ -264,7 +327,9 @@ export default function ModeratorDashboard() {
   };
 
   const openFutureWinnerModal = () => {
-    setFutureWinners([{ gameNumber: "", cardId: "", jackpotEnabled: true }]);
+    setFutureWinners([
+      { gameNumber: "", cardId: "", jackpotEnabled: true, pattern: "all" },
+    ]);
     setModalError(null);
     setFutureWinnerModalOpen(true);
   };
@@ -272,7 +337,7 @@ export default function ModeratorDashboard() {
   const handleAddWinner = () => {
     setFutureWinners([
       ...futureWinners,
-      { gameNumber: "", cardId: "", jackpotEnabled: true },
+      { gameNumber: "", cardId: "", jackpotEnabled: true, pattern: "all" },
     ]);
   };
 
@@ -294,7 +359,6 @@ export default function ModeratorDashboard() {
       futureWinners
     );
 
-    // Ensure futureWinners is an array and not empty
     if (!Array.isArray(futureWinners) || futureWinners.length === 0) {
       setModalError("No valid winner configurations provided.");
       console.error(
@@ -304,7 +368,6 @@ export default function ModeratorDashboard() {
       return;
     }
 
-    // Validate each winner entry
     const invalidWinner = futureWinners.find(
       (winner) => !winner.gameNumber || !winner.cardId
     );
@@ -319,7 +382,6 @@ export default function ModeratorDashboard() {
       return;
     }
 
-    // Format winners for the payload
     const formattedWinners = futureWinners.map((winner, index) => {
       const gameNumber = parseInt(winner.gameNumber, 10);
       const cardId = parseInt(winner.cardId, 10);
@@ -329,21 +391,17 @@ export default function ModeratorDashboard() {
           gameNumber,
           cardId,
           jackpotEnabled: winner.jackpotEnabled,
+          pattern: winner.pattern,
         }
       );
       return {
         gameNumber,
         cardId,
         jackpotEnabled: winner.jackpotEnabled,
+        pattern: winner.pattern,
       };
     });
 
-    console.log(
-      "[handleConfigureFutureWinner] Formatted winners:",
-      formattedWinners
-    );
-
-    // Validate formatted winners
     for (const [index, winner] of formattedWinners.entries()) {
       if (isNaN(winner.gameNumber) || winner.gameNumber < 1) {
         setModalError(
@@ -376,9 +434,12 @@ export default function ModeratorDashboard() {
     try {
       const response = await moderatorService.configureFutureWinners(payload);
       console.log("[handleConfigureFutureWinner] Backend response:", response);
+      toast.success("Future winners configured successfully");
       await fetchGames();
       setFutureWinnerModalOpen(false);
-      setFutureWinners([{ gameNumber: "", cardId: "", jackpotEnabled: true }]);
+      setFutureWinners([
+        { gameNumber: "", cardId: "", jackpotEnabled: true, pattern: "all" },
+      ]);
     } catch (err) {
       const errorMessage =
         err.response?.data?.message ||
@@ -389,6 +450,76 @@ export default function ModeratorDashboard() {
         status: err.response?.status,
         payloadSent: payload,
       });
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const handleDeleteFutureWinner = async (futureWinnerId) => {
+    if (!window.confirm("Are you sure you want to delete this future winner?"))
+      return;
+    try {
+      await moderatorService.deleteFutureWinner(futureWinnerId);
+      toast.success("Future winner deleted successfully");
+      await fetchGames();
+    } catch (error) {
+      toast.error("Failed to delete future winner");
+      console.error("[handleDeleteFutureWinner] Error:", error);
+    }
+  };
+
+  const handleOpenReconfigureModal = (winner) => {
+    setReconfigureWinner(winner);
+    setReconfigureForm({
+      gameNumber: winner.gameNumber.toString(),
+      cardId: winner.cardId.toString(),
+      jackpotEnabled: winner.jackpotEnabled,
+      pattern: winner.pattern || "all",
+    });
+    setModalError(null);
+    setReconfigureModalOpen(true);
+  };
+
+  const handleReconfigureSubmit = async () => {
+    if (!reconfigureWinner) {
+      setModalError("No winner selected for reconfiguration.");
+      return;
+    }
+    const payload = {
+      gameNumber: parseInt(reconfigureForm.gameNumber, 10),
+      cardId: parseInt(reconfigureForm.cardId, 10),
+      jackpotEnabled: reconfigureForm.jackpotEnabled,
+      pattern: reconfigureForm.pattern,
+    };
+    if (isNaN(payload.gameNumber) || payload.gameNumber < 1) {
+      setModalError("Invalid game number. Must be a positive number.");
+      return;
+    }
+    if (isNaN(payload.cardId) || payload.cardId < 1) {
+      setModalError("Invalid card ID. Must be a positive number.");
+      return;
+    }
+    setModalLoading(true);
+    setModalError(null);
+    try {
+      await moderatorService.reconfigureFutureWinner(
+        reconfigureWinner._id,
+        payload
+      );
+      toast.success("Future winner reconfigured successfully");
+      await fetchGames();
+      setReconfigureModalOpen(false);
+      setReconfigureWinner(null);
+      setReconfigureForm({
+        gameNumber: "",
+        cardId: "",
+        jackpotEnabled: true,
+        pattern: "all",
+      });
+    } catch (error) {
+      setModalError("Failed to reconfigure future winner.");
+      console.error("[handleReconfigureSubmit] Error:", error);
+      toast.error("Failed to reconfigure future winner");
     } finally {
       setModalLoading(false);
     }
@@ -547,11 +678,11 @@ export default function ModeratorDashboard() {
 
         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300">
           <h3 className="text-xl font-semibold text-purple-600 dark:text-purple-400 mb-4">
-            Configured Winner Games
+            Future Configured Winner Games
           </h3>
           {configuredWinnerGames.length === 0 ? (
             <p className="text-gray-500 dark:text-gray-400 italic">
-              No games with configured winners.
+              No future games with configured winners.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -565,13 +696,16 @@ export default function ModeratorDashboard() {
                       Pattern
                     </th>
                     <th className="px-4 py-3 text-left text-sm font-semibold">
-                      Cards
-                    </th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold">
                       Winner Card ID
                     </th>
                     <th className="px-4 py-3 text-left text-sm font-semibold">
+                      Jackpot
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold">
                       Status
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold">
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -588,23 +722,43 @@ export default function ModeratorDashboard() {
                         {game.pattern}
                       </td>
                       <td className="px-4 py-3 text-gray-800 dark:text-gray-200">
-                        {game.selectedCards?.length || 0}
+                        {game.cardId}
                       </td>
                       <td className="px-4 py-3 text-gray-800 dark:text-gray-200">
-                        {game.moderatorWinnerCardId}
+                        {game.jackpotEnabled ? (
+                          <span className="text-green-600 dark:text-green-400">
+                            Enabled
+                          </span>
+                        ) : (
+                          <span className="text-red-600 dark:text-red-400">
+                            Disabled
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-800 dark:text-gray-200">
                         <span
                           className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
                             game.status === "pending"
                               ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300"
-                              : game.status === "active"
-                              ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
                               : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300"
                           }`}
                         >
                           {game.status}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 flex space-x-2">
+                        <button
+                          onClick={() => handleOpenReconfigureModal(game)}
+                          className="bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 transition-all duration-200 text-sm font-medium"
+                        >
+                          Reconfigure
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFutureWinner(game._id)}
+                          className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-all duration-200 text-sm font-medium"
+                        >
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -975,6 +1129,30 @@ export default function ModeratorDashboard() {
                         </select>
                       </div>
                       <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Pattern
+                        </label>
+                        <select
+                          value={winner.pattern}
+                          onChange={(e) =>
+                            handleWinnerChange(index, "pattern", e.target.value)
+                          }
+                          className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                          disabled={modalLoading}
+                        >
+                          <option value="all">Random</option>
+                          <option value="horizontal_line">
+                            Horizontal Line
+                          </option>
+                          <option value="vertical_line">Vertical Line</option>
+                          <option value="main_diagonal">Main Diagonal</option>
+                          <option value="other_diagonal">Other Diagonal</option>
+                          <option value="four_corners_center">
+                            Four Corners + Center
+                          </option>
+                        </select>
+                      </div>
+                      <div>
                         <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           <input
                             type="checkbox"
@@ -1040,6 +1218,145 @@ export default function ModeratorDashboard() {
                   )}
                   Save All
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {reconfigureModalOpen && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 transition-opacity duration-300">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-2xl max-w-md w-full transform transition-all duration-300 scale-100">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-6">
+                Reconfigure Future Winner
+              </h3>
+              {modalError && (
+                <div className="bg-red-50 dark:bg-red-900/50 border-l-4 border-red-500 text-red-700 dark:text-red-300 p-4 rounded-lg mb-6">
+                  {modalError}
+                </div>
+              )}
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Game Number
+                  </label>
+                  <input
+                    type="number"
+                    value={reconfigureForm.gameNumber}
+                    onChange={(e) =>
+                      setReconfigureForm({
+                        ...reconfigureForm,
+                        gameNumber: e.target.value,
+                      })
+                    }
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    placeholder="Enter game number (e.g., 10)"
+                    min="1"
+                    disabled={modalLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Winning Card Number
+                  </label>
+                  <select
+                    value={reconfigureForm.cardId}
+                    onChange={(e) =>
+                      setReconfigureForm({
+                        ...reconfigureForm,
+                        cardId: e.target.value,
+                      })
+                    }
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    disabled={modalLoading}
+                  >
+                    <option value="">Select Card Number</option>
+                    {allCards.map((card) => (
+                      <option key={card._id} value={card.card_number}>
+                        Card #{card.card_number}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Pattern
+                  </label>
+                  <select
+                    value={reconfigureForm.pattern}
+                    onChange={(e) =>
+                      setReconfigureForm({
+                        ...reconfigureForm,
+                        pattern: e.target.value,
+                      })
+                    }
+                    className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    disabled={modalLoading}
+                  >
+                    <option value="all">Random</option>
+                    <option value="horizontal_line">Horizontal Line</option>
+                    <option value="vertical_line">Vertical Line</option>
+                    <option value="main_diagonal">Main Diagonal</option>
+                    <option value="other_diagonal">Other Diagonal</option>
+                    <option value="four_corners_center">
+                      Four Corners + Center
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={reconfigureForm.jackpotEnabled}
+                      onChange={(e) =>
+                        setReconfigureForm({
+                          ...reconfigureForm,
+                          jackpotEnabled: e.target.checked,
+                        })
+                      }
+                      disabled={modalLoading}
+                      className="h-5 w-5 text-indigo-600 focus:ring-indigo-500 mr-2 rounded"
+                    />
+                    Enable Jackpot
+                  </label>
+                </div>
+                <div className="flex justify-end space-x-4">
+                  <button
+                    onClick={() => setReconfigureModalOpen(false)}
+                    className="bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-all duration-200 font-medium"
+                    disabled={modalLoading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleReconfigureSubmit}
+                    disabled={modalLoading}
+                    className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center font-medium"
+                  >
+                    {modalLoading && (
+                      <svg
+                        className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        />
+                      </svg>
+                    )}
+                    Save
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -42,7 +42,6 @@ const moderatorService = {
 
   // === JACKPOT CONTROL METHODS ===
 
-  // Get current jackpot status
   getJackpot: async () => {
     try {
       console.log("moderatorService.getJackpot - Fetching current jackpot");
@@ -62,7 +61,6 @@ const moderatorService = {
     }
   },
 
-  // Moderator manually sets jackpot amount
   setJackpotAmount: async (amount) => {
     try {
       console.log("moderatorService.setJackpotAmount - Setting to:", amount);
@@ -82,7 +80,6 @@ const moderatorService = {
     }
   },
 
-  // Toggle jackpot enabled/disabled
   toggleJackpot: async (enabled) => {
     try {
       console.log(`moderatorService.toggleJackpot - Setting to: ${enabled}`);
@@ -102,7 +99,6 @@ const moderatorService = {
     }
   },
 
-  // Award jackpot to specific card (with or without game context)
   awardJackpot: async (gameId, cardId, drawAmount, message = "") => {
     try {
       console.log("moderatorService.awardJackpot:", {
@@ -132,7 +128,6 @@ const moderatorService = {
     }
   },
 
-  // Get jackpot transaction history
   getJackpotHistory: async () => {
     try {
       console.log("moderatorService.getJackpotHistory - Fetching history");
@@ -155,7 +150,6 @@ const moderatorService = {
     }
   },
 
-  // Legacy updateJackpot method (kept for backward compatibility)
   updateJackpot: async (amount) => {
     try {
       console.warn(
@@ -312,6 +306,7 @@ const moderatorService = {
       throw error;
     }
   },
+
   getNextPendingGame: async () => {
     try {
       const response = await API.get("/games/next-pending");
@@ -361,6 +356,93 @@ const moderatorService = {
     } catch (error) {
       console.error(
         "moderatorService.getPairedCashier error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  // Fetch future winners using POST
+  getFutureWinners: async (cashierId) => {
+    try {
+      console.log(
+        "[moderatorService.getFutureWinners] Fetching future winners for cashierId:",
+        cashierId
+      );
+      const response = await API.post("/games/future-winners", {
+        cashierId,
+      });
+      console.log(
+        "[moderatorService.getFutureWinners] Response:",
+        response.data
+      );
+      return response.data.winners || [];
+    } catch (error) {
+      console.error(
+        "[moderatorService.getFutureWinners] Error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  // Delete a future winner by ID
+  deleteFutureWinner: async (futureWinnerId) => {
+    try {
+      console.log(
+        "[moderatorService.deleteFutureWinner] Deleting future winner with ID:",
+        futureWinnerId
+      );
+      const response = await API.delete(
+        `/games/future-winners/${futureWinnerId}`
+      );
+      console.log(
+        "[moderatorService.deleteFutureWinner] Response:",
+        response.data
+      );
+      return response.data;
+    } catch (error) {
+      console.error(
+        "[moderatorService.deleteFutureWinner] Error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+
+  // Reconfigure a future winner by ID
+  reconfigureFutureWinner: async (futureWinnerId, payload) => {
+    try {
+      console.log(
+        "[moderatorService.reconfigureFutureWinner] Reconfiguring future winner with ID:",
+        futureWinnerId,
+        "Payload:",
+        JSON.stringify(payload)
+      );
+      const response = await API.put(
+        `/games/future-winners/${futureWinnerId}`,
+        payload
+      );
+      console.log(
+        "[moderatorService.reconfigureFutureWinner] Response:",
+        response.data
+      );
+      return response.data.winner;
+    } catch (error) {
+      console.error(
+        "[moderatorService.reconfigureFutureWinner] Error:",
         JSON.stringify(
           error.response?.data || { message: error.message },
           null,
