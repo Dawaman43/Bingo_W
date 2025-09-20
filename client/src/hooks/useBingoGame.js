@@ -4,6 +4,7 @@ import gameService from "../services/game";
 export const useBingoGame = () => {
   const [game, setGame] = useState(null);
   const [error, setError] = useState(null);
+  const [bingoStatus, setBingoStatus] = useState(null);
 
   const fetchGame = useCallback(async (id) => {
     if (!id) {
@@ -15,7 +16,7 @@ export const useBingoGame = () => {
       if (!response) {
         throw new Error("No game data returned");
       }
-      setGame(response); // response is already game object from gameService.getGame
+      setGame(response);
       setError(null);
       return response;
     } catch (error) {
@@ -36,7 +37,7 @@ export const useBingoGame = () => {
       if (!response || !response.game) {
         throw new Error("No game data in response from call number");
       }
-      setGame(response.game); // Set to response.game, not the entire response
+      setGame(response.game);
       setError(null);
       return response;
     } catch (error) {
@@ -47,26 +48,57 @@ export const useBingoGame = () => {
     }
   }, []);
 
-  const checkBingo = useCallback(async (gameId, cardId) => {
-    if (!gameId || !cardId) {
-      setError("Invalid game ID or card ID");
-      throw new Error("Invalid game ID or card ID");
-    }
-    try {
-      const response = await gameService.checkBingo(gameId, cardId);
-      if (!response || !response.game) {
-        throw new Error("No game data in response from check bingo");
+  const checkBingo = useCallback(
+    async (gameId, cardId, preferredPattern = null) => {
+      if (!gameId || !cardId) {
+        const errorMessage = "Invalid game ID or card ID";
+        setError(errorMessage);
+        throw new Error(errorMessage);
       }
-      setGame(response.game); // Set to response.game
-      setError(null);
-      return response;
-    } catch (error) {
-      const errorMessage =
-        error.response?.data?.error || error.message || "Failed to check bingo";
-      setError(errorMessage);
-      throw new Error(errorMessage);
-    }
-  }, []);
+      try {
+        const response = await gameService.checkBingo(
+          gameId,
+          cardId,
+          preferredPattern
+        );
+        console.log(`[useBingoGame.checkBingo] Response:`, {
+          isBingo: response.isBingo,
+          winningPattern: response.winningPattern,
+          validBingoPatterns: response.validBingoPatterns,
+          winner: response.winner,
+          previousWinner: response.previousWinner,
+          game: response.game,
+        });
+        if (!response || !response.game) {
+          throw new Error("No game data in response from check bingo");
+        }
+        setGame(response.game);
+        setBingoStatus({
+          isBingo: response.isBingo,
+          winningPattern: response.winningPattern,
+          validBingoPatterns: response.validBingoPatterns,
+          winner: response.winner,
+          previousWinner: response.previousWinner,
+        });
+        setError(null);
+        return response;
+      } catch (error) {
+        const errorMessage =
+          error.response?.data?.error ||
+          error.message ||
+          "Failed to check bingo";
+        console.error(`[useBingoGame.checkBingo] Error:`, {
+          message: errorMessage,
+          response: error.response?.data,
+          status: error.response?.status,
+        });
+        setError(errorMessage);
+        setBingoStatus(null);
+        throw new Error(errorMessage);
+      }
+    },
+    []
+  );
 
   const selectWinner = useCallback(async (gameId, data) => {
     if (!gameId) {
@@ -78,7 +110,7 @@ export const useBingoGame = () => {
       if (!response || !response.game) {
         throw new Error("No game data in response from select winner");
       }
-      setGame(response.game); // Set to response.game
+      setGame(response.game);
       setError(null);
       return response;
     } catch (error) {
@@ -102,14 +134,13 @@ export const useBingoGame = () => {
       if (!response) {
         throw new Error("No response data from finish game");
       }
-      // Handle both cases: response.game or response as game object
       const gameData = response.game || response;
       if (!gameData || !gameData._id) {
         throw new Error("No valid game data in response from finish game");
       }
       setGame(gameData);
       setError(null);
-      return { game: gameData }; // Return consistent format
+      return { game: gameData };
     } catch (error) {
       const errorMessage =
         error.response?.data?.error || error.message || "Failed to finish game";
@@ -126,5 +157,6 @@ export const useBingoGame = () => {
     selectWinner,
     finishGame,
     error,
+    bingoStatus,
   };
 };

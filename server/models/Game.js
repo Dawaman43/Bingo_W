@@ -1,3 +1,4 @@
+// models/Game.js (Full corrected file)
 import mongoose from "mongoose";
 
 const gameSchema = new mongoose.Schema({
@@ -50,12 +51,46 @@ const gameSchema = new mongoose.Schema({
     type: [Number],
     default: [],
   },
+  // ✅ NEW: Track progress in forced sequence
+  forcedCallIndex: {
+    type: Number,
+    default: 0,
+  },
+  // ✅ NEW: Total calls for exact win (sequence length)
+  targetWinCall: {
+    type: Number,
+    default: null,
+  },
+  // ✅ NEW: Store the actual winner card numbers from database
+  winnerCardNumbers: {
+    type: [[{ type: mongoose.Schema.Types.Mixed }]], // 5x5 array like selectedCards
+    default: null,
+  },
+  // ✅ NEW: Store the specific numbers required for the winning pattern
+  selectedWinnerNumbers: {
+    type: [Number],
+    default: [],
+  },
   winner: {
     cardId: { type: Number },
     prize: { type: Number },
   },
+  jackpotEnabled: {
+    type: Boolean,
+    default: true,
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+  // Add to your Game schema
+  configuredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+  configuredAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 gameSchema.pre("save", function (next) {

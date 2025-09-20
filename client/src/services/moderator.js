@@ -285,11 +285,20 @@ const moderatorService = {
     }
   },
 
-  configureFutureWinners: async (winners) => {
+  configureFutureWinners: async (payload) => {
     try {
-      const response = await API.post("/games/configure-future-winners", {
-        winners,
-      });
+      console.log(
+        "[moderatorService.configureFutureWinners] Sending payload:",
+        JSON.stringify(payload)
+      );
+      const response = await API.post(
+        "/games/configure-future-winners",
+        payload
+      );
+      console.log(
+        "[moderatorService.configureFutureWinners] Response:",
+        response.data
+      );
       return response.data.data;
     } catch (error) {
       console.error(
@@ -303,7 +312,6 @@ const moderatorService = {
       throw error;
     }
   },
-
   getNextPendingGame: async () => {
     try {
       const response = await API.get("/games/next-pending");

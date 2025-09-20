@@ -3,13 +3,27 @@ import API from "./axios";
 const gameService = {
   createGame: async (data) => {
     try {
+      // ✅ Map to sequential format for single game (count: 1)
+      const sequentialData = {
+        ...data,
+        count: 1, // Always create single game
+      };
       console.log(
-        "gameService.createGame - Sending data:",
-        JSON.stringify(data, null, 2)
+        "gameService.createGame - Using sequential endpoint with data:",
+        JSON.stringify(sequentialData, null, 2)
       );
-      const response = await API.post("/games", data);
-      console.log("gameService.createGame response:", response.data);
-      return response.data.game;
+      const response = await API.post("/games/sequential", sequentialData);
+      console.log("gameService.createGame raw response:", response.data);
+
+      // ✅ Extract the first game from data array
+      const gamesArray = response.data.data || [];
+      if (!Array.isArray(gamesArray) || gamesArray.length === 0) {
+        throw new Error("No games created in response");
+      }
+
+      const game = gamesArray[0]; // Single game from array
+      console.log("gameService.createGame - Extracted game:", game);
+      return game; // Return the game object directly (not wrapped)
     } catch (error) {
       console.error(
         "gameService.createGame error:",
@@ -103,27 +117,90 @@ const gameService = {
     }
   },
 
+  // ✅ FIXED: Enhanced validation and debugging for callNumber
   callNumber: async (gameId, number) => {
     try {
-      if (!gameId) throw new Error("Game ID is required");
-      if (!number || number < 1 || number > 75)
-        throw new Error("Invalid number");
-      console.log(
-        `gameService.callNumber - Calling number ${number} for game ${gameId}`
-      );
-      const response = await API.post(`/games/${gameId}/call-number`, {
+      // ✅ Enhanced validation with detailed logging
+      console.log(`[gameService.callNumber] Input validation:`, {
+        gameId,
         number,
+        gameIdType: typeof gameId,
+        numberType: typeof number,
+        numberValue: number,
       });
-      console.log("gameService.callNumber response:", response.data);
+
+      // ✅ Validate gameId
+      if (!gameId) {
+        throw new Error("Game ID is required");
+      }
+      if (typeof gameId !== "string" || gameId.length !== 24) {
+        throw new Error(`Invalid game ID format: ${gameId}`);
+      }
+
+      // ✅ Validate number with detailed checks
+      if (number === null || number === undefined) {
+        console.error(
+          "[gameService.callNumber] Number is null/undefined:",
+          number
+        );
+        throw new Error("Number cannot be null or undefined");
+      }
+
+      const parsedNumber = Number(number);
+      console.log("[gameService.callNumber] Parsed number:", {
+        original: number,
+        parsed: parsedNumber,
+        isNaN: isNaN(parsedNumber),
+      });
+
+      if (isNaN(parsedNumber)) {
+        throw new Error(`Invalid number format: ${number} (parsed as NaN)`);
+      }
+
+      if (parsedNumber < 1 || parsedNumber > 75) {
+        throw new Error(
+          `Number must be between 1 and 75, got: ${parsedNumber}`
+        );
+      }
+
+      if (!Number.isInteger(parsedNumber)) {
+        throw new Error(`Number must be an integer, got: ${parsedNumber}`);
+      }
+
+      console.log(
+        `[gameService.callNumber] Validated - Calling number ${parsedNumber} for game ${gameId}`
+      );
+
+      const response = await API.post(`/games/${gameId}/call-number`, {
+        number: parsedNumber, // ✅ Ensure we send a clean number
+      });
+
+      console.log("[gameService.callNumber] Success response:", {
+        message: response.data.message,
+        gameId: response.data.game?._id,
+        calledNumber:
+          response.data.game?.calledNumbers?.[
+            response.data.game.calledNumbers.length - 1
+          ],
+        status: response.data.game?.status,
+      });
 
       // The backend returns: { message, game, calledNumber, callType }
       // Return the full response data so the component can access all fields
       return response.data;
     } catch (error) {
       console.error(
-        "gameService.callNumber error:",
+        "[gameService.callNumber] Detailed error:",
         JSON.stringify(
-          error.response?.data || { message: error.message },
+          {
+            message: error.message,
+            gameId,
+            number,
+            parsedNumber: Number(number),
+            response: error.response?.data,
+            status: error.response?.status,
+            config: error.config?.url,
+          },
           null,
           2
         )
@@ -132,39 +209,63 @@ const gameService = {
     }
   },
 
-  checkBingo: async (gameId, cardId) => {
+  // ✅ UPDATED: Support preferredPattern and enhanced logging for completed games
+  checkBingo: async (gameId, cardId, preferredPattern = null) => {
     try {
       if (!gameId) throw new Error("Game ID is required");
       if (!cardId || isNaN(cardId))
         throw new Error("Valid card ID is required");
-      console.log(
-        `gameService.checkBingo - Checking card ${cardId} for game ${gameId}`
-      );
-      const response = await API.post(`/games/${gameId}/check-bingo`, {
+
+      console.log(`[gameService.checkBingo] Input validation:`, {
+        gameId,
         cardId: Number(cardId),
+        preferredPattern,
+        gameIdType: typeof gameId,
+        cardIdType: typeof cardId,
       });
-      console.log("gameService.checkBingo response:", response.data.data);
-      return response.data.data;
+
+      // Prepare request body
+      const requestBody = {
+        cardId: Number(cardId),
+      };
+      if (preferredPattern) {
+        requestBody.preferredPattern = preferredPattern;
+      }
+
+      console.log(
+        `[gameService.checkBingo] Calling API with body:`,
+        JSON.stringify(requestBody, null, 2)
+      );
+
+      const response = await API.post(
+        `/games/${gameId}/check-bingo`,
+        requestBody
+      );
+
+      console.log(`[gameService.checkBingo] Success response:`, {
+        isBingo: response.data.isBingo,
+        winningPattern: response.data.winningPattern,
+        validBingoPatterns: response.data.validBingoPatterns,
+        winner: response.data.winner,
+        previousWinner: response.data.previousWinner,
+        gameStatus: response.data.game?.status,
+      });
+
+      // Return response.data directly (includes isBingo, winningPattern, winner, previousWinner, etc.)
+      // This supports checks for completed games without modification
+      return response.data;
     } catch (error) {
       console.error(
-        "gameService.checkBingo FULL ERROR:",
+        "[gameService.checkBingo] Detailed error:",
         JSON.stringify(
           {
             message: error.message,
-            response: error.response
-              ? {
-                  status: error.response.status,
-                  data: error.response.data,
-                  headers: error.response.headers,
-                }
-              : null,
-            request: error.request ? "Exists" : null,
-            config: error.config
-              ? {
-                  url: error.config.url,
-                  method: error.config.method,
-                }
-              : null,
+            gameId,
+            cardId,
+            preferredPattern,
+            response: error.response?.data,
+            status: error.response?.status,
+            config: error.config?.url,
           },
           null,
           2
@@ -345,8 +446,31 @@ const gameService = {
         "gameService.createSequentialGames - Creating sequential games:",
         JSON.stringify(data, null, 2)
       );
+
       const response = await API.post("/games/sequential", data);
-      return response.data.data;
+      console.log(
+        "gameService.createSequentialGames raw response:",
+        response.data
+      );
+
+      // Handle backend returning { game: {...} } or { data: [ ... ] }
+      let gamesArray = [];
+      if (Array.isArray(response.data.data)) {
+        gamesArray = response.data.data;
+      } else if (response.data.game) {
+        gamesArray = [response.data.game];
+      }
+
+      if (!gamesArray.length) {
+        throw new Error("No games created in response");
+      }
+
+      // Return array of games
+      console.log(
+        "gameService.createSequentialGames - Extracted games:",
+        gamesArray
+      );
+      return gamesArray;
     } catch (error) {
       console.error(
         "gameService.createSequentialGames error:",
@@ -438,6 +562,27 @@ const gameService = {
     } catch (error) {
       console.error(
         "gameService.getCashierReport error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
+  updateGameStatus: async (gameId, status) => {
+    try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        `gameService.updateGameStatus - Updating game ${gameId} to status: ${status}`
+      );
+      const response = await API.put(`/games/${gameId}/status`, { status });
+      console.log("gameService.updateGameStatus response:", response.data);
+      return response.data.game;
+    } catch (error) {
+      console.error(
+        "gameService.updateGameStatus error:",
         JSON.stringify(
           error.response?.data || { message: error.message },
           null,

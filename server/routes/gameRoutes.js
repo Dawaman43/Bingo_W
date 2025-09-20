@@ -34,6 +34,7 @@ import {
   checkBingo,
   finishGame,
   pauseGame,
+  updateGameStatus,
 } from "../controllers/bingoController.js";
 
 const router = express.Router();
@@ -78,6 +79,8 @@ router.post("/", verifyToken, validate, (req, res, next) => {
   console.log("Hit /api/games POST route with payload:", req.body);
   createGame(req, res, next);
 });
+// Add this route after the existing game routes
+router.put("/:gameId/status", verifyToken, validate, updateGameStatus);
 
 // Specific game ID routes
 router.get("/:id", verifyToken, (req, res, next) => {

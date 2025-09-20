@@ -18,110 +18,158 @@ import User from "../models/User.js";
  * @param {Array<number>} calledNumbers - Array of numbers already called
  * @returns {Array<Array<boolean>>} 5x5 grid of marked statuses
  */
+// utils/gameUtils.js
 export const getMarkedGrid = (cardNumbers, calledNumbers) => {
-  return cardNumbers.map((row) =>
-    row.map((num) => num === "FREE" || calledNumbers.includes(Number(num)))
+  console.log(`[getMarkedGrid] cardNumbers:`, cardNumbers);
+  console.log(`[getMarkedGrid] calledNumbers:`, calledNumbers);
+  if (
+    !Array.isArray(cardNumbers) ||
+    cardNumbers.length !== 5 ||
+    cardNumbers.some((row) => !Array.isArray(row) || row.length !== 5) ||
+    !Array.isArray(calledNumbers)
+  ) {
+    console.error(`[getMarkedGrid] Invalid input format`);
+    return Array(5)
+      .fill()
+      .map(() => Array(5).fill(false));
+  }
+  const normalizedCalled = calledNumbers.map(Number); // Ensure calledNumbers are numbers
+  const marked = cardNumbers.map((row, i) =>
+    row.map((cell, j) => {
+      if (i === 2 && j === 2) return null; // Free space
+      return normalizedCalled.includes(Number(cell));
+    })
   );
+  console.log(`[getMarkedGrid] Marked grid:`, marked);
+  return marked;
 };
 
-/**
- * Checks if a card has bingo based on the pattern.
- * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
- * @param {Array<number>} calledNumbers - Array of numbers already called
- * @param {string} pattern - Pattern type
- * @returns {{ isBingo: boolean, completedLines: number, lineProgress: number[] }}
- */
 export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
-  const marked = getMarkedGrid(cardNumbers, calledNumbers);
-  let isBingo = false;
-  let completedLines = 0;
-  const lineProgress = [];
+  console.log(
+    `[checkCardBingo] Checking pattern: ${pattern}, cardNumbers:`,
+    cardNumbers,
+    `calledNumbers:`,
+    calledNumbers
+  );
 
-  // Helper checks
+  const validPatterns = [
+    "four_corners_center",
+    "cross",
+    "main_diagonal",
+    "other_diagonal",
+    "inner_corners",
+    "horizontal_line",
+    "vertical_line",
+    "all",
+  ];
+
+  if (!pattern || !validPatterns.includes(pattern)) {
+    console.error(`[checkCardBingo] Invalid or undefined pattern: ${pattern}`);
+    return [false, null];
+  }
+
+  if (
+    !Array.isArray(cardNumbers) ||
+    cardNumbers.length !== 5 ||
+    cardNumbers.some((row) => !Array.isArray(row) || row.length !== 5)
+  ) {
+    console.error(`[checkCardBingo] Invalid cardNumbers format`);
+    return [false, null];
+  }
+
+  const marked = getMarkedGrid(cardNumbers, calledNumbers);
+  console.log(`[checkCardBingo] Marked grid:`, marked);
+
+  if (
+    !Array.isArray(marked) ||
+    marked.length !== 5 ||
+    marked.some((row) => !Array.isArray(row) || row.length !== 5)
+  ) {
+    console.error(`[checkCardBingo] Invalid marked grid format`);
+    return [false, null];
+  }
+
+  let isBingo = false;
+  let winningPattern = pattern;
+
   const isFourCornersCenter =
     marked[0][0] &&
     marked[0][4] &&
     marked[4][0] &&
     marked[4][4] &&
-    marked[2][2];
+    (marked[2][2] === null || marked[2][2]);
   const isCross =
     marked[1][1] &&
     marked[1][3] &&
     marked[3][1] &&
     marked[3][3] &&
-    marked[2][2];
+    (marked[2][2] === null || marked[2][2]);
   const isMainDiagonal =
     marked[0][0] &&
     marked[1][1] &&
-    marked[2][2] &&
+    (marked[2][2] === null || marked[2][2]) &&
     marked[3][3] &&
     marked[4][4];
   const isOtherDiagonal =
     marked[0][4] &&
     marked[1][3] &&
-    marked[2][2] &&
+    (marked[2][2] === null || marked[2][2]) &&
     marked[3][1] &&
     marked[4][0];
-  const isAnyHorizontal = marked.some((row) => row.every((cell) => cell));
-  const isAnyVertical = [0, 1, 2, 3, 4].some((col) =>
-    marked.every((row) => row[col])
+  const isInnerCorners =
+    marked[1][1] && marked[1][3] && marked[3][1] && marked[3][3];
+  const isAnyHorizontal = marked.some((row) =>
+    row.every((cell) => cell || cell === null)
   );
-  const isAnyDiagonal = isMainDiagonal || isOtherDiagonal;
+  const isAnyVertical = [0, 1, 2, 3, 4].some((col) =>
+    marked.every((row) => row[col] || row[col] === null)
+  );
 
   switch (pattern) {
     case "four_corners_center":
       isBingo = isFourCornersCenter;
-      completedLines = isBingo ? 1 : 0;
       break;
     case "cross":
       isBingo = isCross;
-      completedLines = isBingo ? 1 : 0;
       break;
     case "main_diagonal":
       isBingo = isMainDiagonal;
-      completedLines = isBingo ? 1 : 0;
       break;
     case "other_diagonal":
       isBingo = isOtherDiagonal;
-      completedLines = isBingo ? 1 : 0;
+      break;
+    case "inner_corners":
+      isBingo = isInnerCorners;
+      console.log(
+        `[checkCardBingo] Inner corners check: isBingo=${isBingo}, positions=[1][1]:${marked[1][1]}, [1][3]:${marked[1][3]}, [3][1]:${marked[3][1]}, [3][3]:${marked[3][3]}`
+      );
       break;
     case "horizontal_line":
       isBingo = isAnyHorizontal;
-      completedLines = marked.filter((row) => row.every((cell) => cell)).length;
       break;
     case "vertical_line":
       isBingo = isAnyVertical;
-      completedLines = [0, 1, 2, 3, 4].filter((col) =>
-        marked.every((row) => row[col])
-      ).length;
       break;
     case "all":
-      isBingo =
-        isFourCornersCenter ||
-        isCross ||
-        isMainDiagonal ||
-        isOtherDiagonal ||
-        isAnyHorizontal ||
-        isAnyVertical;
-      completedLines =
-        (isFourCornersCenter ? 1 : 0) +
-        (isCross ? 1 : 0) +
-        (isMainDiagonal ? 1 : 0) +
-        (isOtherDiagonal ? 1 : 0) +
-        (isAnyHorizontal ? 1 : 0) +
-        (isAnyVertical ? 1 : 0);
+      isBingo = marked.every((row, i) =>
+        row.every((cell, j) => cell === true || (i === 2 && j === 2))
+      );
+      console.log(
+        `[checkCardBingo] All pattern check: isBingo=${isBingo}, marked grid=${JSON.stringify(
+          marked
+        )}`
+      );
       break;
     default:
-      // Backward compatibility for old patterns
-      if (pattern === "line") isBingo = isAnyHorizontal;
-      if (pattern === "diagonal") isBingo = isAnyDiagonal;
-      if (pattern === "x_pattern") isBingo = isMainDiagonal && isOtherDiagonal;
-      completedLines = isBingo ? 1 : 0;
+      console.error(`[checkCardBingo] Unknown pattern: "${pattern}"`);
+      return [false, null];
   }
 
-  return { isBingo, completedLines, lineProgress };
+  console.log(
+    `[checkCardBingo] Result: isBingo=${isBingo}, winningPattern=${winningPattern}`
+  );
+  return [isBingo, winningPattern];
 };
-
 /**
  * Extracts numbers from a card based on the specified pattern, prioritizing specific lines when requested.
  * @param {Array<Array<number|string>>} cardNumbers - 5x5 nested array of card numbers
@@ -134,142 +182,227 @@ export const checkCardBingo = (cardNumbers, calledNumbers, pattern) => {
 export const getNumbersForPattern = (
   cardNumbers,
   pattern,
-  calledNumbers,
+  calledNumbers = [],
   selectSpecificLine = false,
-  targetIndices = []
+  targetIndices = [],
+  includeMarked = false // 👈 NEW: if true, returns ALL pattern numbers (ignores calledNumbers)
 ) => {
+  // ✅ SAFETY: Block "all" — should never reach here
+  if (pattern === "all") {
+    console.error(
+      `[getNumbersForPattern] ❌ CRITICAL: "all" pattern passed directly. Convert to real pattern first.`
+    );
+    throw new Error(`"all" pattern is forbidden here. Use a real pattern.`);
+  }
+
+  console.log(
+    `[getNumbersForPattern] 🟡 START — Pattern: "${pattern}", Called: [${calledNumbers.join(
+      ", "
+    )}], includeMarked: ${includeMarked}`
+  );
+
   if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
+    console.warn("[getNumbersForPattern] ❌ Invalid or empty cardNumbers");
     return { numbers: [], selectedIndices: [] };
   }
 
+  // Convert all to strings for safe comparison
   const grid = cardNumbers.map((row) =>
-    Array.isArray(row) ? row.map((num) => num.toString()) : []
+    Array.isArray(row) ? row.map((num) => String(num)) : []
   );
 
   const numbers = [];
-  let selectedIndices = [];
+  const selectedIndices = [];
 
-  const unmarkedFilter = (n) =>
-    n !== "FREE" && !calledNumbers.includes(Number(n));
+  // 👇 Filter logic now depends on includeMarked
+  const filterFn = includeMarked
+    ? (n) => n !== "FREE" // Return all non-FREE numbers in pattern
+    : (n) => n !== "FREE" && !calledNumbers.includes(Number(n)); // Only unmarked
+
+  console.log(`[getNumbersForPattern] 🟦 Grid prepared:`, grid);
 
   switch (pattern) {
     case "four_corners_center":
-      numbers.push(
-        ...[grid[0][0], grid[0][4], grid[4][0], grid[4][4], grid[2][2]].filter(
-          unmarkedFilter
-        )
+      const cornersAndCenter = [
+        grid[0][0], // top-left (B1)
+        grid[0][4], // top-right (O1)
+        grid[4][0], // bottom-left (B5)
+        grid[4][4], // bottom-right (O5)
+        grid[2][2], // center (N3)
+      ].filter(filterFn);
+      numbers.push(...cornersAndCenter);
+      selectedIndices.push(0, 4, 20, 24, 12); // Indices: 0,4,20,24,12
+      console.log(
+        `[getNumbersForPattern] ✅ Pattern "four_corners_center" → Numbers: [${numbers.join(
+          ", "
+        )}], Indices: [${selectedIndices.join(", ")}]`
       );
-      selectedIndices = [0];
       break;
-    case "cross":
-      numbers.push(
-        ...[grid[1][1], grid[1][3], grid[3][1], grid[3][3], grid[2][2]].filter(
-          unmarkedFilter
-        )
+
+    case "inner_corners":
+      const innerCorners = [
+        grid[1][1], // I2 (index 6)
+        grid[1][3], // O2 (index 8)
+        grid[3][1], // I4 (index 16)
+        grid[3][3], // O4 (index 18)
+      ].filter(filterFn);
+      numbers.push(...innerCorners);
+      selectedIndices.push(6, 8, 16, 18); // Indices for I2, O2, I4, O4
+      console.log(
+        `[getNumbersForPattern] ✅ Pattern "inner_corners" → Numbers: [${numbers.join(
+          ", "
+        )}], Indices: [${selectedIndices.join(", ")}]`
       );
-      selectedIndices = [0];
       break;
+
     case "main_diagonal":
-      numbers.push(
-        ...[0, 1, 2, 3, 4].map((i) => grid[i][i]).filter(unmarkedFilter)
+      const mainDiag = [0, 1, 2, 3, 4].map((i) => grid[i][i]).filter(filterFn);
+      numbers.push(...mainDiag);
+      selectedIndices.push(0, 6, 12, 18, 24); // Diagonal: B1, I2, N3, G4, O5
+      console.log(
+        `[getNumbersForPattern] ✅ Pattern "main_diagonal" → Numbers: [${numbers.join(
+          ", "
+        )}], Indices: [${selectedIndices.join(", ")}]`
       );
-      selectedIndices = [10];
       break;
+
     case "other_diagonal":
-      numbers.push(
-        ...[0, 1, 2, 3, 4].map((i) => grid[i][4 - i]).filter(unmarkedFilter)
+      const otherDiag = [0, 1, 2, 3, 4]
+        .map((i) => grid[i][4 - i])
+        .filter(filterFn);
+      numbers.push(...otherDiag);
+      selectedIndices.push(4, 8, 12, 16, 20); // Diagonal: O1, G2, N3, I4, B5
+      console.log(
+        `[getNumbersForPattern] ✅ Pattern "other_diagonal" → Numbers: [${numbers.join(
+          ", "
+        )}], Indices: [${selectedIndices.join(", ")}]`
       );
-      selectedIndices = [11];
       break;
+
     case "horizontal_line":
       const rows = grid;
+      let selectedRow;
       if (selectSpecificLine && targetIndices.length > 0) {
-        const rowIndex = targetIndices[0];
-        if (rows[rowIndex]) {
-          numbers.push(...rows[rowIndex].filter(unmarkedFilter));
-          selectedIndices = [rowIndex];
+        selectedRow = targetIndices[0];
+        if (selectedRow >= 0 && selectedRow < 5) {
+          const rowNumbers = rows[selectedRow].filter(filterFn);
+          numbers.push(...rowNumbers);
+          for (let j = 0; j < 5; j++) {
+            if (filterFn(rows[selectedRow][j])) {
+              selectedIndices.push(selectedRow * 5 + j);
+            }
+          }
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "horizontal_line" (row ${selectedRow}) → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+        } else {
+          console.warn(
+            `[getNumbersForPattern] ❌ Invalid row index: ${selectedRow}`
+          );
         }
       } else {
-        const rowUnmarked = rows.map(
-          (row) => row.filter(unmarkedFilter).length
-        );
+        const rowUnmarked = rows.map((row) => row.filter(filterFn).length);
         const maxUnmarked = Math.max(...rowUnmarked);
         const eligibleRows = rowUnmarked
-          .map((u, i) => (u === maxUnmarked ? i : null))
-          .filter((i) => i !== null);
-        const bestRow =
+          .map((u, i) => (u === maxUnmarked ? i : -1))
+          .filter((i) => i !== -1);
+        selectedRow =
           eligibleRows[Math.floor(Math.random() * eligibleRows.length)];
-        numbers.push(...rows[bestRow].filter(unmarkedFilter));
-        selectedIndices = [bestRow];
+        if (selectedRow !== undefined && selectedRow !== -1) {
+          const rowNumbers = rows[selectedRow].filter(filterFn);
+          numbers.push(...rowNumbers);
+          for (let j = 0; j < 5; j++) {
+            if (filterFn(rows[selectedRow][j])) {
+              selectedIndices.push(selectedRow * 5 + j);
+            }
+          }
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "horizontal_line" (random row ${selectedRow}) → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+        } else {
+          console.warn(
+            "[getNumbersForPattern] ❌ No valid row found for horizontal_line"
+          );
+        }
       }
       break;
+
     case "vertical_line":
+      const cols = [0, 1, 2, 3, 4];
+      let selectedCol;
       if (selectSpecificLine && targetIndices.length > 0) {
-        const colIndex = targetIndices[0];
-        numbers.push(
-          ...[0, 1, 2, 3, 4]
-            .map((i) => grid[i][colIndex])
-            .filter(unmarkedFilter)
-        );
-        selectedIndices = [colIndex + 5];
+        selectedCol = targetIndices[0];
+        if (selectedCol >= 0 && selectedCol <= 4) {
+          const colNumbers = cols
+            .map((_, row) => grid[row][selectedCol])
+            .filter(filterFn);
+          numbers.push(...colNumbers);
+          for (let i = 0; i < 5; i++) {
+            if (filterFn(grid[i][selectedCol])) {
+              selectedIndices.push(i * 5 + selectedCol);
+            }
+          }
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "vertical_line" (col ${selectedCol}) → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+        } else {
+          console.warn(
+            `[getNumbersForPattern] ❌ Invalid col index: ${selectedCol}`
+          );
+        }
       } else {
-        const colUnmarked = [0, 1, 2, 3, 4].map(
-          (col) =>
-            [0, 1, 2, 3, 4].filter((i) => unmarkedFilter(grid[i][col])).length
+        const colUnmarked = cols.map(
+          (col) => grid.filter((row) => filterFn(row[col])).length
         );
-        const maxUnmarked = Math.max(...colUnmarked);
+        const maxUnmarkedCol = Math.max(...colUnmarked);
         const eligibleCols = colUnmarked
-          .map((u, j) => (u === maxUnmarked ? j : null))
-          .filter((j) => j !== null);
-        const bestCol =
+          .map((u, i) => (u === maxUnmarkedCol ? i : -1))
+          .filter((i) => i !== -1);
+        selectedCol =
           eligibleCols[Math.floor(Math.random() * eligibleCols.length)];
-        numbers.push(
-          ...[0, 1, 2, 3, 4].map((i) => grid[i][bestCol]).filter(unmarkedFilter)
-        );
-        selectedIndices = [bestCol + 5];
+        if (selectedCol !== undefined && selectedCol !== -1) {
+          const colNumbers = cols
+            .map((_, row) => grid[row][selectedCol])
+            .filter(filterFn);
+          numbers.push(...colNumbers);
+          for (let i = 0; i < 5; i++) {
+            if (filterFn(grid[i][selectedCol])) {
+              selectedIndices.push(i * 5 + selectedCol);
+            }
+          }
+          console.log(
+            `[getNumbersForPattern] ✅ Pattern "vertical_line" (random col ${selectedCol}) → Numbers: [${numbers.join(
+              ", "
+            )}], Indices: [${selectedIndices.join(", ")}]`
+          );
+        } else {
+          console.warn(
+            "[getNumbersForPattern] ❌ No valid col found for vertical_line"
+          );
+        }
       }
       break;
-    case "all":
-      const patternChoices = [
-        "four_corners_center",
-        "cross",
-        "main_diagonal",
-        "other_diagonal",
-        "horizontal_line",
-        "vertical_line",
-      ];
-      const selectedPattern =
-        patternChoices[Math.floor(Math.random() * patternChoices.length)];
-      const patternResult = getNumbersForPattern(
-        cardNumbers,
-        selectedPattern,
-        calledNumbers,
-        selectSpecificLine,
-        targetIndices
-      );
-      numbers.push(...patternResult.numbers);
-      selectedIndices = patternResult.selectedIndices;
-      break;
+
     default:
-      if (pattern === "line")
-        return getNumbersForPattern(
-          cardNumbers,
-          "horizontal_line",
-          calledNumbers,
-          selectSpecificLine,
-          targetIndices
-        );
-      if (pattern === "diagonal" || pattern === "x_pattern") {
-        const diags = [
-          [0, 1, 2, 3, 4].map((i) => grid[i][i]),
-          [0, 1, 2, 3, 4].map((i) => grid[i][4 - i]),
-        ];
-        numbers.push(...diags.flat().filter(unmarkedFilter));
-        selectedIndices = pattern === "x_pattern" ? [10, 11] : [10];
-      }
+      console.warn(
+        `[getNumbersForPattern] ❌ Unknown pattern: "${pattern}" — returning empty`
+      );
+      return { numbers: [], selectedIndices: [] };
   }
 
-  return { numbers: [...new Set(numbers)], selectedIndices };
+  const result = {
+    numbers: numbers.map(String),
+    selectedIndices,
+  };
+
+  console.log(`[getNumbersForPattern] 🟢 END — Returning:`, result);
+  return result;
 };
 
 /**
@@ -279,19 +412,12 @@ export const getNumbersForPattern = (
  * @param {mongoose.ClientSession} session - Optional mongoose session for transactions
  * @returns {Number} - The next sequence number
  */
-export const getNextSequence = async (
-  counterType,
-  cashierId,
-  session = null
-) => {
-  const counterId = `${counterType}_${cashierId.toString()}`;
-
+export const getNextSequence = async (counterName) => {
   const counter = await Counter.findOneAndUpdate(
-    { _id: counterId, cashierId },
+    { _id: counterName },
     { $inc: { seq: 1 } },
-    { new: true, upsert: true, setDefaultsOnInsert: true, session }
+    { new: true, upsert: true }
   );
-
   return counter.seq;
 };
 
@@ -450,6 +576,12 @@ export const createGameRecord = async ({
   moderatorWinnerCardId,
   selectedWinnerRowIndices = [],
   jackpotEnabled = true,
+  forcedCallSequence = [],
+  forcedPattern = null,
+  winnerCardNumbers = null,
+  selectedWinnerNumbers = [],
+  targetWinCall = null,
+  forcedCallIndex = 0,
 }) => {
   if (
     !selectedCards ||
@@ -476,6 +608,10 @@ export const createGameRecord = async ({
     throw new Error("Invalid cashier ID");
   }
 
+  console.log(
+    `[createGameRecord] Creating game with selectedWinnerNumbers:`,
+    selectedWinnerNumbers
+  );
   const houseFee =
     betAmount * (houseFeePercentage / 100) * selectedCards.length;
 
@@ -494,7 +630,13 @@ export const createGameRecord = async ({
     calledNumbersLog: [],
     moderatorWinnerCardId,
     selectedWinnerRowIndices,
+    forcedPattern,
+    forcedCallSequence,
+    forcedCallIndex,
+    targetWinCall,
     jackpotEnabled,
+    winnerCardNumbers,
+    selectedWinnerNumbers,
     winner: null,
   });
 
@@ -579,4 +721,105 @@ export const computeForcedSequence = (
   const preItems = [...firstReq, ...fillers];
   shuffle(preItems);
   return [...preItems, lastReq]; // Last call ensures win
+};
+
+/**
+ * Generate a quick win sequence for Bingo
+ * @param {number[]} requiredNumbers - Numbers that must appear for the winner card to win
+ * @param {number} totalCalls - Total calls to finish the game (e.g., 10)
+ * @param {number} maxRandomNumbers - Maximum random numbers to interleave
+ * @returns {number[]} Forced sequence with random numbers
+ */
+export function generateQuickWinSequence(requiredNumbers, minCalls, maxCalls) {
+  if (!requiredNumbers || requiredNumbers.length === 0) {
+    console.warn("[generateQuickWinSequence] No required numbers provided");
+    return [];
+  }
+
+  const K = requiredNumbers.length;
+  // Randomly choose total calls (ensure >= K)
+  const totalCalls = Math.max(
+    K,
+    Math.floor(Math.random() * (maxCalls - minCalls + 1)) + minCalls
+  );
+
+  console.log(
+    `[generateQuickWinSequence] Generating sequence: ${K} required nums, totalCalls=${totalCalls} (min=${minCalls}, max=${maxCalls})`
+  );
+
+  // Choose completing number (random from required)
+  const completingIdx = Math.floor(Math.random() * requiredNumbers.length);
+  const completingNum = requiredNumbers[completingIdx];
+  const otherRequired = requiredNumbers.filter(
+    (_, idx) => idx !== completingIdx
+  );
+
+  // Fillers: totalCalls - K (non-required numbers)
+  const numFillers = totalCalls - K;
+  const allNums = Array.from({ length: 75 }, (_, i) => i + 1);
+  const possibleFillers = allNums.filter((n) => !requiredNumbers.includes(n));
+  const shuffledFillers = shuffle(possibleFillers).slice(0, numFillers); // Use existing shuffle util
+
+  // Pre-sequence: shuffle otherRequired + fillers
+  const preItems = [...otherRequired, ...shuffledFillers];
+  shuffle(preItems);
+
+  const sequence = [...preItems, completingNum]; // Last call completes win
+
+  console.log(
+    `[generateQuickWinSequence] Sequence ready: ${sequence.length} calls, completing num=${completingNum}, fillers=${numFillers}`
+  );
+  console.log(
+    `[generateQuickWinSequence] Full sequence preview: ${sequence.slice(0, 5)}${
+      sequence.length > 5 ? "..." : ""
+    } -> ${completingNum}`
+  );
+
+  return sequence;
+}
+
+// utils/gameUtils.js - Add these functions
+
+export const logFutureWinnerUsage = async (
+  futureWinnerId,
+  gameId,
+  success = true
+) => {
+  try {
+    await GameLog.create({
+      gameId,
+      action: "useFutureWinner",
+      status: success ? "success" : "failed",
+      details: {
+        futureWinnerId,
+        gameId,
+        timestamp: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error("Error logging future winner usage:", error);
+  }
+};
+
+export const logNumberCall = async (
+  gameId,
+  calledNumber,
+  isForced = false,
+  callIndex = null
+) => {
+  try {
+    await GameLog.create({
+      gameId,
+      action: "callNumber",
+      status: "success",
+      details: {
+        calledNumber,
+        isForced,
+        callIndex,
+        timestamp: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error("Error logging number call:", error);
+  }
 };

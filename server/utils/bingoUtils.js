@@ -1,7 +1,7 @@
 /**
  * Returns indices for a given bingo pattern on a 5x5 card, excluding free space.
  * @param {number[][]} numbers - 5x5 array of card numbers (center may be "FREE").
- * @param {string} pattern - Pattern name (e.g., 'horizontal_line', 'cross').
+ * @param {string} pattern - Pattern name (e.g., 'horizontal_line', 'cross', 'full_card').
  * @param {number[]} excludeIndices - Indices to exclude (optional).
  * @param {boolean} isWinner - If true, select specific indices for winner card.
  * @returns {{ selectedIndices: number[], selectedNumbers: number[] }} - Object with selected indices and corresponding numbers.
@@ -12,6 +12,13 @@ export function getNumbersForPattern(
   excludeIndices = [],
   isWinner = false
 ) {
+  console.log(
+    "[getNumbersForPattern] Processing pattern:",
+    pattern,
+    "with numbers:",
+    numbers
+  );
+
   // Validate input
   if (
     !Array.isArray(numbers) ||
@@ -32,16 +39,13 @@ export function getNumbersForPattern(
     other_diagonal: [4, 8, 12, 16, 20], // Top-right to bottom-left
     horizontal_line: [0, 1, 2, 3, 4], // First row (configurable if isWinner is false)
     vertical_line: [0, 5, 10, 15, 20], // First column (configurable if isWinner is false)
+    all: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12), // All non-free space indices
+    full_card: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12), // Alias for "all"
   };
 
   let selectedIndices = [];
 
-  if (pattern === "all") {
-    // For 'all' pattern, select all non-free space indices
-    selectedIndices = Array.from({ length: 25 }, (_, i) => i).filter(
-      (i) => i !== 12
-    ); // Exclude center (free space)
-  } else if (patterns[pattern]) {
+  if (patterns[pattern]) {
     selectedIndices = patterns[pattern];
     // For non-winner cards, randomly select a row or column for flexible patterns
     if (!isWinner && pattern === "horizontal_line") {
@@ -72,6 +76,10 @@ export function getNumbersForPattern(
     .map((idx) => flatNumbers[idx])
     .filter((num) => typeof num === "number" && num >= 1 && num <= 75);
 
+  console.log("[getNumbersForPattern] Returning:", {
+    selectedIndices,
+    selectedNumbers,
+  });
   return { selectedIndices, selectedNumbers };
 }
 

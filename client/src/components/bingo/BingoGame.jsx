@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useContext } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../hooks/useAuth";
 import { LanguageContext } from "../../context/LanguageProvider";
 import { useBingoGame } from "../../hooks/useBingoGame";
 import gameService from "../../services/game";
@@ -11,7 +11,8 @@ import io from "socket.io-client";
 const BingoGame = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { language, translations } = useContext(LanguageContext);
+  const { language, translations, toggleLanguage } =
+    useContext(LanguageContext);
   const {
     game,
     fetchGame,
@@ -30,9 +31,7 @@ const BingoGame = () => {
   const [lastCalledNumbers, setLastCalledNumbers] = useState([]);
   const [currentNumber, setCurrentNumber] = useState(null);
   const [isAutoCall, setIsAutoCall] = useState(false);
-  const [speed, setSpeed] = useState(
-    parseInt(localStorage.getItem("callSpeed")) || 8
-  );
+  const [speed, setSpeed] = useState(4);
   const [isPlaying, setIsPlaying] = useState(false);
   const [cardId, setCardId] = useState("");
   const [manualNumber, setManualNumber] = useState("");
@@ -45,8 +44,13 @@ const BingoGame = () => {
     useState(false);
   const [isGameFinishedModalOpen, setIsGameFinishedModalOpen] = useState(false);
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
-  const [winningPattern, setWinningPattern] = useState("all");
+  const [winningPattern, setWinningPattern] = useState("line");
   const [winningCards, setWinningCards] = useState([]);
+  const [jackpotWinner, setJackpotWinner] = useState({
+    userId: "--",
+    prize: 0,
+    drawDate: "--",
+  });
   const [lockedCards, setLockedCards] = useState([]);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -60,12 +64,6 @@ const BingoGame = () => {
     days: 7,
   });
   const [jackpotGrow, setJackpotGrow] = useState(false);
-  const [jackpotWinner, setJackpotWinner] = useState({
-    userId: "",
-    prize: 0,
-    drawDate: "",
-    message: "",
-  });
 
   // Refs
   const canvasRef = useRef(null);
@@ -115,7 +113,7 @@ const BingoGame = () => {
     });
 
     return () => {
-      socketRef.current.disconnect();
+      socketRef.current?.disconnect();
     };
   }, [gameData?.cashierId]);
 
@@ -459,12 +457,13 @@ const BingoGame = () => {
   useEffect(() => {
     if (game) {
       setGameData(game);
-      setWinningPattern(game.pattern?.replace("_", " ") || "all");
+      setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
       setIsGameOver(game.status === "completed");
     }
   }, [game]);
 
+  // ✅ FIXED: Auto-call interval with proper number generation
   useEffect(() => {
     if (autoIntervalRef.current) {
       clearInterval(autoIntervalRef.current);
@@ -476,11 +475,25 @@ const BingoGame = () => {
       !isGameOver &&
       gameData?._id &&
       isPlaying &&
-      !isCallingNumber
+      !isCallingNumber &&
+      calledNumbers.length < 75 &&
+      gameData?.status === "active"
     ) {
+      console.log("[BingoGame] Starting auto-call interval:", speed);
       autoIntervalRef.current = setInterval(() => {
+        console.log("[BingoGame] Auto-call triggered");
         handleCallNumber();
       }, speed * 1000);
+    } else {
+      console.log("[BingoGame] Auto-call conditions not met:", {
+        isAutoCall,
+        isGameOver,
+        hasGameId: !!gameData?._id,
+        isPlaying,
+        isCallingNumber,
+        numbersLeft: 75 - calledNumbers.length,
+        gameStatus: gameData?.status,
+      });
     }
 
     return () => {
@@ -489,11 +502,16 @@ const BingoGame = () => {
         autoIntervalRef.current = null;
       }
     };
-  }, [isAutoCall, speed, isGameOver, isPlaying, isCallingNumber, gameData]);
-
-  useEffect(() => {
-    localStorage.setItem("callSpeed", speed);
-  }, [speed]);
+  }, [
+    isAutoCall,
+    speed,
+    isGameOver,
+    isPlaying,
+    isCallingNumber,
+    gameData?._id,
+    gameData?.status, // Add game status dependency
+    calledNumbers.length,
+  ]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -722,179 +740,239 @@ const BingoGame = () => {
     }
   };
 
-  const getWinningPatternPositions = (pattern) => {
-    const positions = [];
-    switch (pattern) {
-      case "four_corners_center":
-        positions.push([0, 0], [0, 4], [4, 0], [4, 4], [2, 2]);
-        break;
-      case "cross":
-        positions.push(
-          [0, 2],
-          [1, 2],
-          [2, 0],
-          [2, 1],
-          [2, 2],
-          [2, 3],
-          [2, 4],
-          [3, 2],
-          [4, 2]
-        );
-        break;
-      case "main_diagonal":
-        positions.push([0, 0], [1, 1], [2, 2], [3, 3], [4, 4]);
-        break;
-      case "other_diagonal":
-        positions.push([0, 4], [1, 3], [2, 2], [3, 1], [4, 0]);
-        break;
-      case "horizontal_line":
+  const getNumbersForPattern = (cardNumbers, pattern) => {
+    if (!cardNumbers || !Array.isArray(cardNumbers)) {
+      console.warn("[BingoGame] Invalid cardNumbers:", cardNumbers);
+      return [];
+    }
+
+    const grid = [];
+    const flatNumbers = cardNumbers.flat ? cardNumbers.flat() : cardNumbers;
+
+    for (let row = 0; row < 5; row++) {
+      grid[row] = [];
+      for (let col = 0; col < 5; col++) {
+        const index = row * 5 + col;
+        grid[row][col] = flatNumbers[index];
+      }
+    }
+
+    const numbers = [];
+
+    try {
+      if (pattern === "four_corners_center") {
+        numbers.push(grid[0][0], grid[0][4], grid[4][0], grid[4][4]);
+        if (grid[2][2] !== "FREE") numbers.push(grid[2][2]);
+      } else if (pattern === "inner_corners") {
+        numbers.push(grid[1][1], grid[1][3], grid[3][1], grid[3][3]);
+      } else if (pattern === "cross") {
         for (let row = 0; row < 5; row++) {
-          positions.push([row, 0], [row, 1], [row, 2], [row, 3], [row, 4]);
+          if (grid[row][2] !== "FREE") numbers.push(grid[row][2]);
         }
-        break;
-      case "vertical_line":
         for (let col = 0; col < 5; col++) {
-          positions.push([0, col], [1, col], [2, col], [3, col], [4, col]);
+          if (col !== 2 && grid[2][col] !== "FREE") numbers.push(grid[2][col]);
         }
-        break;
-      case "all":
-        for (let row = 0; row < 5; row++) {
-          for (let col = 0; col < 5; col++) {
-            positions.push([row, col]);
+      } else if (pattern === "main_diagonal") {
+        for (let i = 0; i < 5; i++) {
+          if (grid[i][i] !== "FREE") numbers.push(grid[i][i]);
+        }
+      } else if (pattern === "other_diagonal") {
+        for (let i = 0; i < 5; i++) {
+          if (grid[i][4 - i] !== "FREE") numbers.push(grid[i][4 - i]);
+        }
+      } else if (pattern === "horizontal_line") {
+        const targetRow = 2;
+        for (let col = 0; col < 5; col++) {
+          if (grid[targetRow][col] !== "FREE") {
+            numbers.push(grid[targetRow][col]);
           }
         }
-        break;
-      default:
-        break;
-    }
-    return positions;
-  };
-
-  const renderWinningCard = (card) => {
-    const grid = [];
-    const letters = ["B", "I", "N", "G", "O"];
-    const winningPositions = getWinningPatternPositions(
-      gameData?.forcedPattern || gameData?.pattern || "all"
-    );
-    for (let row = 0; row < 5; row++) {
-      const rowCells = [];
-      for (let col = 0; col < 5; col++) {
-        const number = card.numbers[letters[col]][row];
-        const isMarked = card.markedPositions[letters[col]][row];
-        const isWinningPosition = winningPositions.some(
-          ([winRow, winCol]) => winRow === row && winCol === col
-        );
-        rowCells.push(
-          <div
-            key={`${row}-${col}`}
-            className={`w-12 h-12 flex justify-center items-center text-lg font-bold border border-gray-600 dark:border-gray-400 ${
-              number === "FREE"
-                ? "bg-blue-600 text-white"
-                : isMarked && isWinningPosition
-                ? "bg-yellow-300 text-black animate-pulse"
-                : isMarked
-                ? "bg-blue-600 text-white"
-                : "bg-red-600 text-white"
-            }`}
-          >
-            {number}
-          </div>
-        );
+      } else if (pattern === "vertical_line") {
+        const targetCol = 2;
+        for (let row = 0; row < 5; row++) {
+          if (grid[row][targetCol] !== "FREE") {
+            numbers.push(grid[row][targetCol]);
+          }
+        }
+      } else if (pattern === "all") {
+        for (let row = 0; row < 5; row++) {
+          for (let col = 0; col < 5; col++) {
+            if (grid[row][col] !== "FREE") {
+              numbers.push(grid[row][col]);
+            }
+          }
+        }
       }
-      grid.push(
-        <div key={`row-${row}`} className="flex gap-1">
-          {rowCells}
-        </div>
-      );
+      return numbers
+        .filter((n) => typeof n === "number" && n >= 1 && n <= 75)
+        .map((n) => Number(n));
+    } catch (error) {
+      console.error("[BingoGame] Error in getNumbersForPattern:", error);
+      return [];
     }
-    return (
-      <div className="grid gap-1">
-        <div className="flex gap-1">
-          {letters.map((letter) => (
-            <div
-              key={letter}
-              className="w-12 h-12 flex justify-center items-center text-lg font-bold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border border-gray-600 dark:border-gray-400"
-            >
-              {letter}
-            </div>
-          ))}
-        </div>
-        {grid}
-      </div>
-    );
   };
 
   const handleCallNumber = async (manualNum = null) => {
+    console.log("[BingoGame] handleCallNumber called with:", {
+      manualNum,
+      isPlaying,
+      isGameOver,
+      gameId: gameData?._id,
+      gameStatus: gameData?.status,
+    });
+
+    // Early validation for game state
     if (
       isGameOver ||
       isCallingNumber ||
       !isPlaying ||
-      calledNumbers.length >= 75
+      calledNumbers.length >= 75 ||
+      gameData?.status !== "active" // Check if game is not active
     ) {
       if (calledNumbers.length >= 75) {
+        console.log("[BingoGame] All numbers called - finishing game");
         setIsGameFinishedModalOpen(true);
         setIsAutoCall(false);
         await handleFinish();
         return;
       }
-      setCallError("Cannot call number: Game is over or paused");
+      console.warn("[BingoGame] Cannot call number - game state invalid:", {
+        isGameOver,
+        isCallingNumber,
+        isPlaying,
+        numbersCalled: calledNumbers.length,
+        gameStatus: gameData?.status,
+      });
+      setCallError(
+        gameData?.status !== "active"
+          ? "Cannot call number: Game is paused or finished"
+          : "Cannot call number: Game is over, paused, or already calling"
+      );
       setIsErrorModalOpen(true);
+      setIsAutoCall(false); // Stop auto-call if paused
       return;
     }
+
+    // Validate game ID exists
     if (!gameData?._id) {
+      console.error("[BingoGame] Game ID is missing:", gameData);
       setCallError("Game ID is missing");
       setIsErrorModalOpen(true);
       setIsAutoCall(false);
       return;
     }
+
     setIsCallingNumber(true);
     setCallError(null);
+
+    let numberToCall;
+
     try {
-      let numberToCall;
-      if (manualNum) {
+      // Handle manual number input
+      if (manualNum !== null && manualNum !== undefined && manualNum !== "") {
+        console.log("[BingoGame] Manual call with number:", manualNum);
         const num = parseInt(manualNum, 10);
-        if (isNaN(num) || num < 1 || num > 75 || calledNumbers.includes(num)) {
-          throw new Error("Invalid or already called number");
+
+        // Validate manual number
+        if (isNaN(num) || num < 1 || num > 75) {
+          throw new Error(`Invalid manual number: ${manualNum} (must be 1-75)`);
         }
+
+        if (calledNumbers.includes(num)) {
+          throw new Error(`Number ${num} already called`);
+        }
+
         numberToCall = num;
-      } else {
+      }
+      // Handle auto/random call
+      else {
+        console.log("[BingoGame] Auto/random call - generating number");
+
+        // Generate available numbers
         const availableNumbers = Array.from(
           { length: 75 },
           (_, i) => i + 1
         ).filter((n) => !calledNumbers.includes(n));
+
         if (!availableNumbers.length) {
+          console.log("[BingoGame] No numbers left to call");
           setIsGameFinishedModalOpen(true);
           setIsAutoCall(false);
           await handleFinish();
           return;
         }
-        let numberPool = availableNumbers;
+
+        // Prioritize winner numbers if configured
+        let numberPool = [...availableNumbers];
         if (gameData.moderatorWinnerCardId) {
-          const winningCard = gameData.selectedCards.find(
+          const winningCard = gameData.selectedCards?.find(
             (c) => c.id === gameData.moderatorWinnerCardId
           );
           if (winningCard) {
+            // Extract numbers from winner card, excluding FREE
             const winningNumbers = getNumbersForPattern(
-              winningCard.numbers,
-              gameData.forcedPattern || gameData.pattern
-            ).filter((n) => !calledNumbers.includes(n));
+              winningCard.numbers.flat(),
+              gameData.pattern
+            ).filter((num) => !calledNumbers.includes(num));
+
+            console.log(
+              "[BingoGame] Winner numbers available:",
+              winningNumbers
+            );
+
             if (winningNumbers.length > 0) {
+              // Bias towards winner numbers (3:1 ratio)
               numberPool = [
-                ...winningNumbers,
-                ...winningNumbers,
-                ...availableNumbers,
+                ...winningNumbers, // Winner numbers
+                ...winningNumbers, // Winner numbers
+                ...winningNumbers, // Winner numbers
+                ...availableNumbers, // Random numbers
               ];
             }
           }
         }
+
+        // Select random number from pool
         numberToCall =
           numberPool[Math.floor(Math.random() * numberPool.length)];
+
+        console.log("[BingoGame] Selected number to call:", numberToCall);
       }
 
-      console.log(`Calling number ${numberToCall} for game ${gameData._id}`);
-      const response = await callNumber(gameData._id, { number: numberToCall });
-      const calledNumber = response.calledNumber || numberToCall;
+      // Final validation before API call
+      if (
+        !numberToCall ||
+        isNaN(Number(numberToCall)) ||
+        numberToCall < 1 ||
+        numberToCall > 75
+      ) {
+        throw new Error(`Generated invalid number: ${numberToCall}`);
+      }
 
+      console.log(
+        `[BingoGame] Calling number ${numberToCall} for game ${gameData._id}`
+      );
+
+      // Call the number via the custom hook
+      const response = await callNumber(gameData._id, { number: numberToCall });
+
+      console.log("[BingoGame] API response:", response);
+
+      // Extract called number from response
+      const calledNumber =
+        response?.calledNumber ||
+        numberToCall ||
+        response?.game?.calledNumbers?.[
+          response?.game?.calledNumbers?.length - 1
+        ];
+
+      if (!calledNumber) {
+        throw new Error("No called number in response");
+      }
+
+      console.log("[BingoGame] Confirmed called number:", calledNumber);
+
+      // Update called numbers state
       setCalledNumbers((prev) => {
         if (!prev.includes(calledNumber)) {
           return [...prev, calledNumber];
@@ -902,56 +980,105 @@ const BingoGame = () => {
         return prev;
       });
 
+      // Update recent calls
       setLastCalledNumbers((prev) => {
         const newList = [calledNumber, ...prev.slice(0, 4)];
         return [...new Set(newList)].slice(0, 5);
       });
+
+      // Update current number display
       setCurrentNumber(calledNumber);
+
+      // Update game data
       setGameData(response.game);
 
+      // Update bingo cards marking
       setBingoCards((prevCards) =>
         prevCards.map((card) => {
           const newCard = { ...card };
-          const flatNumbers = card.numbers.B.concat(
-            card.numbers.I,
-            card.numbers.N,
-            card.numbers.G,
-            card.numbers.O
-          );
-          const grid = [];
-          for (let row = 0; row < 5; row++) {
-            grid[row] = [];
-            for (let col = 0; col < 5; col++) {
-              const index = row * 5 + col;
-              grid[row][col] = flatNumbers[index];
-            }
-          }
-          for (let row = 0; row < 5; row++) {
-            for (let col = 0; col < 5; col++) {
-              if (grid[row][col] === calledNumber) {
-                const letters = ["B", "I", "N", "G", "O"];
-                const letter = letters[col];
+
+          // Mark the newly called number on all cards
+          const letters = ["B", "I", "N", "G", "O"];
+          for (let col = 0; col < 5; col++) {
+            for (let row = 0; row < 5; row++) {
+              const letter = letters[col];
+              const number = card.numbers[letter][row];
+
+              // Mark if this card has the called number (skip FREE)
+              if (typeof number === "number" && number === calledNumber) {
                 newCard.markedPositions[letter][row] = true;
               }
             }
           }
+
           return newCard;
         })
       );
 
+      // Play sound effect
       SoundService.playSound(`number_${calledNumber}`);
-      if (manualNum) setManualNumber("");
+
+      // Clear manual input if used
+      if (manualNum) {
+        setManualNumber("");
+      }
+
+      // Check for winner pattern completion
+      if (response.game?.winnerPatternComplete) {
+        console.log("🎉 Winner pattern completed!");
+        setIsWinnerModalOpen(true);
+        setWinningCards([gameData.moderatorWinnerCardId]);
+        setIsGameOver(true);
+        setIsPlaying(false);
+        setIsAutoCall(false);
+        SoundService.playSound("winner");
+      }
     } catch (error) {
-      console.error("Error calling number:", error);
-      setCallError(error.message || "Failed to call number");
+      console.error("[BingoGame] Detailed call error:", {
+        manualNum,
+        numberToCall,
+        gameId: gameData?._id,
+        error: error.message,
+        response: error.response?.data,
+        stack: error.stack,
+      });
+
+      // Enhanced error handling
+      let userMessage = "Failed to call number";
+
+      if (error.message.includes("Invalid number")) {
+        userMessage = `Invalid number: ${
+          manualNum || "auto-generated"
+        }. Please try again.`;
+      } else if (error.message.includes("already called")) {
+        userMessage = `Number ${numberToCall} already called. Skipping...`;
+      } else if (
+        error.message.includes("Game is not active") ||
+        error.message.includes("Cannot call number: Game is")
+      ) {
+        userMessage = "Game is paused or finished";
+        setIsPlaying(false);
+        setIsAutoCall(false);
+      } else if (error.response?.status === 400) {
+        userMessage = error.response.data?.message || "Invalid game state";
+      } else if (error.response?.status === 404) {
+        userMessage = "Game not found. Please refresh.";
+        navigate("/cashier-dashboard");
+      }
+
+      setCallError(userMessage);
       setIsErrorModalOpen(true);
+
+      // Auto-stop on critical errors
       if (
         error.message.includes("Invalid number") ||
         error.message.includes("Game is over") ||
-        error.message === "All numbers already called"
+        error.message.includes("All numbers already called") ||
+        error.message.includes("Game is not active") ||
+        error.message.includes("Cannot call number: Game is")
       ) {
         setIsAutoCall(false);
-        if (error.message === "All numbers already called") {
+        if (error.message.includes("All numbers already called")) {
           setIsGameFinishedModalOpen(true);
           await handleFinish();
         }
@@ -961,13 +1088,137 @@ const BingoGame = () => {
     }
   };
 
-  const handlePlayPause = () => {
+  const handleNextClick = async () => {
+    console.log("[BingoGame] Next button clicked - game state:", {
+      isPlaying,
+      isGameOver,
+      isCallingNumber,
+      gameId: gameData?._id,
+      gameStatus: gameData?.status,
+      numbersCalled: calledNumbers.length,
+    });
+
+    if (
+      !isPlaying ||
+      isGameOver ||
+      !gameData?._id ||
+      isCallingNumber ||
+      gameData?.status !== "active"
+    ) {
+      console.warn("[BingoGame] Next button blocked by conditions");
+      setCallError(
+        gameData?.status !== "active"
+          ? "Game is paused or finished"
+          : "Cannot call number: Game is over, paused, or already calling"
+      );
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    await handleCallNumber();
+  };
+
+  const handleManualCall = async () => {
+    console.log("[BingoGame] Manual call button clicked:", {
+      manualNumber,
+      isPlaying,
+      isGameOver,
+      gameId: gameData?._id,
+      gameStatus: gameData?.status,
+    });
+
+    if (
+      !manualNumber ||
+      isGameOver ||
+      !gameData?._id ||
+      !isPlaying ||
+      isCallingNumber ||
+      gameData?.status !== "active"
+    ) {
+      setCallError(
+        gameData?.status !== "active"
+          ? "Game is paused or finished"
+          : "Cannot call number: Invalid input, game over, paused, or already calling"
+      );
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    const cleanNumber = parseInt(manualNumber.trim(), 10);
+    if (isNaN(cleanNumber) || cleanNumber < 1 || cleanNumber > 75) {
+      setCallError(`Invalid manual number: ${manualNumber}. Must be 1-75.`);
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    if (calledNumbers.includes(cleanNumber)) {
+      setCallError(`Number ${cleanNumber} already called`);
+      setIsErrorModalOpen(true);
+      return;
+    }
+
+    await handleCallNumber(cleanNumber);
+  };
+
+  const handlePlayPause = async () => {
     const willPause = isPlaying;
     setIsPlaying((prev) => !prev);
-    if (!willPause) {
-      setIsAutoCall(false);
+    setIsAutoCall(false); // Disable auto-call immediately
+
+    // Clear any existing auto-call interval
+    if (autoIntervalRef.current) {
+      clearInterval(autoIntervalRef.current);
+      autoIntervalRef.current = null;
+      console.log("[BingoGame] Auto-call interval cleared on pause/play");
     }
-    SoundService.playSound(willPause ? "game_pause" : "game_start");
+
+    if (!gameData?._id) {
+      setCallError("Cannot pause/play game: Game ID is missing");
+      setIsErrorModalOpen(true);
+      setIsPlaying(willPause); // Revert state on error
+      return;
+    }
+
+    const newStatus = willPause ? "paused" : "active";
+
+    // Skip API call if status is already what we want
+    if (gameData.status === newStatus) {
+      console.log(`[BingoGame] Game already ${newStatus}, skipping update`);
+      return;
+    }
+
+    try {
+      const updatedGame = await gameService.updateGameStatus(
+        gameData._id,
+        newStatus
+      );
+      console.log(
+        `[BingoGame] Game status updated to ${newStatus}`,
+        updatedGame
+      );
+
+      setGameData((prev) => ({
+        ...prev,
+        status: newStatus,
+      }));
+
+      SoundService.playSound(willPause ? "game_pause" : "game_start");
+    } catch (error) {
+      // Handle 400 STATUS_UNCHANGED gracefully
+      if (error.response?.data?.errorCode === "STATUS_UNCHANGED") {
+        console.warn(`[BingoGame] Game already ${newStatus}`);
+        setGameData((prev) => ({
+          ...prev,
+          status: newStatus,
+        }));
+        return;
+      }
+
+      console.error("[BingoGame] Error updating game status:", error);
+      setCallError(error.message || "Failed to update game status");
+      setIsErrorModalOpen(true);
+      setIsPlaying(willPause); // Revert state on error
+    }
   };
 
   const handleFinish = async () => {
@@ -1031,17 +1282,20 @@ const BingoGame = () => {
       setIsErrorModalOpen(true);
       return;
     }
+
     if (!cardId) {
       setCallError("No card selected");
       setIsErrorModalOpen(true);
       return;
     }
+
     const numericCardId = parseInt(cardId, 10);
     if (isNaN(numericCardId) || numericCardId < 1) {
       setCallError("Invalid card ID");
       setIsErrorModalOpen(true);
       return;
     }
+
     const isValidCardInGame = gameData.selectedCards?.some(
       (card) => card.id === numericCardId
     );
@@ -1051,43 +1305,89 @@ const BingoGame = () => {
       SoundService.playSound("you_didnt_win");
       return;
     }
-    if (isGameOver || gameData.status === "completed") {
-      if (
-        (gameData.winner?.cardId && gameData.winner.cardId === numericCardId) ||
-        (gameData.moderatorWinnerCardId &&
-          gameData.moderatorWinnerCardId === numericCardId)
-      ) {
-        setIsWinnerModalOpen(true);
-        setWinningCards([numericCardId]);
-        SoundService.playSound("winner");
-      } else {
-        setCallError(
-          `Card ${numericCardId} is not the winner for Game #${gameData.gameNumber}`
-        );
-        setIsErrorModalOpen(true);
-        SoundService.playSound("you_didnt_win");
-        setLockedCards((prev) => [...prev, numericCardId]);
-      }
-      return;
-    }
+
     try {
+      console.log(
+        `[BingoGame] Checking bingo for card ${numericCardId} in game ${gameData._id}`
+      );
       const response = await checkBingo(gameData._id, numericCardId);
+      console.log(`[BingoGame] checkBingo response:`, response);
+
       setGameData(response.game);
-      if (response.winner) {
+
+      if (response.isBingo) {
+        // Find the winning card's numbers
+        const winningCard = gameData.selectedCards.find(
+          (card) => card.id === numericCardId
+        );
+        const cardNumbers =
+          winningCard?.numbers?.flat().filter((num) => num !== "FREE") || [];
+
+        // Determine the specific pattern completed by the last called number
+        const lastCalledNumber = calledNumbers[calledNumbers.length - 1];
+        let specificWinningPattern =
+          response.winningPattern || gameData.pattern || "unknown";
+        let patternNumbers = [];
+
+        if (response.validBingoPatterns && lastCalledNumber) {
+          // Prioritize inner_corners first, then other patterns
+          const prioritizedPatterns = [
+            "inner_corners",
+            "four_corners_center",
+            "main_diagonal",
+            "other_diagonal",
+            "horizontal_line",
+            "vertical_line",
+          ];
+          for (const pattern of prioritizedPatterns) {
+            if (response.validBingoPatterns.includes(pattern)) {
+              const numbersForPattern = getNumbersForPattern(
+                winningCard.numbers,
+                pattern
+              );
+              // Check if all numbers for the pattern are called and include the last called number
+              const allPatternNumbersCalled = numbersForPattern.every((num) =>
+                calledNumbers.includes(Number(num))
+              );
+              if (
+                allPatternNumbersCalled &&
+                numbersForPattern.includes(lastCalledNumber)
+              ) {
+                specificWinningPattern = pattern;
+                patternNumbers = numbersForPattern;
+                break;
+              }
+            }
+          }
+        }
+
+        // Calculate called and remaining numbers based on the winning pattern
+        const calledNumbersOnCard =
+          patternNumbers.length > 0
+            ? patternNumbers
+            : cardNumbers.filter((num) => calledNumbers.includes(Number(num)));
+        const remainingNumbersOnCard = cardNumbers.filter(
+          (num) => !calledNumbersOnCard.includes(Number(num))
+        );
+
+        setWinningCards([
+          {
+            cardId: numericCardId,
+            calledNumbers: calledNumbersOnCard,
+            remainingNumbers: remainingNumbersOnCard,
+            winningPattern: specificWinningPattern,
+          },
+        ]);
+        setWinningPattern(specificWinningPattern);
         setIsWinnerModalOpen(true);
-        setWinningCards([numericCardId]);
         setIsGameOver(true);
         setIsPlaying(false);
         setIsAutoCall(false);
-        setJackpotAmount(response.game.winner?.prize || 0);
+        setJackpotAmount(response.winner?.prize || gameData.prizePool || 0);
         SoundService.playSound("winner");
       } else {
-        setLockedCards((prev) => [...prev, numericCardId]);
-        setCallError(
-          gameData.moderatorWinnerCardId
-            ? `Card ${numericCardId} is not the selected winner`
-            : `No bingo for card ${numericCardId}`
-        );
+        setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
+        setCallError(`No bingo for card ${numericCardId}`);
         setIsErrorModalOpen(true);
         SoundService.playSound("you_didnt_win");
       }
@@ -1097,8 +1397,8 @@ const BingoGame = () => {
         error.message ||
         "An unexpected error occurred";
       if (
-        userFriendlyMessage.includes("The provided card is not in the game") ||
-        userFriendlyMessage.includes("Card not found in game")
+        userFriendlyMessage.includes("Card not in game") ||
+        userFriendlyMessage.includes("Card not found")
       ) {
         userFriendlyMessage = `Card ${cardId} not found in game #${
           gameData?.gameNumber || "unknown"
@@ -1109,16 +1409,6 @@ const BingoGame = () => {
       SoundService.playSound("you_didnt_win");
     }
   };
-
-  const handleManualCall = async () => {
-    if (!manualNumber || isGameOver || !gameData?._id || !isPlaying) {
-      setCallError("Cannot call number: Invalid input, game over, or paused");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    await handleCallNumber(manualNumber);
-  };
-
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch((err) => {
@@ -1129,534 +1419,632 @@ const BingoGame = () => {
     }
   };
 
-  const getNumbersForPattern = (cardNumbers, pattern) => {
-    const grid = [];
-    for (let i = 0; i < 5; i++) {
-      grid.push(cardNumbers.slice(i * 5, (i + 1) * 5));
-    }
-    const numbers = [];
-    if (pattern === "four_corners_center") {
-      numbers.push(grid[0][0], grid[0][4], grid[4][0], grid[4][4], grid[2][2]);
-    } else if (pattern === "cross") {
-      numbers.push(
-        grid[0][2],
-        grid[1][2],
-        grid[2][0],
-        grid[2][1],
-        grid[2][2],
-        grid[2][3],
-        grid[2][4],
-        grid[3][2],
-        grid[4][2]
-      );
-    } else if (pattern === "main_diagonal") {
-      numbers.push(grid[0][0], grid[1][1], grid[2][2], grid[3][3], grid[4][4]);
-    } else if (pattern === "other_diagonal") {
-      numbers.push(grid[0][4], grid[1][3], grid[2][2], grid[3][1], grid[4][0]);
-    } else if (pattern === "horizontal_line") {
-      for (let i = 0; i < 5; i++) {
-        numbers.push(...grid[i].filter((n) => n !== "FREE"));
-      }
-    } else if (pattern === "vertical_line") {
-      for (let col = 0; col < 5; col++) {
-        for (let row = 0; row < 5; row++) {
-          if (grid[row][col] !== "FREE") numbers.push(grid[row][col]);
-        }
-      }
-    } else if (pattern === "all") {
-      numbers.push(...cardNumbers.filter((n) => n !== "FREE"));
-    }
-    return numbers.map((n) => (n === "FREE" ? n : Number(n)));
-  };
-
-  const toggleLanguage = () => {
-    // Assuming a toggleLanguage function is defined in LanguageContext
-    // This is a placeholder; replace with actual implementation
-    console.log("Toggling language");
-  };
-
   // UI Generation
   const generateBoard = () => {
     const letters = [
-      { letter: "B", color: "bg-red-600" },
-      { letter: "I", color: "bg-yellow-300" },
-      { letter: "N", color: "bg-green-500" },
-      { letter: "G", color: "bg-blue-600" },
-      { letter: "O", color: "bg-purple-600" },
+      { letter: "B", color: "bg-[#e9a64c]" },
+      { letter: "I", color: "bg-[#e9a64c]" },
+      { letter: "N", color: "bg-[#e9a64c]" },
+      { letter: "G", color: "bg-[#e9a64c]" },
+      { letter: "O", color: "bg-[#e9a64c]" },
     ];
     const board = [];
-    for (let i = 1; i <= 75; i++) {
-      const isCalled = calledNumbers.includes(i);
-      const letterIndex = Math.floor((i - 1) / 15);
-      const letter = letters[letterIndex].letter;
-      const color = letters[letterIndex].color;
-      board.push(
+    for (let row = 0; row < 5; row++) {
+      const rowNumbers = [];
+      rowNumbers.push(
         <div
-          key={i}
-          className={`w-12 h-12 flex justify-center items-center text-lg font-bold border border-gray-600 dark:border-gray-400 ${
-            isCalled
-              ? "bg-gray-300 dark:bg-gray-600 text-gray-800 dark:text-gray-200"
-              : color + " text-white"
-          } ${currentNumber === i ? "animate-pulse" : ""}`}
+          key={`letter-${row}`}
+          className={`w-14 h-14 ${letters[row].color} text-black flex justify-center items-center text-2xl font-bold border border-[#2a3969]`}
         >
-          {letter}-{i}
+          {letters[row].letter}
+        </div>
+      );
+      for (let i = row * 15 + 1; i <= (row + 1) * 15; i++) {
+        rowNumbers.push(
+          <div
+            key={i}
+            className={`w-14 h-14 flex justify-center items-center text-xl font-bold cursor-default transition-all duration-300 ${
+              calledNumbers.includes(i)
+                ? "bg-[#0a1174] text-white border border-[#2a3969]"
+                : "bg-[#e02d2d] text-white border border-[#2a3969]"
+            }`}
+          >
+            {i}
+          </div>
+        );
+      }
+      board.push(
+        <div key={`row-${row}`} className="flex gap-[5px]">
+          {rowNumbers}
         </div>
       );
     }
-    return (
-      <div className="grid grid-cols-15 gap-1 p-4 bg-white dark:bg-gray-800 rounded-lg shadow">
-        {board}
-      </div>
-    );
+    return board;
+  };
+
+  const recentNumbers = lastCalledNumbers.map((num, index) => (
+    <div
+      key={index}
+      className={`w-11 h-11 flex justify-center items-center font-bold text-lg rounded-full ${
+        index === 0
+          ? "bg-[#d20000]"
+          : index === 1
+          ? "bg-[rgba(210,0,0,0.8)]"
+          : index === 2
+          ? "bg-[rgba(210,0,0,0.6)]"
+          : index === 3
+          ? "bg-[rgba(210,0,0,0.4)]"
+          : "bg-[rgba(210,0,0,0.2)]"
+      } text-white`}
+    >
+      {num || "-"}
+    </div>
+  ));
+
+  // ✅ FIXED: Button click handlers
+  const handleNextButtonClick = async () => {
+    console.log("[BingoGame] Next button clicked");
+    await handleNextClick();
+  };
+
+  const handleManualCallButtonClick = async () => {
+    console.log("[BingoGame] Manual call button clicked");
+    await handleManualCall();
   };
 
   return (
     <div
       ref={containerRef}
-      className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4"
+      className="w-full h-full bg-[#0a1235] flex flex-col items-center p-5 relative"
     >
-      {isLoading && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg">
-            <div className="mx-auto mb-4 w-8 h-8 border-2 border-gray-600 dark:border-gray-400 border-t-indigo-500 rounded-full animate-spin"></div>
-            <p className="text-gray-800 dark:text-gray-200">Loading game...</p>
-          </div>
-        </div>
-      )}
-      {isErrorModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-sm w-full">
-            <h3 className="text-lg font-bold text-red-600 dark:text-red-400">
-              Error
-            </h3>
-            <p className="text-gray-800 dark:text-gray-200 mt-2">{callError}</p>
-            <div className="mt-4 flex justify-end">
-              <button
-                onClick={() => setIsErrorModalOpen(false)}
-                className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {isWinnerModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full">
-            <h3 className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {translations[language].bingoWinner}
-            </h3>
-            <p className="text-gray-800 dark:text-gray-200 mt-2">
-              {translations[language].congratulations} Card #{winningCards[0]}{" "}
-              has won Game #{gameData?.gameNumber} with{" "}
-              {(gameData?.forcedPattern || gameData?.pattern || "all").replace(
-                "_",
-                " "
-              )}{" "}
-              pattern!
-            </p>
-            <p className="text-gray-800 dark:text-gray-200 mt-2">
-              Prize: {gameData?.prizePool?.toFixed(2) || 0} BIRR
-            </p>
-            <div className="mt-4">
-              <h4 className="text-lg font-bold text-gray-800 dark:text-gray-200">
-                Winning Card
-              </h4>
-              {bingoCards
-                .filter((card) => winningCards.includes(card.cardId))
-                .map((card) => (
-                  <div key={card.cardId} className="mt-2">
-                    <p className="text-gray-800 dark:text-gray-200">
-                      Card #{card.cardNumber}
-                    </p>
-                    {renderWinningCard(card)}
-                  </div>
-                ))}
-            </div>
-            <div className="mt-4 flex justify-end space-x-2">
-              <button
-                onClick={() => setIsWinnerModalOpen(false)}
-                className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-              >
-                Close
-              </button>
-              {user?.role === "moderator" && (
-                <button
-                  onClick={handleStartNextGame}
-                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                >
-                  Start Next Game
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      {isJackpotWinnerModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full relative overflow-hidden">
-            <div ref={jackpotCanvasRef} className="absolute inset-0 z-0"></div>
-            <div className="relative z-10">
-              <h3 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                {translations[language].jackpotWinner}
-              </h3>
-              <p className="text-gray-800 dark:text-gray-200 mt-2">
-                {translations[language].congratulations} {jackpotWinner.userId}{" "}
-                has won the jackpot of {jackpotWinner.prize} BIRR on{" "}
-                {jackpotWinner.drawDate}!
-              </p>
-              <p className="text-gray-800 dark:text-gray-200 mt-2">
-                {jackpotWinner.message}
-              </p>
-              <div className="mt-4 flex justify-end">
-                <button
-                  onClick={() => setIsJackpotWinnerModalOpen(false)}
-                  className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {isGameFinishedModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-sm w-full">
-            <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200">
-              {translations[language].gameFinished}
-            </h3>
-            <p className="text-gray-800 dark:text-gray-200 mt-2">
-              Game #{gameData?.gameNumber} has ended.
-            </p>
-            <div className="mt-4 flex justify-end space-x-2">
-              <button
-                onClick={() => setIsGameFinishedModalOpen(false)}
-                className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-              >
-                Close
-              </button>
-              {user?.role === "moderator" && (
-                <button
-                  onClick={handleStartNextGame}
-                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                >
-                  Start Next Game
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="max-w-7xl mx-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
-            Bingo Game #{gameData?.gameNumber || "Loading..."}
-          </h1>
-          <div className="flex space-x-2">
-            <button
-              onClick={toggleLanguage}
-              className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-3 py-1 rounded"
-            >
-              {language === "en" ? "Switch to Amharic" : "Switch to English"}
-            </button>
-            <button
-              onClick={handleToggleFullscreen}
-              className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-3 py-1 rounded"
-            >
-              {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-            </button>
-            <button
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-3 py-1 rounded"
-            >
-              {isSettingsOpen ? "Close Settings" : "Settings"}
-            </button>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="col-span-2">
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-4">
-              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-                {translations[language].gameBoard}
-              </h2>
-              {generateBoard()}
-            </div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-4">
-              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-                {translations[language].lastCalledNumbers}
-              </h2>
-              <div className="flex space-x-2">
-                {lastCalledNumbers.map((num, index) => (
-                  <div
-                    key={index}
-                    className="w-12 h-12 flex justify-center items-center text-lg font-bold bg-blue-600 text-white rounded"
-                  >
-                    {num}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-4">
-              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-                Game Info
-              </h2>
-              <p className="text-gray-800 dark:text-gray-200">
-                Pattern:{" "}
-                {(
-                  gameData?.forcedPattern ||
-                  gameData?.pattern ||
-                  "all"
-                ).replace("_", " ")}
-              </p>
-              <p className="text-gray-800 dark:text-gray-200">
-                Prize Pool: {gameData?.prizePool?.toFixed(2) || 0} BIRR
-              </p>
-              <p className="text-gray-800 dark:text-gray-200">
-                Status: {gameData?.status || "Loading..."}
-              </p>
-            </div>
-          </div>
-          <div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-4">
-              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-                {translations[language].gameControls}
-              </h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {translations[language].callNumber}
-                  </label>
-                  <div className="flex space-x-2">
-                    <input
-                      type="number"
-                      value={manualNumber}
-                      onChange={(e) => setManualNumber(e.target.value)}
-                      className="w-20 p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                      placeholder="1-75"
-                      min="1"
-                      max="75"
-                      disabled={isGameOver || isCallingNumber || !isPlaying}
-                    />
-                    <button
-                      onClick={handleManualCall}
-                      className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 disabled:opacity-50"
-                      disabled={isGameOver || isCallingNumber || !isPlaying}
-                    >
-                      {translations[language].call}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {translations[language].checkCard}
-                  </label>
-                  <div className="flex space-x-2">
-                    <input
-                      type="number"
-                      value={cardId}
-                      onChange={(e) => setCardId(e.target.value)}
-                      className="w-20 p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                      placeholder="Card ID"
-                      min="1"
-                      disabled={isGameOver || isCallingNumber}
-                    />
-                    <button
-                      onClick={() => handleCheckCard(cardId)}
-                      className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 disabled:opacity-50"
-                      disabled={isGameOver || isCallingNumber}
-                    >
-                      {translations[language].check}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {translations[language].callSpeed}
-                  </label>
-                  <select
-                    value={speed}
-                    onChange={(e) => setSpeed(Number(e.target.value))}
-                    className="w-full p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                    disabled={isGameOver || isCallingNumber}
-                  >
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((s) => (
-                      <option key={s} value={s}>
-                        {s} seconds
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex space-x-2">
-                  <button
-                    onClick={handlePlayPause}
-                    className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50"
-                    disabled={isGameOver}
-                  >
-                    {isPlaying ? "Pause" : "Play"}
-                  </button>
-                  <button
-                    onClick={() => setIsAutoCall(!isAutoCall)}
-                    className={`px-4 py-2 rounded text-white ${
-                      isAutoCall
-                        ? "bg-red-600 hover:bg-red-700"
-                        : "bg-blue-600 hover:bg-blue-700"
-                    } disabled:opacity-50`}
-                    disabled={isGameOver || !isPlaying}
-                  >
-                    {isAutoCall ? "Stop Auto Call" : "Auto Call"}
-                  </button>
-                  <button
-                    onClick={handleFinish}
-                    className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
-                    disabled={isGameOver}
-                  >
-                    Finish Game
-                  </button>
-                </div>
-              </div>
-            </div>
-            {user?.role === "moderator" && (
-              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-                  Moderator Controls
-                </h2>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Jackpot Amount
-                    </label>
-                    <div
-                      className={`text-2xl font-bold ${
-                        jackpotGrow
-                          ? "animate-pulse text-yellow-600"
-                          : "text-gray-800 dark:text-gray-200"
-                      }`}
-                    >
-                      {jackpotAmount.toFixed(2)} BIRR
-                    </div>
-                  </div>
-                  <div>
-                    <button
-                      onClick={handleToggleJackpot}
-                      className={`w-full px-4 py-2 rounded text-white ${
-                        isJackpotActive
-                          ? "bg-red-600 hover:bg-red-700"
-                          : "bg-green-600 hover:bg-green-700"
-                      }`}
-                    >
-                      {isJackpotActive ? "Disable Jackpot" : "Enable Jackpot"}
-                    </button>
-                  </div>
-                  <div>
-                    <button
-                      onClick={handleExplodeJackpot}
-                      className="w-full bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 disabled:opacity-50"
-                      disabled={!isJackpotActive || !jackpotCandidates.length}
-                    >
-                      Explode Jackpot
-                    </button>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Add Jackpot Candidate
-                    </label>
-                    <div className="flex space-x-2">
-                      <input
-                        type="text"
-                        value={newCandidate.identifier}
-                        onChange={(e) =>
-                          setNewCandidate({
-                            ...newCandidate,
-                            identifier: e.target.value,
-                          })
-                        }
-                        className="w-full p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                        placeholder="ID, Phone, or Name"
-                      />
-                      <select
-                        value={newCandidate.identifierType}
-                        onChange={(e) =>
-                          setNewCandidate({
-                            ...newCandidate,
-                            identifierType: e.target.value,
-                          })
-                        }
-                        className="p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                      >
-                        <option value="id">ID</option>
-                        <option value="phone">Phone</option>
-                        <option value="name">Name</option>
-                      </select>
-                    </div>
-                    <select
-                      value={newCandidate.days}
-                      onChange={(e) =>
-                        setNewCandidate({
-                          ...newCandidate,
-                          days: Number(e.target.value),
-                        })
-                      }
-                      className="w-full mt-2 p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                    >
-                      <option value="7">7 Days</option>
-                      <option value="14">14 Days</option>
-                    </select>
-                    <button
-                      onClick={handleAddJackpotCandidate}
-                      className="w-full mt-2 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-                    >
-                      Add Candidate
-                    </button>
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200">
-                      Jackpot Candidates
-                    </h3>
-                    <ul className="mt-2 max-h-40 overflow-y-auto">
-                      {jackpotCandidates.map((candidate, index) => (
-                        <li
-                          key={index}
-                          className="text-gray-800 dark:text-gray-200"
-                        >
-                          {candidate.identifier} ({candidate.identifierType},{" "}
-                          {candidate.days} days)
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-        {isSettingsOpen && (
-          <div className="mt-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-2">
-              Settings
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Call Speed (seconds)
-                </label>
-                <select
-                  value={speed}
-                  onChange={(e) => setSpeed(Number(e.target.value))}
-                  className="w-full p-2 border rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200"
-                >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((s) => (
-                    <option key={s} value={s}>
-                      {s} seconds
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
+      {/* Navigation Header */}
+      <div className="flex justify-between items-center w-full max-w-[1200px]">
+        <button
+          className="bg-transparent border border-gray-600 text-[#f0e14a] hover:border-none w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300"
+          onClick={() => navigate("/cashier-dashboard")}
+        >
+          ↩️
+        </button>
+        <button
+          className="bg-transparent border border-gray-600 text-[#f0e14a] w-10 h-10 rounded flex justify-center items-center text-xl cursor-pointer transition-all duration-300 hover:bg-white/10 hover:scale-105"
+          onClick={handleToggleFullscreen}
+        >
+          {isFullscreen ? "⎋" : "⛶"}
+        </button>
+        <button
+          className="bg-transparent border border-gray-600 text-[#f0e14a] px-3 flex items-center gap-1.5 rounded cursor-pointer transition-all duration-300 hover:bg-white/10 hover:scale-105"
+          onClick={toggleLanguage}
+        >
+          <span className="text-base">🇬🇧</span>
+          <span className="text-sm">
+            {translations[language]?.language || "Language"}
+          </span>
+        </button>
       </div>
+
+      {/* Title and Recent Numbers */}
+      <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
+        <h1 className="text-5xl font-black text-[#f0e14a] text-center">
+          JOKER BINGO
+        </h1>
+        <div className="flex justify-center items-center gap-2">
+          <span className="text-[#e9a64c] text-2xl font-bold mr-1">
+            Last called:
+          </span>
+          {recentNumbers}
+        </div>
+      </div>
+
+      {/* Game Info */}
+      <div className="flex flex-wrap justify-center gap-2 mb-5 w-full">
+        <div className="text-[#f0e14a] text-2xl font-bold mr-2">
+          GAME {isLoading ? "Loading..." : gameData?.gameNumber || "Unknown"}
+        </div>
+        <div className="bg-[#f0e14a] text-black px-3 py-1.5 rounded-full font-bold text-xs whitespace-nowrap">
+          Called {calledNumbers.length}/75
+        </div>
+      </div>
+
+      {/* Bingo Board */}
+      <div className="flex flex-col gap-[5px] mb-5 w-full max-w-[1200px] flex-grow justify-center items-center">
+        {generateBoard()}
+      </div>
+
+      {/* Controls and Last Number */}
+      <div className="w-full flex items-center gap-4 max-w-[1200px] max-md:flex-col">
+        <div className="flex-1 flex flex-col items-center">
+          {/* Control Buttons */}
+          <div className="flex flex-wrap justify-center gap-2 mb-4 w-full">
+            <button
+              className={`bg-[#4caf50] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
+                isPlaying ? "bg-[#e9744c]" : ""
+              }`}
+              onClick={handlePlayPause}
+              disabled={isGameOver}
+            >
+              {isPlaying ? "Pause" : "Play"}
+            </button>
+            <button
+              className={`bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
+                isAutoCall ? "bg-[#4caf50]" : ""
+              }`}
+              onClick={() => setIsAutoCall((prev) => !prev)}
+              disabled={!gameData?._id || !isPlaying || isGameOver}
+            >
+              Auto Call {isAutoCall ? "On" : "Off"}
+            </button>
+            <button
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={handleNextButtonClick} // ✅ Fixed: Use the handler
+              disabled={
+                !gameData?._id || isCallingNumber || !isPlaying || isGameOver
+              }
+            >
+              {isCallingNumber ? "Calling..." : "Next"}
+            </button>
+            <button
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={handleFinish}
+              disabled={isGameOver}
+            >
+              Finish
+            </button>
+            <button
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={handleShuffle}
+              disabled={!isPlaying || isGameOver}
+            >
+              Shuffle
+            </button>
+          </div>
+
+          {/* Card Check Input */}
+          <div className="flex gap-2 mt-2 w-full justify-center">
+            <input
+              type="text"
+              className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
+              value={cardId}
+              onChange={(e) => setCardId(e.target.value)}
+              placeholder="Enter Card ID"
+              disabled={!gameData?._id}
+            />
+            <button
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={() => handleCheckCard(cardId)}
+              disabled={!gameData?._id}
+            >
+              Check
+            </button>
+          </div>
+
+          {/* Moderator Controls */}
+          {user?.role === "moderator" && (
+            <div className="flex flex-col gap-4 mt-4 w-full max-w-md">
+              <div className="flex gap-2 justify-center">
+                <input
+                  type="number"
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black w-40"
+                  value={manualNumber}
+                  onChange={(e) => setManualNumber(e.target.value)}
+                  placeholder="Manual Number (1-75)"
+                  disabled={!isPlaying || isGameOver}
+                  min="1"
+                  max="75"
+                />
+                <button
+                  className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+                  onClick={handleManualCallButtonClick} // ✅ Fixed: Use the handler
+                  disabled={
+                    !isPlaying || isGameOver || !manualNumber || isCallingNumber
+                  }
+                >
+                  Call Manual
+                </button>
+              </div>
+              {/* Jackpot Controls */}
+              <div className="flex flex-col gap-2 bg-[#0f1a4a] p-4 rounded-lg">
+                <h3 className="text-[#f0e14a] text-lg font-bold">
+                  Jackpot Controls
+                </h3>
+                <button
+                  className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] ${
+                    isJackpotActive ? "bg-[#4caf50]" : ""
+                  }`}
+                  onClick={handleToggleJackpot}
+                >
+                  Jackpot {isJackpotActive ? "On" : "Off"}
+                </button>
+                <input
+                  type="text"
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.identifier}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      identifier: e.target.value,
+                    })
+                  }
+                  placeholder="ID, Name, or Phone"
+                  disabled={!isJackpotActive}
+                />
+                <select
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.identifierType}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      identifierType: e.target.value,
+                    })
+                  }
+                  disabled={!isJackpotActive}
+                >
+                  <option value="id">ID</option>
+                  <option value="name">Name</option>
+                  <option value="phone">Phone</option>
+                </select>
+                <select
+                  className="p-2 bg-[#e9a64c] border-none rounded text-sm text-black"
+                  value={newCandidate.days}
+                  onChange={(e) =>
+                    setNewCandidate({
+                      ...newCandidate,
+                      days: Number(e.target.value),
+                    })
+                  }
+                  disabled={!isJackpotActive}
+                >
+                  <option value={7}>7 Days</option>
+                  <option value={14}>14 Days</option>
+                </select>
+                <button
+                  className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
+                  onClick={handleAddJackpotCandidate}
+                  disabled={!isJackpotActive || !newCandidate.identifier}
+                >
+                  Add Candidate
+                </button>
+                <button
+                  className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
+                  onClick={fetchJackpotCandidates}
+                  disabled={!isJackpotActive}
+                >
+                  Refresh Candidates
+                </button>
+                <button
+                  className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] ${
+                    !jackpotCandidates.length
+                      ? "opacity-50 cursor-not-allowed"
+                      : ""
+                  }`}
+                  onClick={handleExplodeJackpot}
+                  disabled={!jackpotCandidates.length}
+                >
+                  Run Jackpot
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Speed Control */}
+          <div className="flex justify-center items-center gap-2 mt-4 mb-4">
+            <span className="text-sm">🕒</span>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              value={speed}
+              onChange={(e) => setSpeed(parseInt(e.target.value))}
+              className="w-20 accent-[#f0e14a]"
+              disabled={!isPlaying || isGameOver}
+            />
+            <span className="text-sm">{speed}s</span>
+          </div>
+        </div>
+
+        {/* Last Number Container */}
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col items-center">
+            <p className="text-[#f0e14a] text-sm font-bold mb-1">
+              Current Number
+            </p>
+            <p className="w-16 h-16 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
+              {currentNumber || "-"}
+            </p>
+          </div>
+          <div className="flex flex-col items-center">
+            <p className="text-[#f0e14a] text-sm font-bold mb-1">Prize Pool</p>
+            <p className="w-16 h-16 flex justify-center items-center bg-[#e9744c] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-white">
+              {gameData?.prizePool?.toFixed(2) || 0}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Jackpot Display */}
+      {isJackpotActive && (
+        <div
+          ref={jackpotRef}
+          className={`fixed bottom-5 left-5 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-50 min-w-[250px] transition-transform duration-1000 ${
+            jackpotGrow ? "scale-150 animate-pulse" : "scale-100"
+          }`}
+        >
+          <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
+            JACKPOT
+          </div>
+          <div className="text-3xl font-bold text-[#f0e14a] mb-2">
+            {isLoading ? "Loading..." : jackpotAmount.toFixed(2)} BIRR
+          </div>
+          <div className="text-sm text-white mb-1">
+            Winner ID: {jackpotWinner.userId}
+          </div>
+          <div className="text-sm text-white mb-1">
+            Prize: {jackpotWinner.prize.toFixed(2)} BIRR
+          </div>
+          <div className="text-sm text-white mb-2">
+            Draw Date: {jackpotWinner.drawDate}
+          </div>
+          {user?.role === "moderator" && (
+            <button
+              className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full ${
+                !jackpotCandidates.length ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+              onClick={handleExplodeJackpot}
+              disabled={!jackpotCandidates.length}
+            >
+              Run Jackpot
+            </button>
+          )}
+          {user?.role === "moderator" && jackpotCandidates.length > 0 && (
+            <div className="mt-2">
+              <div className="text-sm text-[#f0e14a] font-bold mb-1">
+                Active Candidates
+              </div>
+              <ul className="text-sm text-white max-h-32 overflow-y-auto">
+                {jackpotCandidates.map((candidate) => (
+                  <li key={candidate._id} className="mb-1">
+                    {candidate.identifier} ({candidate.identifierType}, Expires:{" "}
+                    {new Date(candidate.expiryDate).toLocaleDateString()})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isWinnerModalOpen && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Winner!</h2>
+          <div className="w-60 aspect-square my-2 mx-auto">
+            <canvas ref={canvasRef}></canvas>
+          </div>
+          <p className="mb-4 text-lg text-white">
+            Game #{gameData?.gameNumber}: Card {winningCards[0]?.cardId} won{" "}
+            {gameData?.prizePool?.toFixed(2)} BIRR!
+          </p>
+          <p className="text-[#f0e14a] text-sm mb-2">
+            Winning Pattern:{" "}
+            {winningCards[0]?.winningPattern?.replace("_", " ") || "unknown"}
+          </p>
+          {winningCards[0]?.calledNumbers?.length > 0 && (
+            <p className="text-white text-sm mb-2">
+              Called Numbers: {winningCards[0].calledNumbers.join(", ")}
+            </p>
+          )}
+          {winningCards[0]?.remainingNumbers?.length > 0 && (
+            <p className="text-white text-sm mb-2">
+              Remaining Numbers: {winningCards[0].remainingNumbers.join(", ")}
+            </p>
+          )}
+          <button
+            className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+            onClick={() => setIsWinnerModalOpen(false)}
+          >
+            Close
+          </button>
+        </div>
+      )}
+
+      {/* Jackpot Winner Modal */}
+      {isJackpotWinnerModalOpen && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] z-50">
+          {/* Animation Canvas */}
+          <canvas
+            ref={jackpotCanvasRef}
+            className="absolute inset-0 w-full h-full"
+          ></canvas>
+          {/* Modal Content */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-8 border-[#f0e14a] p-8 rounded-2xl text-center min-w-[400px] shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-10">
+            <h2 className="text-[#f0e14a] mb-4 text-5xl font-extrabold uppercase tracking-wider bg-[#1a2a6c] py-3 px-6 rounded-lg shadow-inner">
+              JACKPOT EXPLODED!
+            </h2>
+            <p className="mb-4 text-2xl text-white font-semibold">
+              {jackpotWinner.message}
+            </p>
+            <p className="mb-4 text-2xl text-white font-bold">
+              Congratulations, {jackpotWinner.userId}!
+            </p>
+            <div className="w-[300px] h-[150px] mx-auto mb-6 flex items-center justify-center relative">
+              <div className="text-[#f0e14a] text-4xl font-extrabold bg-black/70 px-8 py-4 rounded-xl shadow-[0_0_20px_rgba(240,225,74,0.8)]">
+                {jackpotWinner.prize.toFixed(2)} BIRR
+              </div>
+            </div>
+            <button
+              className="bg-[#e9744c] text-white border-none px-6 py-3 font-bold rounded-lg cursor-pointer text-base transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 shadow-[0_0_15px_rgba(233,116,76,0.5)]"
+              onClick={() => {
+                setIsJackpotWinnerModalOpen(false);
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Game Finished Modal */}
+      {isGameFinishedModalOpen && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-5 rounded-xl z-50 text-center min-w-[300px] shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[#f0e14a] mb-4 text-2xl">Game Finished!</h2>
+          <p className="mb-4 text-lg text-white">
+            Game #{gameData?.gameNumber}: All numbers called or game ended.
+          </p>
+          <div className="flex gap-2 justify-center">
+            <button
+              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              onClick={() => setIsGameFinishedModalOpen(false)}
+            >
+              Close
+            </button>
+            <button
+              className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
+              onClick={handleStartNextGame}
+              disabled={isLoading}
+            >
+              {isLoading ? "Starting..." : "Start Next Game"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Error Modal */}
+      {isErrorModalOpen && callError && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-950 border-4 border-orange-500 p-5 rounded-xl z-50 text-center min-w-[300px] shadow-2xl">
+          <h2 className="text-orange-500 mb-4 text-2xl">Error</h2>
+          <p className="mb-4 text-lg text-white">{callError}</p>
+          <button
+            className="bg-orange-400 text-black px-4 py-2 font-bold rounded text-sm hover:bg-orange-300 transition-colors duration-300"
+            onClick={() => {
+              setIsErrorModalOpen(false);
+              setCallError(null);
+              if (
+                callError.includes("Invalid game ID") ||
+                callError.includes("No game ID found") ||
+                callError.includes("Failed to load game")
+              ) {
+                navigate("/create-game");
+              }
+            }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+
+      {/* Settings Sidebar */}
+      {isSettingsOpen && (
+        <div
+          className="fixed top-0 left-0 w-[300px] h-full bg-[#0f1a4a] z-50 transition-left duration-300 overflow-y-auto shadow-[0_0_15px_rgba(0,0,0,0.5)]"
+          style={{ left: isSettingsOpen ? "0" : "-300px" }}
+        >
+          <div className="flex justify-between items-center p-5 border-b border-[#2a3969]">
+            <div className="text-[#f0e14a] text-2xl font-bold">
+              Game Settings
+            </div>
+            <button
+              className="text-white text-2xl cursor-pointer"
+              onClick={() => setIsSettingsOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+      {isSettingsOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40"
+          onClick={() => setIsSettingsOpen(false)}
+        ></div>
+      )}
+
+      {/* Hidden Canvas */}
+      <canvas ref={canvasRef} style={{ display: "none" }}></canvas>
+
+      {/* CSS for Fallback Animation */}
+      <style jsx>{`
+        @keyframes explode1 {
+          0% {
+            transform: translate(0, 0);
+            opacity: 1;
+          }
+          100% {
+            transform: translate(120px, -120px);
+            opacity: 0;
+          }
+        }
+        @keyframes explode2 {
+          0% {
+            transform: translate(0, 0);
+            opacity: 1;
+          }
+          100% {
+            transform: translate(-100px, -140px);
+            opacity: 0;
+          }
+        }
+        @keyframes explode3 {
+          0% {
+            transform: translate(0, 0);
+            opacity: 1;
+          }
+          100% {
+            transform: translate(140px, -100px);
+            opacity: 0;
+          }
+        }
+        @keyframes explode4 {
+          0% {
+            transform: translate(0, 0);
+            opacity: 1;
+          }
+          100% {
+            transform: translate(-120px, 120px);
+            opacity: 0;
+          }
+        }
+        @keyframes explode5 {
+          0% {
+            transform: translate(0, 0);
+            opacity: 1;
+          }
+          100% {
+            transform: translate(100px, 140px);
+            opacity: 0;
+          }
+        }
+        .animate-fireworks {
+          position: relative;
+          width: 100%;
+          height: 100%;
+        }
+        .animate-explode1,
+        .animate-explode2,
+        .animate-explode3,
+        .animate-explode4,
+        .animate-explode5 {
+          animation-duration: 2s;
+          animation-iteration-count: infinite;
+          animation-timing-function: ease-out;
+        }
+        .animate-explode1 {
+          animation-name: explode1;
+        }
+        .animate-explode2 {
+          animation-name: explode2;
+          animation-delay: 0.4s;
+        }
+        .animate-explode3 {
+          animation-name: explode3;
+          animation-delay: 0.8s;
+        }
+        .animate-explode4 {
+          animation-name: explode4;
+          animation-delay: 1.2s;
+        }
+        .animate-explode5 {
+          animation-name: explode5;
+          animation-delay: 1.6s;
+        }
+      `}</style>
     </div>
   );
 };

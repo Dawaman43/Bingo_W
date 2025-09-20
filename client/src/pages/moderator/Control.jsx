@@ -66,15 +66,6 @@ export default function ModeratorDashboard() {
           moderatorWinnerCardId: g.moderatorWinnerCardId,
         }))
       );
-      const unknownStatusGames = allGames.filter(
-        (g) => !["active", "finished", "pending"].includes(g.status)
-      );
-      if (unknownStatusGames.length > 0) {
-        console.log(
-          "[fetchGames] Games with unknown statuses:",
-          unknownStatusGames
-        );
-      }
       setActiveGames(allGames.filter((g) => g.status === "active"));
       setFinishedGames(
         allGames.filter(
@@ -83,24 +74,6 @@ export default function ModeratorDashboard() {
       );
       setPendingGames(allGames.filter((g) => g.status === "pending"));
       setConfiguredWinnerGames(allGames.filter((g) => g.moderatorWinnerCardId));
-      console.log(
-        "[fetchGames] Active games:",
-        allGames.filter((g) => g.status === "active")
-      );
-      console.log(
-        "[fetchGames] Finished games:",
-        allGames.filter(
-          (g) => g.status === "finished" || g.status === "completed"
-        )
-      );
-      console.log(
-        "[fetchGames] Pending games:",
-        allGames.filter((g) => g.status === "pending")
-      );
-      console.log(
-        "[fetchGames] Configured winner games:",
-        allGames.filter((g) => g.moderatorWinnerCardId)
-      );
     } catch (err) {
       setError("Failed to fetch games. Please try again.");
       console.error("[fetchGames] Error:", err);
@@ -112,9 +85,11 @@ export default function ModeratorDashboard() {
   const fetchAllCards = async () => {
     try {
       const cards = await gameService.getAllCards();
+      console.log("[fetchAllCards] Fetched cards:", cards);
       setAllCards(cards);
     } catch (err) {
       console.error("[fetchAllCards] Failed to fetch cards:", err);
+      setError("Failed to fetch cards. Please try again.");
     }
   };
 
@@ -309,10 +284,27 @@ export default function ModeratorDashboard() {
     const updatedWinners = [...futureWinners];
     updatedWinners[index][field] = value;
     setFutureWinners(updatedWinners);
+    console.log("[handleWinnerChange] Updated futureWinners:", updatedWinners);
   };
 
   const handleConfigureFutureWinner = async () => {
     setModalError(null);
+    console.log(
+      "[handleConfigureFutureWinner] Starting with futureWinners:",
+      futureWinners
+    );
+
+    // Ensure futureWinners is an array and not empty
+    if (!Array.isArray(futureWinners) || futureWinners.length === 0) {
+      setModalError("No valid winner configurations provided.");
+      console.error(
+        "[handleConfigureFutureWinner] futureWinners is invalid:",
+        futureWinners
+      );
+      return;
+    }
+
+    // Validate each winner entry
     const invalidWinner = futureWinners.find(
       (winner) => !winner.gameNumber || !winner.cardId
     );
@@ -320,41 +312,83 @@ export default function ModeratorDashboard() {
       setModalError(
         "Please enter a game number and select a winning card for all entries."
       );
+      console.error(
+        "[handleConfigureFutureWinner] Invalid winner entry:",
+        invalidWinner
+      );
       return;
     }
 
-    const formattedWinners = futureWinners.map((winner) => ({
-      gameNumber: parseInt(winner.gameNumber, 10),
-      cardId: parseInt(winner.cardId, 10),
-      jackpotEnabled: winner.jackpotEnabled,
-    }));
+    // Format winners for the payload
+    const formattedWinners = futureWinners.map((winner, index) => {
+      const gameNumber = parseInt(winner.gameNumber, 10);
+      const cardId = parseInt(winner.cardId, 10);
+      console.log(
+        `[handleConfigureFutureWinner] Formatting winner ${index + 1}:`,
+        {
+          gameNumber,
+          cardId,
+          jackpotEnabled: winner.jackpotEnabled,
+        }
+      );
+      return {
+        gameNumber,
+        cardId,
+        jackpotEnabled: winner.jackpotEnabled,
+      };
+    });
 
-    for (const winner of formattedWinners) {
+    console.log(
+      "[handleConfigureFutureWinner] Formatted winners:",
+      formattedWinners
+    );
+
+    // Validate formatted winners
+    for (const [index, winner] of formattedWinners.entries()) {
       if (isNaN(winner.gameNumber) || winner.gameNumber < 1) {
         setModalError(
           `Invalid game number for entry ${
-            formattedWinners.indexOf(winner) + 1
-          }.`
+            index + 1
+          }. Must be a positive number.`
+        );
+        console.error(
+          "[handleConfigureFutureWinner] Invalid gameNumber:",
+          winner
         );
         return;
       }
       if (isNaN(winner.cardId) || winner.cardId < 1) {
         setModalError(
-          `Invalid card ID for entry ${formattedWinners.indexOf(winner) + 1}.`
+          `Invalid card ID for entry ${index + 1}. Must be a positive number.`
         );
+        console.error("[handleConfigureFutureWinner] Invalid cardId:", winner);
         return;
       }
     }
 
+    const payload = { games: formattedWinners };
+    console.log(
+      "[handleConfigureFutureWinner] Final payload to send:",
+      JSON.stringify(payload)
+    );
+
     setModalLoading(true);
     try {
-      await moderatorService.configureFutureWinners(formattedWinners);
+      const response = await moderatorService.configureFutureWinners(payload);
+      console.log("[handleConfigureFutureWinner] Backend response:", response);
       await fetchGames();
       setFutureWinnerModalOpen(false);
       setFutureWinners([{ gameNumber: "", cardId: "", jackpotEnabled: true }]);
     } catch (err) {
-      setModalError("Failed to configure future winners. Please try again.");
-      console.error("[handleConfigureFutureWinner] Error:", err);
+      const errorMessage =
+        err.response?.data?.message ||
+        "Failed to configure future winners. Please try again.";
+      setModalError(errorMessage);
+      console.error("[handleConfigureFutureWinner] Error:", err, {
+        response: err.response?.data,
+        status: err.response?.status,
+        payloadSent: payload,
+      });
     } finally {
       setModalLoading(false);
     }
@@ -922,7 +956,7 @@ export default function ModeratorDashboard() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                          Winning Card ID
+                          Winning Card Number
                         </label>
                         <select
                           value={winner.cardId}
@@ -932,10 +966,10 @@ export default function ModeratorDashboard() {
                           className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                           disabled={modalLoading}
                         >
-                          <option value="">Select Card ID</option>
+                          <option value="">Select Card Number</option>
                           {allCards.map((card) => (
-                            <option key={card.cardId} value={card.cardId}>
-                              Card #{card.cardId}
+                            <option key={card._id} value={card.card_number}>
+                              Card #{card.card_number}
                             </option>
                           ))}
                         </select>

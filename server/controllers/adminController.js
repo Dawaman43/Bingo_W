@@ -4,11 +4,14 @@ import GameLog from "../models/GameLog.js";
 import JackpotCandidate from "../models/JackpotCandidate.js";
 import bcrypt from "bcrypt";
 import mongoose from "mongoose";
+import FutureWinner from "../models/FutureWinner.js";
+
 import {
   getNextGameNumber,
   getCurrentGameNumber,
   createGameRecord,
   getCashierIdFromUser,
+  generateQuickWinSequence,
 } from "../utils/gameUtils.js";
 import Counter from "../models/Counter.js";
 import Card from "../models/Card.js";
@@ -254,16 +257,10 @@ export const getNextPendingGame = async (req, res, next) => {
 // Get all cards
 export const getAllCards = async (req, res, next) => {
   try {
-    const cards = await Card.find().lean();
-    res.json({
-      message: "All cards retrieved successfully",
-      data: cards.map((card) => ({
-        cardId: card.card_number,
-        numbers: card.numbers,
-      })),
-    });
+    const cards = await Card.find().sort({ card_number: 1 });
+    res.json({ message: "All cards retrieved successfully", data: cards });
   } catch (error) {
-    console.error("[getAllCards] Error in getAllCards:", error);
+    console.error("[getAllCards] Error:", error);
     next(error);
   }
 };
@@ -272,379 +269,95 @@ export const getAllCards = async (req, res, next) => {
 export const createSequentialGames = async (req, res, next) => {
   try {
     const {
-      count,
-      pattern = "horizontal_line",
       betAmount = 10,
       houseFeePercentage = 15,
+      pattern = "horizontal_line",
       jackpotEnabled = true,
-      selectedCards = [],
-      moderatorWinnerCardIds = [],
+      cardPool = [],
+      moderatorWinnerCardId = null,
     } = req.body;
 
-    const validPatterns = [
-      "four_corners_center",
-      "cross",
-      "main_diagonal",
-      "other_diagonal",
-      "horizontal_line",
-      "vertical_line",
-      "all",
-    ];
-    if (!validPatterns.includes(pattern)) {
-      return res.status(400).json({ message: "Invalid game pattern" });
+    await getCashierIdFromUser(req, res, () => {});
+    const cashierId = req.cashierId;
+
+    if (!cardPool.length) {
+      return res.status(400).json({ message: "cardPool required" });
     }
 
-    if (!count || count <= 0) {
-      return res.status(400).json({ message: "Count must be > 0" });
+    const cards = await Card.find({ card_number: { $in: cardPool } });
+    if (cards.length !== cardPool.length) {
+      return res.status(400).json({ message: "Some cards not found" });
     }
 
-    if (!selectedCards.length) {
-      return res.status(400).json({ message: "No cards selected" });
-    }
-
-    const cardIds = selectedCards
-      .map((c) =>
-        typeof c === "object" && "id" in c ? Number(c.id) : Number(c)
-      )
-      .filter((id) => !isNaN(id));
-
-    const cards = await Card.find({ card_number: { $in: cardIds } });
-    if (!cards.length) {
-      return res.status(400).json({ message: "No valid cards found" });
-    }
-
-    const gameCards = cards.map((card) => ({
-      id: card.card_number,
-      numbers: card.numbers,
+    const gameCards = cards.map((c) => ({
+      id: c.card_number,
+      numbers: c.numbers,
     }));
+    const totalPot = betAmount * gameCards.length;
+    const houseFee = (totalPot * houseFeePercentage) / 100;
+    const prizePool =
+      totalPot - houseFee - (jackpotEnabled ? totalPot * 0.1 : 0);
 
-    const createdGames = [];
-    let currentGameNumber = await getCurrentGameNumber();
-    if (!currentGameNumber) currentGameNumber = 1;
+    // Get next available game number
+    const lastGame = await Game.findOne({ cashierId })
+      .sort({ gameNumber: -1 })
+      .lean();
+    const gameNumber = lastGame ? lastGame.gameNumber + 1 : 1;
 
-    await getCashierIdFromUser(req, res, () => {});
-    const cashierId = req.cashierId;
-
-    for (let i = 0; i < count; i++) {
-      const gameNumber = await getNextGameNumber(currentGameNumber + i);
-      const totalPot = betAmount * gameCards.length;
-      const houseFee = (totalPot * houseFeePercentage) / 100;
-      const potentialJackpot = jackpotEnabled ? totalPot * 0.1 : 0;
-      const prizePool = totalPot - houseFee - potentialJackpot;
-
-      let moderatorWinnerCardId = moderatorWinnerCardIds[i]
-        ? Number(moderatorWinnerCardIds[i])
-        : null;
-      let finalJackpotEnabled = jackpotEnabled;
-      let forcedPattern = null;
-      let selectedWinnerRowIndices = [];
-      let forcedCallSequence = [];
-
-      if (!moderatorWinnerCardId) {
-        const futureWinning = await Counter.findOne({
-          _id: `futureWinning_${gameNumber}`,
-        });
-        if (futureWinning && futureWinning.cardId !== undefined) {
-          moderatorWinnerCardId = Number(futureWinning.cardId);
-          finalJackpotEnabled =
-            futureWinning.jackpotEnabled !== undefined
-              ? futureWinning.jackpotEnabled
-              : jackpotEnabled;
-          // Compute sequence for future winner
-          if (futureWinning.numbers) {
-            let usePattern = pattern;
-            if (pattern === "all") {
-              const patternChoices = validPatterns.filter((p) => p !== "all");
-              usePattern =
-                patternChoices[
-                  Math.floor(Math.random() * patternChoices.length)
-                ];
-              forcedPattern = usePattern;
-            }
-            const { selectedIndices } = getNumbersForPattern(
-              futureWinning.numbers,
-              usePattern,
-              [],
-              true
-            );
-            const flatNumbers = futureWinning.numbers.flat();
-            const required_numbers = selectedIndices.map(
-              (idx) => flatNumbers[idx]
-            );
-            forcedCallSequence = computeForcedSequence(required_numbers);
-            selectedWinnerRowIndices = selectedIndices;
-          }
-        }
-      }
-
-      if (
-        moderatorWinnerCardId &&
-        !gameCards.some((card) => card.id === Number(moderatorWinnerCardId))
-      ) {
-        continue;
-      }
-
-      if (moderatorWinnerCardId) {
-        const winnerCard = gameCards.find(
-          (card) => card.id === moderatorWinnerCardId
-        );
-        if (winnerCard) {
-          let usePattern = pattern;
-          if (pattern === "all") {
-            const patternChoices = validPatterns.filter((p) => p !== "all");
-            usePattern =
-              patternChoices[Math.floor(Math.random() * patternChoices.length)];
-            forcedPattern = usePattern;
-          }
-          const { selectedIndices } = getNumbersForPattern(
-            winnerCard.numbers,
-            usePattern,
-            [],
-            true
-          );
-          const flatNumbers = winnerCard.numbers.flat();
-          const required_numbers = selectedIndices.map(
-            (idx) => flatNumbers[idx]
-          );
-          forcedCallSequence = computeForcedSequence(required_numbers);
-          selectedWinnerRowIndices = selectedIndices;
-        }
-      }
-
-      const game = await createGameRecord({
-        gameNumber,
-        cashierId,
-        betAmount,
-        houseFeePercentage,
-        houseFee,
-        selectedCards: gameCards,
-        pattern,
-        prizePool,
-        potentialJackpot: finalJackpotEnabled ? totalPot * 0.1 : 0,
-        moderatorWinnerCardId,
-        selectedWinnerRowIndices,
-        forcedPattern,
-        forcedCallSequence,
-        jackpotEnabled: finalJackpotEnabled,
-      });
-
-      createdGames.push(game);
-    }
-
-    res.json({ message: "Sequential games created", data: createdGames });
-  } catch (error) {
-    console.error(
-      "[createSequentialGames] Error in createSequentialGames:",
-      error
-    );
-    if (!(error.name === "ValidationError")) {
-      await GameLog.create({
-        gameId: null,
-        action: "createSequentialGames",
-        status: "failed",
-        details: { error: error.message || "Internal server error" },
-      });
-    }
-    next(error);
-  }
-};
-
-// Configure future winners
-export const configureFutureWinners = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { winners } = req.body;
-
-    // Normalize moderatorId (JWT may have "id" instead of "_id")
-    const moderatorId = req.user?._id || req.user?.id;
-
-    await getCashierIdFromUser(req, res, () => {});
-    const cashierId = req.cashierId;
-
-    if (!Array.isArray(winners) || winners.length === 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Invalid winners array" });
-    }
-
-    const configured = [];
-    const validPatterns = [
-      "four_corners_center",
-      "cross",
-      "main_diagonal",
-      "other_diagonal",
-      "horizontal_line",
-      "vertical_line",
-    ];
-
-    for (const { gameNumber, cardId, jackpotEnabled = true } of winners) {
-      if (!gameNumber || !cardId) {
-        console.log(
-          `[configureFutureWinners] Skipping invalid entry: gameNumber=${gameNumber}, cardId=${cardId}`
-        );
-        continue;
-      }
-
-      const parsedCardId = Number(cardId);
-      if (isNaN(parsedCardId)) {
-        console.log(`[configureFutureWinners] Invalid cardId: ${cardId}`);
-        continue;
-      }
-
-      const card = await Card.findOne({ card_number: parsedCardId }).session(
-        session
-      );
-      if (!card) {
-        console.log(`[configureFutureWinners] Card not found: ${parsedCardId}`);
-        continue;
-      }
-
-      let game = await Game.findOne({ gameNumber, cashierId }).session(session);
-
-      if (game) {
-        const winnerCard = game.selectedCards.find(
-          (c) => c.id === parsedCardId
-        );
-        if (!winnerCard) {
-          console.log(
-            `[configureFutureWinners] Winner card ${parsedCardId} not in game ${gameNumber}`
-          );
-          continue;
-        }
-
-        let usePattern = game.pattern;
-        let forcedPattern = null;
-        if (game.pattern === "all") {
-          usePattern =
-            validPatterns[Math.floor(Math.random() * validPatterns.length)];
-          forcedPattern = usePattern;
-          console.log(
-            `[configureFutureWinners] Pattern 'all' detected for game ${gameNumber}, selected: ${forcedPattern}`
-          );
-        }
-
-        const { selectedIndices, selectedNumbers } = getNumbersForPattern(
-          winnerCard.numbers,
-          usePattern,
-          [],
-          true
-        );
-        console.log(
-          `[configureFutureWinners] Required numbers for pattern ${usePattern} in game ${gameNumber}: ${selectedNumbers}`
-        );
-
-        const forcedCallSequence = computeForcedSequence(
-          selectedNumbers,
-          10,
-          15
-        );
-        console.log(
-          `[configureFutureWinners] Forced call sequence for game ${gameNumber}: ${JSON.stringify(
-            forcedCallSequence
-          )}`
-        );
-
-        game.moderatorWinnerCardId = parsedCardId;
-        game.selectedWinnerRowIndices = selectedIndices;
-        game.forcedPattern = forcedPattern;
-        game.forcedCallSequence = forcedCallSequence;
-        game.jackpotEnabled = jackpotEnabled;
-        await game.save({ session });
-
-        await GameLog.create(
-          [
-            {
-              gameId: game._id,
-              action: "configureFutureWinner",
-              status: "success",
-              details: {
-                gameNumber,
-                moderatorId: moderatorId ? moderatorId.toString() : "unknown",
-                winnerCardId: parsedCardId,
-                gameStatus: game.status,
-                selectedWinnerRowIndices: selectedIndices,
-                forcedPattern,
-                forcedCallSequence,
-                jackpotEnabled,
-                timestamp: new Date(),
-              },
-            },
-          ],
-          { session }
-        );
-
-        console.log(
-          `[configureFutureWinners] Moderator ${
-            moderatorId || "unknown"
-          } configured winner for game ${gameNumber} (Status: ${
-            game.status
-          }): Card ID ${parsedCardId}, Pattern: ${
-            forcedPattern || usePattern
-          }, Forced Call Sequence: ${JSON.stringify(forcedCallSequence)}`
-        );
-
-        configured.push(game);
-      } else {
-        const counterId = `${cashierId}_futureWinning_${gameNumber}`;
-        await Counter.findOneAndUpdate(
-          { _id: counterId },
-          { cardId: parsedCardId, jackpotEnabled, numbers: card.numbers },
-          { upsert: true, new: true, session }
-        );
-
-        await GameLog.create(
-          [
-            {
-              gameId: null,
-              action: "configureFutureWinner",
-              status: "success",
-              details: {
-                gameNumber,
-                moderatorId: moderatorId ? moderatorId.toString() : "unknown",
-                winnerCardId: parsedCardId,
-                numbers: card.numbers,
-                jackpotEnabled,
-                timestamp: new Date(),
-              },
-            },
-          ],
-          { session }
-        );
-
-        console.log(
-          `[configureFutureWinners] Moderator ${
-            moderatorId || "unknown"
-          } configured future winner for non-existent game ${gameNumber}: Card ID ${parsedCardId}, Jackpot Enabled: ${jackpotEnabled}`
-        );
-
-        configured.push({ gameNumber, cardId: parsedCardId, jackpotEnabled });
-      }
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.json({ message: "Future winners configured", data: configured });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("[configureFutureWinners] Error:", error);
-    await GameLog.create({
-      gameId: null,
-      action: "configureFutureWinner",
-      status: "failed",
-      details: {
-        moderatorId:
-          req.user?._id?.toString?.() ||
-          req.user?.id?.toString?.() ||
-          "unknown",
-        error: error.message || "Internal server error",
-        timestamp: new Date(),
-      },
+    // Load future winner config if exists
+    let futureWinner = await FutureWinner.findOne({
+      gameNumber,
+      cashierId,
+      used: false,
     });
-    next(error);
+
+    let winnerCardId = moderatorWinnerCardId || futureWinner?.cardId || null;
+    let winnerCardNumbers = futureWinner?.fullCardNumbers || null;
+    let forcedCallSequence = futureWinner?.forcedCallSequence || [];
+    let selectedWinnerNumbers = futureWinner?.playableNumbers || [];
+    let selectedWinnerRowIndices = futureWinner?.selectedWinnerRowIndices || [];
+
+    // Create the game
+    const game = await createGameRecord({
+      gameNumber,
+      cashierId,
+      betAmount,
+      houseFeePercentage,
+      houseFee,
+      selectedCards: gameCards,
+      pattern,
+      prizePool,
+      jackpotEnabled,
+      moderatorWinnerCardId: winnerCardId,
+      forcedCallSequence,
+      selectedWinnerNumbers,
+      selectedWinnerRowIndices,
+      targetWinCall: forcedCallSequence.length || null,
+      forcedCallIndex: 0,
+      winnerCardNumbers,
+    });
+    console.log(
+      `[createSequentialGames] Game saved with selectedWinnerNumbers:`,
+      game.selectedWinnerNumbers
+    );
+
+    // Mark future winner as used
+    if (futureWinner) {
+      console.log(`[createSequentialGames] futureWinner BEFORE saving:`, {
+        playableNumbers: futureWinner.playableNumbers,
+        forcedCallSequence: futureWinner.forcedCallSequence,
+        pattern: futureWinner.pattern,
+      });
+    } else {
+      console.log(
+        `[createSequentialGame] 🎲 No future winner, Game ${gameNumber} is random`
+      );
+    }
+
+    res.json({ message: "Game created successfully", game });
+  } catch (err) {
+    console.error("[createSequentialGame] Error:", err);
+    next(err);
   }
 };
 
@@ -726,7 +439,9 @@ export const getFinishedGames = async (req, res, next) => {
   try {
     const finishedGames = await Game.find({ status: "completed" })
       .sort({ gameNumber: 1 })
-      .select("_id gameNumber winner moderatorWinnerCardId");
+      .select(
+        "_id gameNumber winner moderatorWinnerCardId winnerCardNumbers selectedWinnerNumbers"
+      );
 
     const finishedIds = finishedGames.map((g) => g._id);
     res.json({
@@ -756,5 +471,184 @@ export const getGameLogs = async (req, res, next) => {
   } catch (error) {
     console.error("[getGameLogs] Error:", error);
     next(error);
+  }
+};
+
+export const configureFutureWinners = async (req, res) => {
+  const { games } = req.body;
+
+  if (!Array.isArray(games)) {
+    console.error(
+      "[configureFutureWinners] Invalid input: games is not an array",
+      { games }
+    );
+    return res
+      .status(400)
+      .json({ message: "Invalid input: games must be an array" });
+  }
+
+  const moderatorId = req.user.id;
+
+  try {
+    const moderator = await User.findById(moderatorId).select(
+      "managedCashier role"
+    );
+    if (!moderator) throw new Error("Moderator not found");
+    if (moderator.role !== "moderator")
+      throw new Error("User is not a moderator");
+    if (!moderator.managedCashier)
+      throw new Error("No cashier assigned to this moderator");
+
+    const cashierId = moderator.managedCashier;
+    console.log("[configureFutureWinners] Fetched cashierId:", cashierId);
+
+    const futureWinners = [];
+
+    for (const {
+      gameNumber,
+      cardId,
+      jackpotEnabled,
+      pattern = "all",
+    } of games) {
+      console.log("[configureFutureWinners] Processing game:", {
+        gameNumber,
+        cardId,
+        jackpotEnabled,
+        pattern,
+      });
+
+      if (!Number.isInteger(gameNumber) || gameNumber < 1)
+        throw new Error(`Invalid game number: ${gameNumber}`);
+      if (!Number.isInteger(cardId) || cardId < 1)
+        throw new Error(`Invalid card ID: ${cardId}`);
+
+      const card = await Card.findOne({ card_number: cardId });
+      if (!card) throw new Error(`Card not found for ID: ${cardId}`);
+      console.log("[configureFutureWinners] Fetched card:", {
+        cardId,
+        numbers: card.numbers,
+      });
+
+      // Convert "all" to a real pattern
+      let chosenPattern = pattern;
+      if (pattern === "all") {
+        const easyPatterns = [
+          "horizontal_line",
+          "vertical_line",
+          "main_diagonal",
+          "other_diagonal",
+          "four_corners_center",
+        ];
+        chosenPattern =
+          easyPatterns[Math.floor(Math.random() * easyPatterns.length)];
+        console.log(
+          `[configureFutureWinners] 🎯 "all" → converted to: ${chosenPattern}`
+        );
+      }
+
+      // Get numbers for the chosen pattern
+      const { selectedNumbers, selectedIndices } = getNumbersForPattern(
+        card.numbers,
+        chosenPattern,
+        [],
+        true // select full line
+      );
+
+      console.log(
+        `[configureFutureWinners] ✅ Numbers for pattern "${chosenPattern}": [${selectedNumbers.join(
+          ", "
+        )}]`
+      );
+
+      if (!selectedNumbers || selectedNumbers.length === 0) {
+        throw new Error(`No numbers returned for pattern "${chosenPattern}"`);
+      }
+
+      // Generate quick win sequence
+      const forcedCallSequence = generateQuickWinSequence(
+        selectedNumbers.map(Number),
+        selectedNumbers.length,
+        10,
+        14
+      );
+
+      console.log(
+        `[configureFutureWinners] 🚀 Generated forcedCallSequence (${forcedCallSequence.length} calls):`,
+        forcedCallSequence
+      );
+
+      // Sync forced sequence into the Game document safely
+      const gameDoc = await Game.findOneAndUpdate(
+        { gameNumber },
+        {
+          $set: {
+            forcedCallSequence,
+            forcedCallIndex: 0,
+            forcedPattern: chosenPattern,
+            moderatorWinnerCardId: cardId,
+          },
+        },
+        { new: true }
+      );
+
+      if (!gameDoc) {
+        console.warn(
+          `[configureFutureWinners] ⚠ Game not found for gameNumber ${gameNumber}. Forced sequence not synced.`
+        );
+      } else {
+        console.log(
+          `[configureFutureWinners] 🔗 Synced forced sequence into Game ${gameNumber}`,
+          {
+            forcedCallSequence: gameDoc.forcedCallSequence,
+            forcedPattern: gameDoc.forcedPattern,
+          }
+        );
+      }
+
+      futureWinners.push({
+        gameNumber,
+        cardId,
+        moderatorId,
+        cashierId,
+        fullCardNumbers: card.numbers.map((row) =>
+          row.map((v) => (v === "FREE" ? null : v))
+        ),
+        playableNumbers: selectedNumbers, // only what's needed to win
+        forcedCallSequence,
+        pattern: chosenPattern,
+        jackpotEnabled,
+        selectedWinnerRowIndices: selectedIndices,
+      });
+    }
+
+    const savedWinners = await FutureWinner.create(futureWinners);
+
+    console.log(
+      `[configureFutureWinners] Saved winners with playableNumbers:`,
+      savedWinners.map((w) => ({
+        gameNumber: w.gameNumber,
+        playableNumbers: w.playableNumbers,
+      }))
+    );
+
+    console.log(
+      "[configureFutureWinners] ✅ Saved future winners:",
+      savedWinners.map((w) => ({
+        gameNumber: w.gameNumber,
+        cardId: w.cardId,
+        pattern: w.pattern,
+        sequenceLength: w.forcedCallSequence.length,
+      }))
+    );
+
+    return res.status(201).json({
+      message: "Future winners configured successfully",
+      winners: savedWinners,
+    });
+  } catch (error) {
+    console.error("[configureFutureWinners] ❌ Error:", error);
+    return res
+      .status(400)
+      .json({ message: error.message || "Failed to configure future winners" });
   }
 };

@@ -145,10 +145,9 @@ const SelectCard = () => {
       return;
     }
     const totalPot = bet * selectedCount;
-    const jackpotAmount = bet;
-    const distributableAmount = totalPot - jackpotAmount;
-    const houseFee = (distributableAmount * percentage) / 100;
-    const prizePool = distributableAmount - houseFee;
+    const jackpotAmount = bet * selectedCount * 0.1; // 10% for jackpot
+    const houseFee = (totalPot * percentage) / 100;
+    const prizePool = totalPot - houseFee - jackpotAmount;
     setProfitData({
       totalPot: totalPot.toFixed(2),
       houseFee: houseFee.toFixed(2),
@@ -208,46 +207,57 @@ const SelectCard = () => {
       navigate("/login");
       return;
     }
+
     const validationError = validateGameData();
     if (validationError) {
       showAlert(validationError, "error");
       return;
     }
+
     setLoadingGame(true);
+
     try {
+      // Save settings locally
       localStorage.setItem("betAmount", betAmount);
       localStorage.setItem("housePercentage", housePercentage);
       localStorage.setItem("gamePattern", pattern);
+
+      // Prepare payload
       const payload = {
+        startGameNumber: 1,
+        numGames: 1, // always create 1 game
+        pattern,
         betAmount: parseFloat(betAmount),
         houseFeePercentage: parseInt(housePercentage),
-        pattern,
-        selectedCards: selectedCards.map((id) => ({ id: Number(id) })),
-        jackpotContribution: parseFloat(profitData.jackpotAmount),
+        jackpotEnabled: true,
+        cardPool: selectedCards.map((id) => Number(id)),
       };
-      console.log(
-        "[SelectCard] Creating game with payload:",
-        JSON.stringify(payload, null, 2)
-      );
-      const game = await gameService.createGame(payload);
-      console.log("[SelectCard] Game created:", game);
 
-      const gameId = game?._id;
-      if (!gameId) throw new Error(`Invalid game ID: ${gameId}`);
+      console.log("[SelectCard] Creating game with payload:", payload);
 
-      if (
-        !gameId ||
-        typeof gameId !== "string" ||
-        !/^[0-9a-fA-F]{24}$/.test(gameId)
-      ) {
-        throw new Error(`Invalid game ID: ${gameId}`);
+      // Call backend service
+      const data = await gameService.createSequentialGames(payload);
+      console.log("[SelectCard] Raw create game response:", data);
+
+      // Extract game object
+      const game = data?.game || (Array.isArray(data) && data[0]) || data;
+      if (!game?._id) {
+        throw new Error("Invalid game response structure - missing game ID");
       }
 
+      const gameId = game._id;
+      console.log("[SelectCard] Valid game ID found:", gameId);
+
+      // Start the game
+      const startedGame = await gameService.startGame(gameId);
+      console.log("[SelectCard] Game started response:", startedGame);
+
+      // Handle jackpot contribution
       const jackpotContribution = parseFloat(profitData.jackpotAmount);
       if (jackpotContribution > 0) {
         try {
           const currentJackpot = await moderatorService.getJackpot();
-          const newAmount = (currentJackpot.amount || 0) + jackpotContribution;
+          const newAmount = (currentJackpot?.amount || 0) + jackpotContribution;
           await moderatorService.updateJackpot(newAmount, user.id);
           console.log(`[SelectCard] Jackpot updated to ${newAmount}`);
         } catch (jackpotError) {
@@ -255,29 +265,34 @@ const SelectCard = () => {
             "[SelectCard] Jackpot update failed:",
             jackpotError.message
           );
-          showAlert("Game created but jackpot update failed", "warning");
+          showAlert("Game started but jackpot update failed", "warning");
         }
       }
-      console.log("[SelectCard] Starting game with ID:", gameId);
-      const startedGame = await gameService.startGame(gameId);
-      console.log(
-        "[SelectCard] Game started:",
-        JSON.stringify(startedGame, null, 2)
-      );
+
       showAlert("Game started successfully!", "success");
+
+      // Clear local state
+      localStorage.removeItem("selectedCards");
+      setSelectedCards([]);
+
+      // Navigate to game page
       setTimeout(() => navigate(`/bingo-game?id=${gameId}`), 1500);
     } catch (error) {
       console.error("[SelectCard] Error starting game:", {
         message: error.message,
-        status: error.response?.status,
-        data: error.response?.data,
+        fullError: error,
       });
-      const errorMessage =
-        error.response?.data?.message || error.message || "Unknown error";
-      showAlert(`Error starting game: ${errorMessage}`, "error");
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        navigate("/login");
+
+      let errorMessage = "Failed to start game";
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message.includes("Invalid game response")) {
+        errorMessage = "Invalid response from server - game creation failed.";
+      } else if (error.message.includes("missing game ID")) {
+        errorMessage = "Game ID not found in response. Server issue.";
       }
+
+      showAlert(errorMessage, "error");
     } finally {
       setLoadingGame(false);
     }
