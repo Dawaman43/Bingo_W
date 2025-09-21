@@ -9,6 +9,8 @@ import SoundService from "../../services/sound";
 import io from "socket.io-client";
 
 const BingoGame = () => {
+  const [isNonWinnerModalOpen, setIsNonWinnerModalOpen] = useState(false);
+  const [nonWinnerCardData, setNonWinnerCardData] = useState(null);
   const [bingoStatus, setBingoStatus] = useState(null);
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -1697,11 +1699,9 @@ const BingoGame = () => {
       if (response.isBingo && !response.lateCall) {
         console.log("[handleCheckCard] 🎉 BINGO DETECTED!");
 
-        // Use the winningLineInfo from backend if available, otherwise fallback to frontend calculation
         let patternNumbers, winningIndices;
 
         if (response.winningLineInfo) {
-          // Use backend-calculated pattern numbers and indices
           patternNumbers = response.winningLineInfo;
           winningIndices = patternNumbers.selectedIndices || [];
           console.log(
@@ -1709,7 +1709,6 @@ const BingoGame = () => {
             patternNumbers
           );
         } else {
-          // ✅ FIXED: Get the winning card data safely
           const winningCard = gameData.selectedCards?.find(
             (card) => card.id === numericCardId
           );
@@ -1718,7 +1717,6 @@ const BingoGame = () => {
             console.error(
               "[handleCheckCard] Winning card not found in game data"
             );
-            // Fallback to empty arrays
             patternNumbers = {
               numbers: [],
               selectedIndices: [],
@@ -1728,15 +1726,14 @@ const BingoGame = () => {
             };
             winningIndices = [];
           } else {
-            // Flatten the card numbers for processing
             const winningCardNumbers = winningCard.numbers.flat();
             const patternResult = getNumbersForPattern(
               winningCardNumbers,
               response.winningPattern,
               response.game?.calledNumbers || [],
-              true, // selectSpecificLine
-              [], // targetIndices
-              true, // includeMarked
+              true,
+              [],
+              true,
               response.lastCalledNumber
             );
             patternNumbers = patternResult;
@@ -1748,11 +1745,9 @@ const BingoGame = () => {
           }
         }
 
-        // ✅ FIXED: Safely compute winning numbers
         const winningNumbers = patternNumbers.numbers
           ? patternNumbers.numbers
               .filter((num) => {
-                // Ensure num is valid before checking includes
                 if (!num || isNaN(Number(num))) return false;
                 return (response.game?.calledNumbers || []).includes(
                   Number(num)
@@ -1761,7 +1756,6 @@ const BingoGame = () => {
               .map(Number)
           : [];
 
-        // ✅ FIXED: Safely compute other called numbers
         const otherCalledNumbers = (response.game?.calledNumbers || [])
           .filter((num) => {
             if (!num || isNaN(Number(num))) return false;
@@ -1812,54 +1806,69 @@ const BingoGame = () => {
         } catch (err) {
           console.error("[handleCheckCard] Failed to play winner sound:", err);
         }
-      } else if (response.lateCall && response.wouldHaveWon) {
-        setBingoStatus({
-          lateCall: true,
-          lateCallMessage: response.lateCallMessage,
-          wouldHaveWon: response.wouldHaveWon,
-        });
-        setIsWinnerModalOpen(true);
-        setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
-        console.log(
-          "[handleCheckCard] Late call detected:",
-          response.lateCallMessage
+      } else {
+        // Handle non-winning cases (including late calls)
+        const card = gameData.selectedCards?.find(
+          (c) => c.id === numericCardId
+        );
+        if (!card || !card.numbers) {
+          console.error("[handleCheckCard] Card data not found");
+          setCallError("Card data not found");
+          setIsErrorModalOpen(true);
+          return;
+        }
+
+        const cardNumbers = card.numbers.flat();
+        const patternResult = getNumbersForPattern(
+          cardNumbers,
+          response.winningPattern || gameData.pattern,
+          response.game?.calledNumbers || calledNumbers,
+          true,
+          [],
+          true,
+          response.lastCalledNumber
         );
 
-        try {
-          await SoundService.playSound("late_call");
-        } catch (err) {
-          console.error(
-            "[handleCheckCard] Failed to play late_call sound:",
-            err
-          );
-          try {
-            await SoundService.playSound("you_didnt_win");
-          } catch (err2) {
-            console.error(
-              "[handleCheckCard] Failed fallback you_didnt_win sound:",
-              err2
+        const calledNumbersInPattern = patternResult.numbers
+          .filter((num) => {
+            if (!num || isNaN(Number(num))) return false;
+            return (response.game?.calledNumbers || calledNumbers).includes(
+              Number(num)
             );
-          }
-        }
-      } else {
-        setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
-        setCallError(`No bingo for card ${numericCardId}`);
-        setIsErrorModalOpen(true);
-        setBingoStatus({
-          lateCall: false,
-          pattern: null,
-          numbersMatched: 0,
-          numbersLeft: null,
+          })
+          .map(Number);
+
+        const otherCalledNumbers = (
+          response.game?.calledNumbers || calledNumbers
+        )
+          .filter((num) => {
+            if (!num || isNaN(Number(num))) return false;
+            return !calledNumbersInPattern.includes(Number(num));
+          })
+          .map(Number);
+
+        setNonWinnerCardData({
+          cardId: numericCardId,
+          cardNumbers: card.numbers,
+          pattern: response.winningPattern || gameData.pattern,
+          patternInfo: patternResult,
+          calledNumbersInPattern,
+          otherCalledNumbers,
+          lateCall: response.lateCall || false,
+          lateCallMessage:
+            response.lateCallMessage || "This card missed its chance!",
+          wouldHaveWon: response.wouldHaveWon || null,
         });
-        console.error(`[handleCheckCard] No bingo for card ${numericCardId}`);
+
+        setIsNonWinnerModalOpen(true);
+        setLockedCards((prev) => [...new Set([...prev, numericCardId])]);
 
         try {
-          await SoundService.playSound("you_didnt_win");
-        } catch (err) {
-          console.error(
-            "[handleCheckCard] Failed to play you_didnt_win sound:",
-            err
+          await SoundService.playSound(
+            response.lateCall ? "late_call" : "you_didnt_win"
           );
+        } catch (err) {
+          console.error("[handleCheckCard] Failed to play sound:", err);
         }
       }
     } catch (error) {
@@ -1896,7 +1905,6 @@ const BingoGame = () => {
       }
     }
   };
-
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch((err) => {
@@ -2228,7 +2236,7 @@ const BingoGame = () => {
         {/* Last Number Container */}
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-center">
-            <p className="w-36 h-36 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-2xl font-black text-black">
+            <p className="w-36 h-36 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-6xl font-black text-black">
               {currentNumber || "-"}
             </p>
           </div>
@@ -2574,6 +2582,195 @@ const BingoGame = () => {
               </button>
             </div>
           )}
+        </div>
+      )}
+      {isNonWinnerModalOpen && nonWinnerCardData && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-4 rounded-xl z-50 text-center min-w-[320px] max-w-[380px] max-h-[90vh] overflow-y-auto shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
+          <div className="space-y-3">
+            <h2 className="text-[#f0e14a] mb-3 text-xl flex items-center justify-center gap-2">
+              <span className="text-2xl">🃏</span>
+              <span>Card Check</span>
+            </h2>
+            <p className="text-white text-base">
+              Card{" "}
+              <span className="text-[#f0e14a] font-bold">
+                {nonWinnerCardData.cardId}
+              </span>{" "}
+              is not winner
+            </p>
+
+            {nonWinnerCardData.lateCall && nonWinnerCardData.wouldHaveWon && (
+              <div className="bg-yellow-900/50 border border-yellow-400 p-3 rounded-lg">
+                <h3 className="text-yellow-200 text-base font-semibold mb-2">
+                  Late Call! ⏰
+                </h3>
+                <p className="text-yellow-100 text-sm mb-2">
+                  {nonWinnerCardData.lateCallMessage ||
+                    "You missed your chance!"}
+                </p>
+                <div className="text-xs text-yellow-200 space-y-1">
+                  <p>
+                    <strong>Pattern:</strong>{" "}
+                    {nonWinnerCardData.wouldHaveWon.pattern?.replace(
+                      "_",
+                      " "
+                    ) || "unknown"}
+                  </p>
+                  <p>
+                    <strong>On call:</strong> #
+                    {nonWinnerCardData.wouldHaveWon.callIndex}
+                  </p>
+                  <p>
+                    <strong>Missing number:</strong>{" "}
+                    {nonWinnerCardData.wouldHaveWon.completingNumber}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Card Display - Retained with markings */}
+            <div className="mt-3">
+              <h3 className="text-white text-base font-semibold mb-2 flex items-center justify-center gap-1">
+                <span className="text-green-400 text-sm">🎯</span>
+                <span className="text-sm">Card Details</span>
+              </h3>
+              <div className="w-full max-w-[260px] mx-auto relative p-1 bg-black/20 rounded-lg">
+                {/* B I N G O Headers */}
+                <div className="grid grid-cols-5 gap-0.5 mb-1 justify-items-center">
+                  {["B", "I", "N", "G", "O"].map((letter, index) => (
+                    <div
+                      key={`header-${index}`}
+                      className="w-10 h-8 flex items-center justify-center text-sm font-bold text-[#f0e14a] bg-[#2a3969] rounded border border-[#f0e14a] uppercase tracking-tight"
+                    >
+                      {letter}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Pattern Indicator */}
+                {nonWinnerCardData.patternInfo && (
+                  <div className="absolute top-[-8px] left-1/2 transform -translate-x-1/2">
+                    <div className="bg-gradient-to-r from-green-500 to-green-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold shadow border border-green-400 flex items-center gap-1 whitespace-nowrap">
+                      {(() => {
+                        const rowNum = nonWinnerCardData.patternInfo.rowIndex;
+                        const colNum = nonWinnerCardData.patternInfo.colIndex;
+
+                        if (
+                          rowNum !== null &&
+                          !isNaN(rowNum) &&
+                          rowNum >= 0 &&
+                          rowNum <= 4
+                        ) {
+                          return <>📏 Row {rowNum + 1}</>;
+                        }
+                        if (
+                          colNum !== null &&
+                          !isNaN(colNum) &&
+                          colNum >= 0 &&
+                          colNum <= 4
+                        ) {
+                          return <>📐 Col {colNum + 1}</>;
+                        }
+                        return (
+                          <>
+                            <span className="text-[8px]">✨</span>
+                            <span className="max-w-[80px] truncate">
+                              {nonWinnerCardData.pattern
+                                ?.replace("_", " ")
+                                .toUpperCase() || "PATTERN"}
+                            </span>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Bingo Card Grid - Green for pattern called, yellow for other called */}
+                <div className="grid grid-cols-5 gap-0.5 pt-0.5 relative">
+                  {(() => {
+                    const cardData = nonWinnerCardData.cardNumbers || [];
+                    const patternIndices =
+                      nonWinnerCardData.patternInfo?.selectedIndices || [];
+                    const calledInPattern =
+                      nonWinnerCardData.calledNumbersInPattern || [];
+                    const otherCalled =
+                      nonWinnerCardData.otherCalledNumbers || [];
+                    const allCalled = [...calledInPattern, ...otherCalled].map(
+                      Number
+                    );
+
+                    const cardGrid =
+                      Array.isArray(cardData) && Array.isArray(cardData[0])
+                        ? cardData
+                        : Array(5)
+                            .fill()
+                            .map(() => Array(5).fill("FREE"));
+
+                    return cardGrid.map((row, rowIndex) =>
+                      (row || Array(5).fill("FREE")).map((number, colIndex) => {
+                        const cellIndex = rowIndex * 5 + colIndex;
+                        const isFree = number === "FREE";
+                        const isPatternCell =
+                          patternIndices.includes(cellIndex);
+                        const num = Number(number);
+                        const isCalledInPattern = calledInPattern.includes(num);
+                        const isOtherCalled =
+                          otherCalled.includes(num) && !isCalledInPattern;
+                        const displayNum = isFree ? "FREE" : num;
+
+                        let cellStyle =
+                          "w-10 h-10 flex items-center justify-center text-xs font-bold rounded border transition-all duration-300 shadow-sm relative overflow-hidden";
+
+                        if (isFree) {
+                          cellStyle +=
+                            " bg-blue-600 text-white border-blue-400";
+                        } else if (isCalledInPattern) {
+                          cellStyle +=
+                            " bg-green-600 text-white border-green-400 shadow-green-400/30 scale-[1.02]";
+                        } else if (isOtherCalled) {
+                          cellStyle +=
+                            " bg-yellow-600 text-white border-yellow-400 shadow-yellow-400/30";
+                        } else {
+                          cellStyle += " bg-white text-black border-gray-300";
+                        }
+
+                        return (
+                          <div
+                            key={`${rowIndex}-${colIndex}`}
+                            className={cellStyle}
+                          >
+                            {isCalledInPattern && (
+                              <>
+                                <div className="absolute inset-0 rounded opacity-20 bg-green-400 animate-pulse"></div>
+                                <div className="absolute -top-[2px] -right-[2px] w-2 h-2 bg-yellow-400 rounded-full text-[6px] flex items-center justify-center font-bold text-black">
+                                  *
+                                </div>
+                              </>
+                            )}
+                            <span className="relative z-10 text-center">
+                              {displayNum}
+                            </span>
+                          </div>
+                        );
+                      })
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            <button
+              className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
+              onClick={() => {
+                setIsNonWinnerModalOpen(false);
+                setNonWinnerCardData(null);
+              }}
+            >
+              <span>✅</span>
+              <span>Close</span>
+            </button>
+          </div>
         </div>
       )}
       {/* Jackpot Winner Modal */}
