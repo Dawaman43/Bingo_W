@@ -122,7 +122,7 @@ export const callNumber = async (req, res, next) => {
   }
 };
 
-// controllers/gameController.js - Update the checkBingo function
+// controllers/gameController.js - Updated checkBingo function
 export const checkBingo = async (req, res, next) => {
   try {
     const { cardId, identifier, preferredPattern } = req.body;
@@ -311,37 +311,47 @@ export const checkBingo = async (req, res, next) => {
         );
         validBingoPatterns.push(pattern);
 
-        // Store winning line info for the first valid pattern
+        // ✅ FIXED: Store complete pattern info including selectedIndices
         if (!winningLineInfo) {
+          const patternResult = getNumbersForPattern(
+            card.numbers,
+            pattern,
+            game.calledNumbers,
+            true, // selectSpecificLine
+            specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
+            true // includeMarked
+          );
+
           winningLineInfo = {
             pattern,
             lineInfo: specificLineInfo,
-            winningNumbers: getNumbersForPattern(
-              card.numbers,
-              pattern,
-              game.calledNumbers,
-              true, // selectSpecificLine
-              specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
-              true // includeMarked
-            ).numbers,
+            ...patternResult, // Spread all properties: numbers, selectedIndices, rowIndex, colIndex, pattern
           };
+
+          console.log(
+            `[checkBingo] ✅ Winning line info created:`,
+            winningLineInfo
+          );
         }
 
         if (preferredPattern && preferredPattern === pattern) {
           isBingo = true;
           winningPattern = pattern;
+          const patternResult = getNumbersForPattern(
+            card.numbers,
+            pattern,
+            game.calledNumbers,
+            true,
+            specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
+            true
+          );
+
           winningLineInfo = {
             pattern,
             lineInfo: specificLineInfo,
-            winningNumbers: getNumbersForPattern(
-              card.numbers,
-              pattern,
-              game.calledNumbers,
-              true,
-              specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
-              true
-            ).numbers,
+            ...patternResult, // Spread all properties: numbers, selectedIndices, rowIndex, colIndex, pattern
           };
+          console.log(`[checkBingo] ✅ Preferred pattern match: ${pattern}`);
           break;
         }
       } catch (err) {

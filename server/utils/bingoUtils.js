@@ -85,22 +85,37 @@ export function getNumbersForPattern(
 
 /**
  * Generates a forced call sequence of 10–15 numbers, starting with required numbers.
+ * This function ensures the required numbers appear early in the sequence for quick wins.
  * @param {number[]} requiredNumbers - Numbers that must appear first (1–75).
+ * @param {number} targetLength - Target sequence length (default: 12).
  * @param {number} minLength - Minimum sequence length (default: 10).
  * @param {number} maxLength - Maximum sequence length (default: 15).
- * @returns {number[]} - Sequence of numbers.
+ * @returns {number[]} - Sequence of numbers ensuring quick win.
  */
-export function computeForcedSequence(
+export function generateQuickWinSequence(
   requiredNumbers,
+  targetLength = 12,
   minLength = 10,
   maxLength = 15
 ) {
+  console.log(
+    "[generateQuickWinSequence] Generating sequence for required numbers:",
+    requiredNumbers,
+    "Target length:",
+    targetLength
+  );
+
   // Validate input
   if (!Array.isArray(requiredNumbers)) {
     throw new Error("Required numbers must be an array");
   }
   if (minLength > maxLength) {
     throw new Error("minLength cannot be greater than maxLength");
+  }
+  if (targetLength < minLength || targetLength > maxLength) {
+    throw new Error(
+      `targetLength must be between ${minLength} and ${maxLength}`
+    );
   }
   if (
     requiredNumbers.some(
@@ -110,24 +125,75 @@ export function computeForcedSequence(
     throw new Error("Required numbers must be valid bingo numbers (1–75)");
   }
 
-  // Initialize sequence with required numbers
-  const sequence = [...requiredNumbers];
-
-  // Generate remaining numbers
-  const remainingCount =
-    Math.floor(Math.random() * (maxLength - minLength + 1)) +
-    minLength -
-    requiredNumbers.length;
-  if (remainingCount <= 0) {
-    return sequence; // Return early if required numbers meet or exceed length
-  }
-
-  // Create pool of available numbers (1–75, excluding required numbers)
-  const availableNumbers = Array.from({ length: 75 }, (_, i) => i + 1).filter(
-    (n) => !requiredNumbers.includes(n)
+  // Remove duplicates and validate unique numbers
+  const uniqueRequired = [...new Set(requiredNumbers)].filter(
+    (num) => num >= 1 && num <= 75
   );
 
-  // Shuffle available numbers and select the needed amount
+  if (uniqueRequired.length !== requiredNumbers.length) {
+    console.warn(
+      "[generateQuickWinSequence] Removed duplicates from required numbers. Original:",
+      requiredNumbers.length,
+      "Unique:",
+      uniqueRequired.length
+    );
+  }
+
+  // If required numbers exceed target length, trim them
+  const requiredToUse = uniqueRequired.slice(0, targetLength);
+  const sequenceLength = Math.max(
+    targetLength,
+    Math.min(maxLength, Math.max(minLength, requiredToUse.length))
+  );
+
+  console.log(
+    "[generateQuickWinSequence] Using",
+    requiredToUse.length,
+    "required numbers for sequence length:",
+    sequenceLength
+  );
+
+  // Strategy 1: Distribute required numbers strategically in first half of sequence
+  const sequence = [];
+  const requiredCount = requiredToUse.length;
+  const totalLength = sequenceLength;
+
+  // Place required numbers in strategic positions (first 60% of sequence)
+  const requiredPositions = [];
+  for (let i = 0; i < requiredCount; i++) {
+    // Spread required numbers across first 60% of sequence
+    const position = Math.floor((i / requiredCount) * 0.6 * totalLength);
+    requiredPositions.push(
+      Math.min(position + i * 2, Math.floor(0.6 * totalLength))
+    ); // Ensure unique positions
+  }
+
+  // Sort positions to maintain logical order
+  requiredPositions.sort((a, b) => a - b);
+
+  console.log(
+    "[generateQuickWinSequence] Required positions:",
+    requiredPositions
+  );
+
+  // Build sequence with required numbers in calculated positions
+  for (let i = 0; i < totalLength; i++) {
+    const positionIndex = requiredPositions.indexOf(i);
+    if (positionIndex !== -1 && positionIndex < requiredToUse.length) {
+      sequence.push(requiredToUse[positionIndex]);
+    } else {
+      // Fill with random numbers (excluding already used numbers)
+      sequence.push(null); // Placeholder for random numbers
+    }
+  }
+
+  // Generate pool of available numbers (1–75, excluding required numbers)
+  const usedNumbers = [...requiredToUse];
+  const availableNumbers = Array.from({ length: 75 }, (_, i) => i + 1).filter(
+    (n) => !usedNumbers.includes(n)
+  );
+
+  // Shuffle available numbers
   for (let i = availableNumbers.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [availableNumbers[i], availableNumbers[j]] = [
@@ -136,8 +202,157 @@ export function computeForcedSequence(
     ];
   }
 
-  // Add random numbers to sequence
-  sequence.push(...availableNumbers.slice(0, remainingCount));
+  // Fill placeholders with random numbers
+  let availableIndex = 0;
+  const finalSequence = sequence.map((num) => {
+    if (num !== null) {
+      return num;
+    }
+    if (availableIndex < availableNumbers.length) {
+      return availableNumbers[availableIndex++];
+    }
+    // Fallback: generate another random number
+    const fallback = Math.floor(Math.random() * 75) + 1;
+    return usedNumbers.includes(fallback) ? availableNumbers[0] : fallback;
+  });
 
-  return sequence;
+  // Ensure all required numbers are included (safety check)
+  const missingRequired = requiredToUse.filter(
+    (reqNum) => !finalSequence.includes(reqNum)
+  );
+  if (missingRequired.length > 0) {
+    console.warn(
+      "[generateQuickWinSequence] Missing required numbers, adding them:",
+      missingRequired
+    );
+    // Replace last few random numbers with missing required numbers
+    for (
+      let i = 0;
+      i < missingRequired.length && finalSequence.length > requiredToUse.length;
+      i++
+    ) {
+      finalSequence[finalSequence.length - 1 - i] = missingRequired[i];
+    }
+  }
+
+  console.log("[generateQuickWinSequence] Final sequence:", finalSequence);
+  console.log(
+    "[generateQuickWinSequence] Required numbers coverage:",
+    requiredToUse.every((req) => finalSequence.includes(req))
+      ? "✅ All covered"
+      : "❌ Missing some"
+  );
+
+  return finalSequence;
+}
+
+/**
+ * Legacy function - use generateQuickWinSequence instead
+ * Generates a forced call sequence of 10–15 numbers, starting with required numbers.
+ * @param {number[]} requiredNumbers - Numbers that must appear first (1–75).
+ * @param {number} minLength - Minimum sequence length (default: 10).
+ * @param {number} maxLength - Maximum sequence length (default: 15).
+ * @returns {number[]} - Sequence of numbers.
+ * @deprecated Use generateQuickWinSequence instead
+ */
+export function computeForcedSequence(
+  requiredNumbers,
+  minLength = 10,
+  maxLength = 15
+) {
+  console.warn(
+    "[computeForcedSequence] This function is deprecated. Use generateQuickWinSequence instead."
+  );
+
+  // Call the new function with target length in the middle of the range
+  const targetLength = Math.floor((minLength + maxLength) / 2);
+  return generateQuickWinSequence(
+    requiredNumbers,
+    targetLength,
+    minLength,
+    maxLength
+  );
+}
+
+/**
+ * Generates a simple random bingo sequence excluding specified numbers.
+ * @param {number[]} excludeNumbers - Numbers to exclude from the sequence (1–75).
+ * @param {number} sequenceLength - Length of sequence to generate (default: 75).
+ * @returns {number[]} - Random sequence of bingo numbers.
+ */
+export function generateRandomBingoSequence(
+  excludeNumbers = [],
+  sequenceLength = 75
+) {
+  // Create pool of available numbers
+  const availableNumbers = Array.from({ length: 75 }, (_, i) => i + 1).filter(
+    (n) => !excludeNumbers.includes(n)
+  );
+
+  if (availableNumbers.length < sequenceLength) {
+    throw new Error(
+      `Cannot generate sequence of length ${sequenceLength} with only ${availableNumbers.length} available numbers`
+    );
+  }
+
+  // Shuffle and slice
+  const shuffled = [...availableNumbers].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, Math.min(sequenceLength, availableNumbers.length));
+}
+
+/**
+ * Validates a bingo card pattern and returns completion status.
+ * @param {number[][]} cardNumbers - 5x5 bingo card numbers.
+ * @param {number[]} calledNumbers - Numbers that have been called.
+ * @param {string} pattern - Pattern to check (e.g., 'horizontal_line').
+ * @returns {Object} - Validation result with completion status.
+ */
+export function validatePatternCompletion(cardNumbers, calledNumbers, pattern) {
+  const { selectedNumbers } = getNumbersForPattern(
+    cardNumbers,
+    pattern,
+    [],
+    false
+  );
+  const completedNumbers = selectedNumbers.filter((num) =>
+    calledNumbers.includes(num)
+  );
+
+  return {
+    pattern,
+    requiredCount: selectedNumbers.length,
+    completedCount: completedNumbers.length,
+    completionPercentage: (
+      (completedNumbers.length / selectedNumbers.length) *
+      100
+    ).toFixed(1),
+    isComplete: completedNumbers.length === selectedNumbers.length,
+    completedNumbers,
+    remainingNumbers: selectedNumbers.filter(
+      (num) => !calledNumbers.includes(num)
+    ),
+  };
+}
+
+/**
+ * Analyzes multiple patterns for pattern completion status.
+ * @param {number[][]} cardNumbers - 5x5 bingo card numbers.
+ * @param {number[]} calledNumbers - Numbers that have been called.
+ * @returns {Object[]} - Array of pattern validation results.
+ */
+export function analyzeAllPatterns(cardNumbers, calledNumbers) {
+  const validPatterns = [
+    "four_corners_center",
+    "cross",
+    "main_diagonal",
+    "other_diagonal",
+    "horizontal_line",
+    "vertical_line",
+  ];
+
+  return validPatterns
+    .map((pattern) =>
+      validatePatternCompletion(cardNumbers, calledNumbers, pattern)
+    )
+    .sort((a, b) => b.completionPercentage - a.completionPercentage);
 }

@@ -1,7 +1,10 @@
-import { Home, UserPlus, X } from "lucide-react";
-import { NavLink } from "react-router-dom";
+// src/components/Sidebar.js (Updated)
+import { Home, UserPlus, X, FileText, BarChart3, Users } from "lucide-react";
+import { NavLink, useLocation } from "react-router-dom";
 
 export default function Sidebar({ isOpen, toggleSidebar }) {
+  const location = useLocation();
+
   return (
     <div
       className={`fixed md:static top-0 left-0 min-h-screen w-64 bg-gray-900 text-gray-200 p-4 transform ${
@@ -24,8 +27,10 @@ export default function Sidebar({ isOpen, toggleSidebar }) {
         <NavLink
           to="/admin-dashboard"
           className={({ isActive }) =>
-            `flex items-center gap-3 p-2 rounded transition ${
-              isActive ? "bg-blue-600 text-white" : "hover:bg-gray-800"
+            `flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${
+              isActive
+                ? "bg-blue-600 text-white shadow-lg"
+                : "hover:bg-gray-800 hover:text-white"
             }`
           }
           onClick={toggleSidebar}
@@ -37,14 +42,36 @@ export default function Sidebar({ isOpen, toggleSidebar }) {
         <NavLink
           to="/add-user"
           className={({ isActive }) =>
-            `flex items-center gap-3 p-2 rounded transition ${
-              isActive ? "bg-blue-600 text-white" : "hover:bg-gray-800"
+            `flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${
+              isActive
+                ? "bg-blue-600 text-white shadow-lg"
+                : "hover:bg-gray-800 hover:text-white"
             }`
           }
           onClick={toggleSidebar}
         >
           <UserPlus size={20} /> Add User
         </NavLink>
+
+        {/* Reports Section */}
+        <div className="mt-6 pt-4 border-t border-gray-700">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-1">
+            Reports
+          </h3>
+          <NavLink
+            to="/admin-report"
+            className={({ isActive }) =>
+              `flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${
+                isActive
+                  ? "bg-blue-600 text-white shadow-lg"
+                  : "hover:bg-gray-800 hover:text-white"
+              }`
+            }
+            onClick={toggleSidebar}
+          >
+            <FileText size={20} /> Cashier Reports
+          </NavLink>
+        </div>
       </nav>
     </div>
   );

@@ -1,28 +1,24 @@
-// src/pages/admin/Report.js
+// src/components/AdminReport.js
 import React, { useState, useEffect } from "react";
-import AdminLayout from "../../components/admin/AdminLayout"; // Add this import
 import {
   getAllCashiers,
   getCashierPerformance,
   getCashierReport,
   formatCashierData,
   getActiveCashiers,
-  getAllCashierSummaries,
-} from "../../services/admin";
-import API from "../../services/admin";
+} from "../api/admin"; // Updated import
+import API from "../api/axios";
 
 const AdminReport = () => {
   const [cashiers, setCashiers] = useState([]);
   const [activeCashiers, setActiveCashiers] = useState([]);
-  const [allCashierSummaries, setAllCashierSummaries] = useState([]);
   const [selectedCashierId, setSelectedCashierId] = useState("");
   const [selectedCashierData, setSelectedCashierData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [searchTerm, setSearchTerm] = useState("");
 
-  // Fetch all cashiers and summaries on component mount
+  // Fetch all cashiers and active cashiers on component mount
   useEffect(() => {
     const fetchInitialData = async () => {
       setLoading(true);
@@ -35,14 +31,7 @@ const AdminReport = () => {
         const activeResponse = await getActiveCashiers();
         setActiveCashiers(activeResponse.activeCashiers || []);
 
-        // Fetch all cashier summaries
-        const summariesResponse = await getAllCashierSummaries();
-        setAllCashierSummaries(summariesResponse.cashiers || []);
-
-        console.log("[AdminReport] Loaded all data:", {
-          cashiers: allCashiersResponse,
-          summaries: summariesResponse,
-        });
+        console.log("[AdminReport] Loaded cashiers:", allCashiersResponse);
       } catch (err) {
         console.error("[AdminReport] Initial load error:", err);
         setError(
@@ -69,7 +58,7 @@ const AdminReport = () => {
       setError(null);
       try {
         console.log(
-          "[AdminReport] Fetching detailed report for cashier:",
+          "[AdminReport] Fetching report for cashier:",
           selectedCashierId
         );
 
@@ -89,29 +78,12 @@ const AdminReport = () => {
           ),
         };
 
-        // Validate and ensure numeric fields are properly formatted
-        const validatedData = {
-          ...combinedData,
-          summary: {
-            ...combinedData.summary,
-            profit: Number(combinedData.summary?.profit || 0),
-            totalPrizePool: Number(combinedData.summary?.totalPrizePool || 0),
-            totalGames: Number(combinedData.summary?.totalGames || 0),
-            winRate: Number(combinedData.summary?.winRate || 0),
-            totalHouseFee: Number(combinedData.summary?.totalHouseFee || 0),
-          },
-          performance: {
-            ...combinedData.performance,
-            totalGames: Number(combinedData.performance?.totalGames || 0),
-          },
-        };
-
-        setSelectedCashierData(validatedData);
-        console.log("[AdminReport] Detailed report loaded:", validatedData);
+        setSelectedCashierData(combinedData);
+        console.log("[AdminReport] Report loaded:", combinedData);
       } catch (err) {
-        console.error("[AdminReport] Detailed report fetch error:", err);
+        console.error("[AdminReport] Report fetch error:", err);
         setError(
-          "Failed to fetch detailed report: " +
+          "Failed to fetch report: " +
             (err.message || err.response?.data?.message)
         );
       } finally {
@@ -131,50 +103,22 @@ const AdminReport = () => {
     }
   };
 
-  // Filter cashiers based on search term
-  const filteredCashiers = cashiers.filter(
-    (cashier) =>
-      cashier.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      cashier.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  // Filter summaries based on search term
-  const filteredSummaries = allCashierSummaries.filter(
-    (summary) =>
-      summary.cashier.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      summary.cashier.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  // Safe number formatting helper for Birr
-  const formatBirr = (value) => {
-    const numValue = Number(value || 0);
-    return numValue.toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    });
-  };
-
-  const formatNumber = (value) => {
-    const numValue = Number(value || 0);
-    return numValue.toLocaleString();
-  };
-
   // Loading state
   if (loading) {
     return (
-      <AdminLayout>
+      <div className="admin-report-container p-6 bg-gray-100 min-h-screen">
         <div className="flex justify-center items-center h-64">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading cashier reports...</p>
+            <p className="text-gray-600">Loading cashiers...</p>
           </div>
         </div>
-      </AdminLayout>
+      </div>
     );
   }
 
   return (
-    <AdminLayout>
+    <div className="admin-report-container p-6 bg-gray-100 min-h-screen">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-8">
@@ -227,165 +171,6 @@ const AdminReport = () => {
             </div>
           </div>
         )}
-
-        {/* Search Bar */}
-        <div className="mb-6">
-          <div className="relative max-w-md">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <svg
-                className="h-5 w-5 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </div>
-            <input
-              type="text"
-              placeholder="Search cashiers..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-        </div>
-
-        {/* All Cashiers Summary Table */}
-        <div className="bg-white rounded-lg shadow mb-8">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-xl font-semibold text-gray-800">
-              All Cashier Reports ({filteredSummaries.length})
-            </h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Cashier
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Total Games
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Total Prize Pool
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Total House Fee
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredSummaries.length > 0 ? (
-                  filteredSummaries.map((summary) => (
-                    <tr
-                      key={summary.cashier.id}
-                      className={`hover:bg-gray-50 ${
-                        selectedCashierId === summary.cashier.id
-                          ? "bg-blue-50"
-                          : ""
-                      }`}
-                    >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="flex-shrink-0 h-10 w-10">
-                            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                              <span className="text-sm font-medium text-blue-800">
-                                {summary.cashier.name
-                                  .split(" ")
-                                  .map((n) => n[0])
-                                  .join("")}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {summary.cashier.name}
-                            </div>
-                            <div className="text-sm text-gray-500">
-                              {summary.cashier.email}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatNumber(summary.summary.totalGames)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                        <span className="text-green-600 font-medium">
-                          {formatBirr(summary.summary.totalPrizePool)} Br
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                        <span
-                          className={`${
-                            summary.summary.totalHouseFee > 0
-                              ? "text-purple-600 font-medium"
-                              : "text-gray-500"
-                          }`}
-                        >
-                          {formatBirr(summary.summary.totalHouseFee)} Br
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button
-                          onClick={() =>
-                            handleCashierSelect(summary.cashier.id)
-                          }
-                          className={`${
-                            selectedCashierId === summary.cashier.id
-                              ? "text-blue-700 hover:text-blue-900"
-                              : "text-blue-600 hover:text-blue-900"
-                          }`}
-                        >
-                          View Details
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="px-6 py-12 text-center text-gray-500"
-                    >
-                      <div className="flex flex-col items-center">
-                        <svg
-                          className="mx-auto h-12 w-12 text-gray-400 mb-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1}
-                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                          />
-                        </svg>
-                        <p className="text-lg">No cashiers found</p>
-                        {searchTerm && (
-                          <p className="text-sm mt-1">
-                            Try adjusting your search terms
-                          </p>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -464,16 +249,13 @@ const AdminReport = () => {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">
-                  Total House Fees
+                  Total Revenue
                 </p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {formatBirr(
-                    allCashierSummaries.reduce(
-                      (sum, c) => sum + Number(c.summary.totalHouseFee || 0),
-                      0
-                    )
-                  )}{" "}
-                  Br
+                  $
+                  {activeCashiers
+                    .reduce((sum, c) => sum + (c.totalRevenue || 0), 0)
+                    .toLocaleString()}
                 </p>
               </div>
             </div>
@@ -483,20 +265,30 @@ const AdminReport = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Cashier Selection Panel */}
           <div className="lg:col-span-1">
-            <div className="bg-white p-6 rounded-lg shadow sticky top-6">
+            <div className="bg-white p-6 rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4 text-gray-800">
-                Quick Stats
+                Select Cashier
               </h2>
+
+              {/* Search and Filter */}
+              <div className="mb-4">
+                <input
+                  type="text"
+                  placeholder="Search cashiers..."
+                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  // Add search functionality here
+                />
+              </div>
 
               {/* Cashier Selection Dropdown */}
               <select
                 value={selectedCashierId}
                 onChange={(e) => handleCashierSelect(e.target.value)}
-                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-6"
+                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
                 disabled={reportLoading}
               >
-                <option value="">-- Select Cashier for Details --</option>
-                {filteredCashiers.map((cashier) => (
+                <option value="">-- Select a Cashier --</option>
+                {cashiers.map((cashier) => (
                   <option key={cashier._id} value={cashier._id}>
                     {cashier.name} ({cashier.email})
                   </option>
@@ -505,31 +297,46 @@ const AdminReport = () => {
 
               {/* Quick Stats for Selected Cashier */}
               {selectedCashierData && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <p className="text-sm font-medium text-blue-800 mb-1">
+                <div className="space-y-3">
+                  <div className="p-3 bg-blue-50 rounded">
+                    <p className="text-sm font-medium text-blue-800">
                       Games Played
                     </p>
                     <p className="text-lg font-bold text-blue-600">
-                      {formatNumber(selectedCashierData.summary?.totalGames)}
+                      {selectedCashierData.summary?.totalGames || 0}
                     </p>
                   </div>
-                  <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-sm font-medium text-green-800 mb-1">
-                      Total Prize Pool
+                  <div className="p-3 bg-green-50 rounded">
+                    <p className="text-sm font-medium text-green-800">
+                      Total Revenue
                     </p>
                     <p className="text-lg font-bold text-green-600">
-                      {formatBirr(selectedCashierData.summary?.totalPrizePool)}{" "}
-                      Br
+                      $
+                      {(
+                        selectedCashierData.summary?.totalPrizePool || 0
+                      ).toFixed(2)}
                     </p>
                   </div>
-                  <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
-                    <p className="text-sm font-medium text-purple-800 mb-1">
-                      Total House Fee
+                  <div
+                    className={`p-3 rounded ${
+                      (selectedCashierData.summary?.profit || 0) >= 0
+                        ? "bg-purple-50"
+                        : "bg-red-50"
+                    }`}
+                  >
+                    <p className="text-sm font-medium text-purple-800">
+                      Profit
                     </p>
-                    <p className="text-lg font-bold text-purple-600">
-                      {formatBirr(selectedCashierData.summary?.totalHouseFee)}{" "}
-                      Br
+                    <p
+                      className={`text-lg font-bold ${
+                        (selectedCashierData.summary?.profit || 0) >= 0
+                          ? "text-purple-600"
+                          : "text-red-600"
+                      }`}
+                    >
+                      $
+                      {selectedCashierData.summary?.profit?.toFixed(2) ||
+                        "0.00"}
                     </p>
                   </div>
                 </div>
@@ -539,7 +346,7 @@ const AdminReport = () => {
             {/* Active Cashiers List */}
             <div className="bg-white p-6 rounded-lg shadow mt-6">
               <h3 className="text-lg font-semibold mb-4 text-gray-800">
-                Recently Active ({activeCashiers.length})
+                Active Cashiers
               </h3>
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {activeCashiers.slice(0, 5).map((cashier) => (
@@ -561,10 +368,16 @@ const AdminReport = () => {
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-medium">
-                          {formatNumber(cashier.totalGames)} games
+                          {cashier.totalGames} games
                         </p>
-                        <p className="text-xs text-green-600 font-medium">
-                          {formatBirr(cashier.totalHouseFee || 0)} Br
+                        <p
+                          className={`text-xs ${
+                            cashier.totalProfit >= 0
+                              ? "text-green-600"
+                              : "text-red-600"
+                          }`}
+                        >
+                          ${cashier.totalProfit?.toFixed(2) || "0.00"}
                         </p>
                       </div>
                     </div>
@@ -579,15 +392,13 @@ const AdminReport = () => {
             </div>
           </div>
 
-          {/* Detailed Report Panel */}
+          {/* Report Details Panel */}
           <div className="lg:col-span-2">
             {reportLoading && (
               <div className="bg-white p-8 rounded-lg shadow text-center">
                 <div className="flex justify-center items-center space-x-2 mb-4">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                  <span className="text-gray-600">
-                    Loading detailed report...
-                  </span>
+                  <span className="text-gray-600">Loading report...</span>
                 </div>
               </div>
             )}
@@ -608,10 +419,12 @@ const AdminReport = () => {
                       d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                     />
                   </svg>
-                  <h3 className="text-lg font-medium mb-2">Select a Cashier</h3>
+                  <h3 className="text-lg font-medium mb-2">
+                    No Cashier Selected
+                  </h3>
                   <p className="mb-4">
-                    Click "View Details" on any cashier in the table above to
-                    see their detailed report and recent games.
+                    Please select a cashier from the dropdown or list to view
+                    their detailed report.
                   </p>
                 </div>
               </div>
@@ -657,13 +470,13 @@ const AdminReport = () => {
                   <h3 className="text-xl font-semibold mb-6 text-gray-800">
                     Performance Overview
                   </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <div className="text-center p-4">
                       <p className="text-sm font-medium text-gray-600">
                         Total Games
                       </p>
                       <p className="text-3xl font-bold text-gray-900">
-                        {formatNumber(selectedCashierData.summary?.totalGames)}
+                        {selectedCashierData.summary.totalGames}
                       </p>
                     </div>
                     <div className="text-center p-4">
@@ -671,27 +484,38 @@ const AdminReport = () => {
                         Prize Pool
                       </p>
                       <p className="text-3xl font-bold text-green-600">
-                        {formatBirr(
-                          selectedCashierData.summary?.totalPrizePool
-                        )}{" "}
-                        Br
+                        $
+                        {selectedCashierData.summary.totalPrizePool.toLocaleString()}
                       </p>
                     </div>
                     <div className="text-center p-4">
                       <p className="text-sm font-medium text-gray-600">
-                        House Fees
+                        Win Rate
                       </p>
-                      <p className="text-3xl font-bold text-purple-600">
-                        {formatBirr(selectedCashierData.summary?.totalHouseFee)}{" "}
-                        Br
+                      <p className="text-3xl font-bold text-blue-600">
+                        {selectedCashierData.summary.winRate}%
+                      </p>
+                    </div>
+                    <div className="text-center p-4">
+                      <p className="text-sm font-medium text-gray-600">
+                        Profit
+                      </p>
+                      <p
+                        className={`text-3xl font-bold ${
+                          selectedCashierData.summary.profit >= 0
+                            ? "text-green-600"
+                            : "text-red-600"
+                        }`}
+                      >
+                        ${selectedCashierData.summary.profit.toLocaleString()}
                       </p>
                     </div>
                   </div>
                 </div>
 
                 {/* Recent Games Table */}
-                {selectedCashierData.detailedReport?.recentGames &&
-                  selectedCashierData.detailedReport.recentGames.length > 0 && (
+                {selectedCashierData.recentGames &&
+                  selectedCashierData.recentGames.length > 0 && (
                     <div className="bg-white p-6 rounded-lg shadow">
                       <h3 className="text-xl font-semibold mb-4 text-gray-800">
                         Recent Games
@@ -709,13 +533,13 @@ const AdminReport = () => {
                               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Pattern
                               </th>
-                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Bet Amount
                               </th>
-                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 House Fee
                               </th>
-                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Prize
                               </th>
                               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -724,64 +548,52 @@ const AdminReport = () => {
                             </tr>
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-200">
-                            {selectedCashierData.detailedReport.recentGames.map(
-                              (game) => (
-                                <tr key={game._id} className="hover:bg-gray-50">
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                    #{game.gameNumber}
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap">
-                                    <span
-                                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                                        game.status === "completed"
-                                          ? "bg-green-100 text-green-800"
-                                          : game.status === "active"
-                                          ? "bg-blue-100 text-blue-800"
-                                          : "bg-yellow-100 text-yellow-800"
-                                      }`}
-                                    >
-                                      {game.status}
-                                    </span>
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    {game.pattern}
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                                    {formatBirr(game.betAmount)} Br
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                                    <span className="text-green-600 font-medium">
-                                      {formatBirr(game.houseFee)} Br
-                                    </span>
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                                    {formatBirr(game.winner?.prize || 0)} Br
-                                  </td>
-                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    {new Date(
-                                      game.createdAt
-                                    ).toLocaleDateString()}
-                                  </td>
-                                </tr>
-                              )
-                            )}
+                            {selectedCashierData.recentGames.map((game) => (
+                              <tr key={game._id} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  #{game.gameNumber}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span
+                                    className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                      game.status === "completed"
+                                        ? "bg-green-100 text-green-800"
+                                        : game.status === "active"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : "bg-yellow-100 text-yellow-800"
+                                    }`}
+                                  >
+                                    {game.status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {game.pattern}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  ${game.betAmount}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  ${game.houseFee?.toFixed(2) || "0.00"}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  ${game.winner?.prize?.toFixed(2) || "0.00"}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {new Date(
+                                    game.createdAt
+                                  ).toLocaleDateString()}
+                                </td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
                       </div>
-                      {selectedCashierData.detailedReport.recentGames.length <
-                        (selectedCashierData.summary?.totalGames || 0) && (
+                      {selectedCashierData.recentGames.length <
+                        selectedCashierData.summary.totalGames && (
                         <div className="mt-4 pt-4 border-t border-gray-200">
                           <p className="text-sm text-gray-500">
-                            Showing{" "}
-                            {
-                              selectedCashierData.detailedReport.recentGames
-                                .length
-                            }{" "}
-                            of{" "}
-                            {formatNumber(
-                              selectedCashierData.summary?.totalGames
-                            )}{" "}
-                            games
+                            Showing {selectedCashierData.recentGames.length} of{" "}
+                            {selectedCashierData.summary.totalGames} games
                           </p>
                         </div>
                       )}
@@ -792,7 +604,7 @@ const AdminReport = () => {
           </div>
         </div>
       </div>
-    </AdminLayout>
+    </div>
   );
 };
 

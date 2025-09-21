@@ -2385,12 +2385,11 @@ const BingoGame = () => {
                       ))}
                     </div>
 
-                    {/* Winning Pattern Line Indicator - FIXED NaN issue */}
+                    {/* Winning Pattern Line Indicator - GREEN THEME (NO ANIMATION) */}
                     {bingoStatus?.patternInfo && (
                       <div className="absolute top-[-8px] left-1/2 transform -translate-x-1/2">
                         <div className="bg-gradient-to-r from-green-500 to-green-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold shadow border border-green-400 flex items-center gap-1 whitespace-nowrap">
                           {(() => {
-                            // ✅ FIXED: Safe row/column display
                             const rowNum = bingoStatus.patternInfo.rowIndex;
                             const colNum = bingoStatus.patternInfo.colIndex;
 
@@ -2422,7 +2421,6 @@ const BingoGame = () => {
                               );
                             }
 
-                            // Default pattern display
                             return (
                               <>
                                 <span className="text-[8px]">✨</span>
@@ -2438,18 +2436,15 @@ const BingoGame = () => {
                       </div>
                     )}
 
-                    {/* Bingo Card Grid - Smaller size */}
+                    {/* Bingo Card Grid - REMOVED ANIMATIONS */}
                     <div className="grid grid-cols-5 gap-0.5 pt-0.5 relative">
                       {(() => {
-                        // ✅ Get card data safely
                         const cardData = bingoStatus.winnerCardNumbers || [];
                         const winningIndices = bingoStatus.winningIndices || [];
-                        const allCalledNumbers = [
-                          ...(bingoStatus.winningNumbers || []),
-                          ...(bingoStatus.otherCalledNumbers || []),
-                        ].map(Number);
+                        const winningNumbers = bingoStatus.winningNumbers || [];
+                        const otherCalledNumbers =
+                          bingoStatus.otherCalledNumbers || [];
 
-                        // Ensure we have a 5x5 grid
                         const cardGrid =
                           Array.isArray(cardData) && Array.isArray(cardData[0])
                             ? cardData
@@ -2464,32 +2459,52 @@ const BingoGame = () => {
                               const isFreeSpace = number === "FREE";
                               const isWinningCell =
                                 winningIndices.includes(cellIndex);
+                              const numberValue = Number(number);
+
+                              // ✅ CRITICAL: Check if this specific number is a winning number vs other called number
+                              const isWinningNumber =
+                                winningNumbers.includes(numberValue);
+                              const isOtherCalledNumber =
+                                otherCalledNumbers.includes(numberValue);
                               const isCalled =
-                                allCalledNumbers.includes(Number(number)) ||
-                                isWinningCell;
+                                isFreeSpace ||
+                                isWinningNumber ||
+                                isOtherCalledNumber;
+
                               const displayNumber = isFreeSpace
                                 ? "FREE"
-                                : Number(number);
+                                : numberValue;
 
-                              // Define styles based on cell type - smaller size
                               let cellStyle =
                                 "w-10 h-10 flex items-center justify-center text-xs font-bold rounded border transition-all duration-300 shadow-sm relative overflow-hidden";
+                              let textColor = "text-black";
 
                               if (isFreeSpace) {
+                                // FREE space - Blue background
                                 cellStyle +=
                                   " bg-blue-600 text-white border-blue-400";
-                              } else if (isWinningCell) {
-                                // 🎯 GREEN FILLED WINNING PATTERN - matches main board
+                                textColor = "text-white";
+                              } else if (isWinningCell && isWinningNumber) {
+                                // 🟢 WINNING PATTERN NUMBER - GREEN background (NO ANIMATION)
                                 cellStyle +=
-                                  " bg-[#0a1174] text-white border-[#2a3969] shadow-green-400/30 relative scale-[1.02]";
-                              } else if (isCalled) {
-                                // Gray called numbers
+                                  " bg-green-500 text-white border-green-600 shadow-green-500/50 relative";
+                                textColor =
+                                  "text-white font-bold drop-shadow-sm";
+                              } else if (isOtherCalledNumber) {
+                                // 🔵 OTHER CALLED NUMBER - BLUE background
                                 cellStyle +=
-                                  " bg-gray-600 text-white border-gray-400 shadow-gray-400/30";
+                                  " bg-blue-500 text-white border-blue-300 shadow-blue-300/30";
+                                textColor = "text-white font-medium";
+                              } else if (isWinningCell && !isCalled) {
+                                // 🟡 WINNING PATTERN but NOT CALLED - YELLOW background (NO ANIMATION)
+                                cellStyle +=
+                                  " bg-yellow-400 text-black border-yellow-600 shadow-yellow-300/30 relative";
+                                textColor = "text-black font-semibold";
                               } else {
-                                // Uncalled numbers
+                                // ⚪ NOT CALLED, NOT WINNING PATTERN - White background
                                 cellStyle +=
                                   " bg-white text-black border-gray-300 hover:bg-gray-50";
+                                textColor = "text-black";
                               }
 
                               return (
@@ -2497,21 +2512,17 @@ const BingoGame = () => {
                                   key={`${rowIndex}-${colIndex}`}
                                   className={cellStyle}
                                 >
-                                  {/* Winning cell special effects - simplified */}
-                                  {isWinningCell && (
-                                    <>
-                                      {/* Subtle green glow */}
-                                      <div className="absolute inset-0 rounded opacity-20 bg-green-400 animate-pulse"></div>
+                                  {/* REMOVED: All special effects for winning pattern cells */}
+                                  {/* No ping, pulse, or star animations */}
 
-                                      {/* Small sparkle */}
-                                      <div className="absolute -top-[2px] -right-[2px] w-2 h-2 bg-yellow-400 rounded-full text-[6px] flex items-center justify-center font-bold text-black">
-                                        *
-                                      </div>
-                                    </>
+                                  {/* Number marker for other called numbers */}
+                                  {isOtherCalledNumber && (
+                                    <div className="absolute -top-1 -left-1 w-2 h-2 bg-blue-400 rounded-full"></div>
                                   )}
 
-                                  {/* Main number display */}
-                                  <span className="relative z-10 text-center">
+                                  <span
+                                    className={`relative z-10 text-center ${textColor}`}
+                                  >
                                     {displayNumber}
                                   </span>
                                 </div>
@@ -2525,26 +2536,27 @@ const BingoGame = () => {
                 </div>
               )}
 
-              {/* Compact Winning Numbers Summary */}
+              {/* Compact Winning Numbers Summary — GREEN THEME (NO ANIMATION) */}
               {bingoStatus?.winningNumbers &&
                 bingoStatus.winningNumbers.length > 0 && (
                   <div className="bg-green-900/30 border border-green-400 p-2 rounded-lg">
                     <h4 className="text-green-300 font-bold text-xs mb-1 flex items-center gap-1">
                       <span className="text-sm">🎯</span>
-                      Winning Numbers ({bingoStatus.winningNumbers.length})
+                      Winning Pattern Numbers (
+                      {bingoStatus.winningNumbers.length})
                     </h4>
                     <div className="flex flex-wrap gap-1 justify-center">
                       {bingoStatus.winningNumbers.slice(0, 10).map((n) => (
                         <div
                           key={n}
-                          className="bg-[#0a1174] text-white px-1.5 py-0.5 rounded text-[10px] font-bold border border-green-400 flex items-center gap-0.5"
+                          className="bg-green-500 text-white px-1.5 py-0.5 rounded text-[10px] font-bold border border-green-600 flex items-center gap-0.5 shadow-md"
                         >
-                          <span className="text-green-300 text-[8px]">✓</span>
-                          <span>{n}</span>
+                          <span className="text-green-200 text-[8px]">⭐</span>
+                          <span className="text-white">{n}</span>
                         </div>
                       ))}
                       {bingoStatus.winningNumbers.length > 10 && (
-                        <span className="bg-gray-600 text-white px-1.5 py-0.5 rounded text-[10px] font-bold">
+                        <span className="bg-green-600 text-green-900 px-1.5 py-0.5 rounded text-[10px] font-bold border border-green-400">
                           +{bingoStatus.winningNumbers.length - 10}
                         </span>
                       )}
@@ -2552,7 +2564,7 @@ const BingoGame = () => {
                   </div>
                 )}
 
-              {/* Compact Prize Display */}
+              {/* Compact Prize Display — Keep yellow for prize emphasis */}
               <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 border border-yellow-400 p-2 rounded-lg">
                 <div className="flex items-center justify-center gap-2">
                   <div className="text-lg">💰</div>

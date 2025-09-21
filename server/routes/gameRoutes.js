@@ -37,7 +37,14 @@ import {
   updateGameStatus,
 } from "../controllers/bingoController.js";
 import FutureWinner from "../models/FutureWinner.js";
+import Card from "../models/Card.js"; // Added for reconfigureFutureWinner
+import {
+  getNumbersForPattern,
+  generateQuickWinSequence,
+} from "../utils/bingoUtils.js"; // Added for reconfigureFutureWinner
 import mongoose from "mongoose";
+import User from "../models/User.js";
+import Game from "../models/Game.js";
 
 const router = express.Router();
 
@@ -52,6 +59,249 @@ router.patch("/jackpot/toggle", verifyToken, validate, toggleJackpot);
 router.post("/jackpot/award", verifyToken, validate, awardJackpot);
 router.get("/jackpot/history", verifyToken, getJackpotHistory);
 router.patch("/jackpot", verifyToken, updateJackpot);
+
+// ----------------- Admin Report Routes -----------------
+router.get("/admin/cashier-report", verifyToken, async (req, res, next) => {
+  // Admin-only route for getting cashier report
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Admin access required",
+        errorCode: "ADMIN_ONLY",
+      });
+    }
+
+    const { cashierId } = req.query;
+
+    if (!cashierId) {
+      return res.status(400).json({
+        message: "cashierId query parameter is required",
+        errorCode: "CASHIER_ID_REQUIRED",
+      });
+    }
+
+    if (!mongoose.isValidObjectId(cashierId)) {
+      return res.status(400).json({
+        message: "Invalid cashier ID format",
+        errorCode: "INVALID_CASHIER_ID",
+      });
+    }
+
+    const response = await getCashierReport(req, res, next);
+    return response;
+  } catch (error) {
+    console.error("[admin/cashier-report] Error:", error);
+    next(error);
+  }
+});
+
+router.get("/admin/cashiers", verifyToken, async (req, res, next) => {
+  // Admin-only route for getting all cashiers
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Admin access required",
+        errorCode: "ADMIN_ONLY",
+      });
+    }
+
+    const cashiers = await User.find({ role: "cashier" })
+      .select("name email _id createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      success: true,
+      message: "Cashiers retrieved successfully",
+      count: cashiers.length,
+      cashiers,
+    });
+  } catch (error) {
+    console.error("[admin/cashiers] Error:", error);
+    next(error);
+  }
+});
+
+router.get(
+  "/admin/cashier-summary/:cashierId",
+  verifyToken,
+  async (req, res, next) => {
+    // Admin-only route for getting cashier summary stats
+    try {
+      if (req.user.role !== "admin") {
+        return res.status(403).json({
+          message: "Admin access required",
+          errorCode: "ADMIN_ONLY",
+        });
+      }
+
+      const { cashierId } = req.params;
+
+      if (!mongoose.isValidObjectId(cashierId)) {
+        return res.status(400).json({
+          message: "Invalid cashier ID format",
+          errorCode: "INVALID_CASHIER_ID",
+        });
+      }
+
+      // Get cashier details
+      const cashier = await User.findById(cashierId).select(
+        "name email role createdAt"
+      );
+      if (!cashier || cashier.role !== "cashier") {
+        return res.status(404).json({
+          message: "Cashier not found",
+          errorCode: "CASHIER_NOT_FOUND",
+        });
+      }
+
+      // Get game statistics
+      const games = await Game.find({ cashierId })
+        .select(
+          "gameNumber status betAmount houseFee prizePool createdAt winner"
+        )
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+
+      const totalGames = games.length;
+      const completedGames = games.filter(
+        (g) => g.status === "completed"
+      ).length;
+      const activeGames = games.filter((g) => g.status === "active").length;
+      const pendingGames = games.filter((g) => g.status === "pending").length;
+
+      const totalPrizePool = games.reduce(
+        (sum, g) => sum + (g.prizePool || 0),
+        0
+      );
+      const totalHouseFee = games.reduce(
+        (sum, g) => sum + (parseFloat(g.houseFee) || 0),
+        0
+      );
+      const totalWinnings = games.reduce(
+        (sum, g) => sum + (g.winner?.prize || 0),
+        0
+      );
+
+      res.json({
+        success: true,
+        message: "Cashier summary retrieved successfully",
+        cashier: {
+          id: cashier._id,
+          name: cashier.name,
+          email: cashier.email,
+          createdAt: cashier.createdAt,
+        },
+        summary: {
+          totalGames,
+          completedGames,
+          activeGames,
+          pendingGames,
+          totalPrizePool: parseFloat(totalPrizePool).toFixed(2),
+          totalHouseFee: parseFloat(totalHouseFee).toFixed(2),
+          totalWinnings: parseFloat(totalWinnings).toFixed(2),
+          profit: parseFloat(totalHouseFee - totalWinnings).toFixed(2),
+          winRate:
+            totalGames > 0
+              ? ((completedGames / totalGames) * 100).toFixed(1)
+              : 0,
+        },
+        recentGames: games.slice(0, 10),
+      });
+    } catch (error) {
+      console.error("[admin/cashier-summary] Error:", error);
+      next(error);
+    }
+  }
+);
+// Add this route to your games routes file (after the existing admin routes)
+router.get(
+  "/admin/all-cashier-summaries",
+  verifyToken,
+  async (req, res, next) => {
+    // Admin-only route for getting all cashiers' summary stats
+    try {
+      if (req.user.role !== "admin") {
+        return res.status(403).json({
+          message: "Admin access required",
+          errorCode: "ADMIN_ONLY",
+        });
+      }
+
+      // Get all cashiers
+      const cashiers = await User.find({ role: "cashier" })
+        .select("name email _id createdAt")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // Get summary data for each cashier
+      const cashierSummaries = await Promise.all(
+        cashiers.map(async (cashier) => {
+          // Get game statistics for this cashier
+          const games = await Game.find({ cashierId: cashier._id })
+            .select(
+              "gameNumber status betAmount houseFee prizePool createdAt winner"
+            )
+            .sort({ createdAt: -1 })
+            .limit(50)
+            .lean();
+
+          const totalGames = games.length;
+          const completedGames = games.filter(
+            (g) => g.status === "completed"
+          ).length;
+          const activeGames = games.filter((g) => g.status === "active").length;
+          const pendingGames = games.filter(
+            (g) => g.status === "pending"
+          ).length;
+
+          const totalPrizePool = games.reduce(
+            (sum, g) => sum + (g.prizePool || 0),
+            0
+          );
+          const totalHouseFee = games.reduce(
+            (sum, g) => sum + (parseFloat(g.houseFee) || 0),
+            0
+          );
+          const totalWinnings = games.reduce(
+            (sum, g) => sum + (g.winner?.prize || 0),
+            0
+          );
+
+          return {
+            cashier: {
+              id: cashier._id,
+              name: cashier.name,
+              email: cashier.email,
+              createdAt: cashier.createdAt,
+            },
+            summary: {
+              totalGames,
+              completedGames,
+              activeGames,
+              pendingGames,
+              totalPrizePool: parseFloat(totalPrizePool),
+              totalHouseFee: parseFloat(totalHouseFee),
+              totalWinnings: parseFloat(totalWinnings),
+            },
+            recentGames: games.slice(0, 10),
+          };
+        })
+      );
+
+      res.json({
+        success: true,
+        message: "All cashier summaries retrieved successfully",
+        count: cashierSummaries.length,
+        cashiers: cashierSummaries,
+      });
+    } catch (error) {
+      console.error("[admin/all-cashier-summaries] Error:", error);
+      next(error);
+    }
+  }
+);
 
 // Other static routes
 router.get("/report", verifyToken, getCashierReport);
@@ -122,11 +372,9 @@ router.post("/future-winners", verifyToken, async (req, res, next) => {
       req.user.managedCashier.toString() !== cashierId
     ) {
       console.error("[getFutureWinners] Unauthorized cashierId:", cashierId);
-      return res
-        .status(403)
-        .json({
-          message: "Unauthorized: Cashier not managed by this moderator",
-        });
+      return res.status(403).json({
+        message: "Unauthorized: Cashier not managed by this moderator",
+      });
     }
 
     const futureWinners = await FutureWinner.find({ cashierId, used: false })
@@ -186,11 +434,9 @@ router.delete(
           "[deleteFutureWinner] Unauthorized for cashierId:",
           futureWinner.cashierId
         );
-        return res
-          .status(403)
-          .json({
-            message: "Unauthorized: Cashier not managed by this moderator",
-          });
+        return res.status(403).json({
+          message: "Unauthorized: Cashier not managed by this moderator",
+        });
       }
 
       await FutureWinner.findByIdAndDelete(futureWinnerId);
@@ -253,11 +499,9 @@ router.put(
           "[reconfigureFutureWinner] Unauthorized for cashierId:",
           futureWinner.cashierId
         );
-        return res
-          .status(403)
-          .json({
-            message: "Unauthorized: Cashier not managed by this moderator",
-          });
+        return res.status(403).json({
+          message: "Unauthorized: Cashier not managed by this moderator",
+        });
       }
 
       if (!Number.isInteger(gameNumber) || gameNumber < 1) {

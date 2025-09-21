@@ -6,8 +6,8 @@ import { useAuth } from "../../context/AuthContext";
 
 const CashierDashboard = () => {
   const [selected, setSelected] = useState("selectCard");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const { user } = useAuth(); // ✅ removed logoutUser since no logout btn
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Collapsed by default
+  const { user } = useAuth();
 
   const [dateTime, setDateTime] = useState(new Date());
 
@@ -43,9 +43,9 @@ const CashierDashboard = () => {
     <div className="flex h-screen w-screen bg-gray-100 dark:bg-gray-950 overflow-hidden transition-colors">
       {/* Sidebar */}
       <div
-        className={`fixed h-full bg-white dark:bg-gray-900 shadow-lg transition-all duration-300 ${
-          isSidebarOpen ? "w-64" : "w-16"
-        }`}
+        className={`fixed h-full bg-white dark:bg-gray-900 shadow-lg transition-all duration-300 z-50 ${
+          isSidebarOpen ? "w-64" : "w-0"
+        } overflow-hidden`}
       >
         <Sidebar
           selected={selected}
@@ -55,21 +55,52 @@ const CashierDashboard = () => {
         />
       </div>
 
-      {/* Main Content Area */}
+      {/* Overlay when sidebar is open */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* Main Content Area - Full width when sidebar is collapsed */}
       <div
         className={`flex-1 h-full w-full overflow-auto transition-all duration-300 ${
-          isSidebarOpen ? "ml-64" : "ml-16"
+          isSidebarOpen ? "ml-64" : "ml-0"
         }`}
       >
-        <header className="bg-white dark:bg-gray-900 shadow-md p-4 flex justify-between items-center sticky top-0 z-10 animate-fade-in">
-          {/* Left side (Title + Greeting) */}
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-              {pageTitles[selected] || "Dashboard"}
-            </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {greeting}, welcome to the Cashier Panel
-            </p>
+        {/* Full Header */}
+        <header className="bg-white dark:bg-gray-900 shadow-md p-4 flex justify-between items-center sticky top-0 z-10 animate-fade-in w-full">
+          {/* Left side (Menu Button + Title + Greeting) */}
+          <div className="flex items-center space-x-4">
+            {/* Menu Button - Always show */}
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors text-gray-800 dark:text-gray-200"
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 6h16M4 12h16M4 18h16"
+                />
+              </svg>
+            </button>
+
+            <div>
+              <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
+                {pageTitles[selected] || "Dashboard"}
+              </h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {greeting}, welcome to the Cashier Panel
+              </p>
+            </div>
           </div>
 
           {/* Right side (User info + Time/Date) */}
@@ -118,7 +149,7 @@ const CashierDashboard = () => {
         </header>
 
         {/* Main Content */}
-        <div className="h-[calc(100%-64px)] w-full bg-white dark:bg-gray-950 animate-fade-in">
+        <div className="h-[calc(100vh-64px)] w-full bg-white dark:bg-gray-950 animate-fade-in">
           {selected === "selectCard" && <SelectCard />}
           {selected === "report" && <CashierReport />}
         </div>
