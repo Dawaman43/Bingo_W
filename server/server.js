@@ -18,7 +18,7 @@ await connectDB();
 // Middleware
 app.use(
   cors({
-    origin: "https://bingowebclient.vercel.app", // Frontend origin
+    origin: "https://jokerbingo1.vercel.app", // Frontend origin
     credentials: true, // Allow credentials
   })
 );
