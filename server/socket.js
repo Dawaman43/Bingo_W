@@ -5,7 +5,7 @@ let io;
 export const initSocket = (server) => {
   io = new Server(server, {
     cors: {
-      origin: "https://bingowebclient.vercel.app", // Adjust to your frontend URL
+      origin: "https://jokerbingo1.vercel.app", // Adjust to your frontend URL
       methods: ["GET", "POST"],
       credentials: true,
     },
