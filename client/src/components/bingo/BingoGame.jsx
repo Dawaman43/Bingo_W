@@ -85,7 +85,7 @@ const BingoGame = () => {
 
   // Initialize Socket.IO client
   useEffect(() => {
-    socketRef.current = io("http://localhost:5000", {
+    socketRef.current = io("https://bingo-web-9lh2.onrender.com", {
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 5,
