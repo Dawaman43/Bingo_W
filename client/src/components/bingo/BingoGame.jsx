@@ -85,6 +85,8 @@ const BingoGame = () => {
 
   // Initialize Socket.IO client
   useEffect(() => {
+    console.log("[DEBUG] Initializing socket connection...");
+
     socketRef.current = io("https://bingo-web-9lh2.onrender.com", {
       withCredentials: true,
       reconnection: true,
@@ -93,21 +95,40 @@ const BingoGame = () => {
     });
 
     socketRef.current.on("connect", () => {
-      console.log("Connected to Socket.IO server");
+      console.log(
+        "[DEBUG] ✅ Connected to Socket.IO server - ID:",
+        socketRef.current.id
+      );
     });
 
+    socketRef.current.on("connect_error", (error) => {
+      console.error("[DEBUG] ❌ Socket connection error:", error);
+    });
+
+    socketRef.current.on("disconnect", (reason) => {
+      console.log(
+        "[DEBUG] ❌ Disconnected from Socket.IO server - Reason:",
+        reason
+      );
+    });
+
+    // Log ALL incoming events
     socketRef.current.onAny((event, ...args) => {
-      console.log(`Socket event received: ${event}`, args);
+      console.log(`[DEBUG] 📨 Socket event received: ${event}`, args);
     });
 
+    // Enhanced jackpot handler with more debugging
     socketRef.current.on("jackpotAwarded", (data) => {
-      console.log("Jackpot awarded event received:", data);
+      console.log("[DEBUG] 🎯 jackpotAwarded event RECEIVED:", data);
+
       if (!data.userId || !data.prize) {
-        console.error("Invalid jackpot data:", data);
+        console.error("[DEBUG] ❌ Invalid jackpot data:", data);
         setCallError("Invalid jackpot data received");
         setIsErrorModalOpen(true);
         return;
       }
+
+      console.log("[DEBUG] ✅ Valid jackpot data - opening modal");
       setJackpotWinner({
         userId: data.userId || "--",
         prize: data.prize || 0,
@@ -115,25 +136,52 @@ const BingoGame = () => {
         message: data.message || "Jackpot awarded!",
       });
       setIsJackpotWinnerModalOpen(true);
-      console.log("Opening jackpot winner modal");
+      console.log("[DEBUG] Modal state set to:", true);
       setIsJackpotActive(false);
       setJackpotCandidates([]);
-      setJackpotAmount(100); // Set to a base amount instead of 0
+      setJackpotAmount(data.remainingJackpot || 100);
+
+      // Sync with backend immediately
+      updateJackpotDisplay();
+
       SoundService.playSound("jackpot_congrats").catch((err) => {
         console.error("Failed to play jackpot_congrats sound:", err);
-        setCallError("Failed to play jackpot sound");
-        setIsErrorModalOpen(true);
       });
     });
 
-    socketRef.current.on("disconnect", () => {
-      console.log("Disconnected from Socket.IO server");
-    });
-
     return () => {
+      console.log("[DEBUG] Cleaning up socket connection");
       socketRef.current?.disconnect();
     };
   }, []);
+
+  // Enhanced room joining with debugging
+  useEffect(() => {
+    console.log(
+      "[DEBUG] Room joining check - gameData.cashierId:",
+      gameData?.cashierId
+    );
+    console.log("[DEBUG] Socket connected:", socketRef.current?.connected);
+
+    if (gameData?.cashierId && socketRef.current?.connected) {
+      console.log(`[DEBUG] 🔗 Attempting to join room: ${gameData.cashierId}`);
+      socketRef.current.emit("joinCashierRoom", gameData.cashierId);
+
+      // Listen for room join confirmation (add this to backend too)
+      socketRef.current.once("roomJoined", (roomId) => {
+        console.log(`[DEBUG] ✅ Successfully joined room: ${roomId}`);
+      });
+    } else {
+      console.warn(
+        "[DEBUG] ❌ Cannot join room - missing cashierId or disconnected",
+        {
+          hasCashierId: !!gameData?.cashierId,
+          isConnected: socketRef.current?.connected,
+          cashierId: gameData?.cashierId,
+        }
+      );
+    }
+  }, [gameData?.cashierId]);
   // Join cashier room when gameData is available
   useEffect(() => {
     if (gameData?.cashierId && socketRef.current.connected) {
@@ -2248,57 +2296,62 @@ const BingoGame = () => {
           </div>
         </div>
       </div>
-      {/* Jackpot Display */}
-      {isJackpotActive && (
-        <div
-          ref={jackpotRef}
-          className={`fixed bottom-5 left-5 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-50 min-w-[250px] transition-transform duration-1000 ${
-            jackpotGrow ? "scale-150 animate-pulse" : "scale-100"
-          }`}
-        >
-          <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
-            JACKPOT
-          </div>
-          <div className="text-3xl font-bold text-[#f0e14a] mb-2">
-            {isLoading ? "Loading..." : jackpotAmount.toFixed(2)} BIRR
-          </div>
-          <div className="text-sm text-white mb-1">
-            Winner ID: {jackpotWinner.userId}
-          </div>
-          <div className="text-sm text-white mb-1">
-            Prize: {jackpotWinner.prize.toFixed(2)} BIRR
-          </div>
-          <div className="text-sm text-white mb-2">
-            Draw Date: {jackpotWinner.drawDate}
-          </div>
-          {user?.role === "moderator" && (
-            <button
-              className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full ${
-                !jackpotCandidates.length ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-              onClick={handleExplodeJackpot}
-              disabled={!jackpotCandidates.length}
-            >
-              Run Jackpot
-            </button>
-          )}
-          {user?.role === "moderator" && jackpotCandidates.length > 0 && (
-            <div className="mt-2">
-              <div className="text-sm text-[#f0e14a] font-bold mb-1">
-                Active Candidates
-              </div>
-              <ul className="text-sm text-white max-h-32 overflow-y-auto">
-                {jackpotCandidates.map((candidate) => (
-                  <li key={candidate._id} className="mb-1">
-                    {candidate.identifier} ({candidate.identifierType}, Expires:{" "}
-                    {new Date(candidate.expiryDate).toLocaleDateString()})
-                  </li>
-                ))}
-              </ul>
+      {/* Jackpot Display - Only show if jackpot is active AND hasn't been awarded */}
+      {isJackpotActive &&
+        jackpotWinner.userId === "--" &&
+        jackpotWinner.prize === 0 && (
+          <div
+            ref={jackpotRef}
+            className={`fixed bottom-5 left-5 bg-[#0f1a4a] border-4 border-[#f0e14a] rounded-xl p-4 text-center shadow-[0_5px_15px_rgba(0,0,0,0.5)] z-50 min-w-[250px] transition-transform duration-1000 ${
+              jackpotGrow ? "scale-150 animate-pulse" : "scale-100"
+            }`}
+          >
+            <div className="text-2xl font-bold text-[#e9a64c] uppercase mb-2">
+              JACKPOT
             </div>
-          )}
-        </div>
-      )}
+            <div className="text-3xl font-bold text-[#f0e14a] mb-2">
+              {isLoading ? "Loading..." : jackpotAmount.toFixed(2)} BIRR
+            </div>
+            <div className="text-sm text-white mb-1">
+              Winner ID: {jackpotWinner.userId}
+            </div>
+            <div className="text-sm text-white mb-1">
+              Prize: {jackpotWinner.prize.toFixed(2)} BIRR
+            </div>
+            <div className="text-sm text-white mb-2">
+              Draw Date: {jackpotWinner.drawDate}
+            </div>
+            {user?.role === "moderator" && (
+              <button
+                className={`bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c] hover:scale-105 w-full ${
+                  !jackpotCandidates.length
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
+                onClick={handleExplodeJackpot}
+                disabled={!jackpotCandidates.length}
+              >
+                Run Jackpot
+              </button>
+            )}
+            {user?.role === "moderator" && jackpotCandidates.length > 0 && (
+              <div className="mt-2">
+                <div className="text-sm text-[#f0e14a] font-bold mb-1">
+                  Active Candidates
+                </div>
+                <ul className="text-sm text-white max-h-32 overflow-y-auto">
+                  {jackpotCandidates.map((candidate) => (
+                    <li key={candidate._id} className="mb-1">
+                      {candidate.identifier} ({candidate.identifierType},
+                      Expires:{" "}
+                      {new Date(candidate.expiryDate).toLocaleDateString()})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
       {isWinnerModalOpen && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#0f1a4a] border-4 border-[#f0e14a] p-4 rounded-xl z-50 text-center min-w-[320px] max-w-[380px] max-h-[90vh] overflow-y-auto shadow-[0_5px_25px_rgba(0,0,0,0.5)]">
