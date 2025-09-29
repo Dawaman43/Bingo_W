@@ -268,13 +268,26 @@ export const createSequentialGames = async (req, res, next) => {
       moderatorWinnerCardId = null,
     } = req.body;
 
-    await getCashierIdFromUser(req, res, () => {});
-    const cashierId = req.cashierId;
-
+    // Validate inputs
     if (!cardPool.length) {
       return res.status(400).json({ message: "cardPool required" });
     }
+    if (!Number.isFinite(betAmount) || betAmount <= 0) {
+      return res.status(400).json({ message: "Invalid betAmount" });
+    }
+    if (
+      !Number.isFinite(houseFeePercentage) ||
+      houseFeePercentage < 0 ||
+      houseFeePercentage > 100
+    ) {
+      return res.status(400).json({ message: "Invalid houseFeePercentage" });
+    }
 
+    // Get cashierId
+    await getCashierIdFromUser(req, res, () => {});
+    const cashierId = req.cashierId;
+
+    // Fetch cards
     const cards = await Card.find({ card_number: { $in: cardPool } });
     if (cards.length !== cardPool.length) {
       return res.status(400).json({ message: "Some cards not found" });
@@ -284,10 +297,38 @@ export const createSequentialGames = async (req, res, next) => {
       id: c.card_number,
       numbers: c.numbers,
     }));
-    const totalPot = betAmount * gameCards.length;
-    const houseFee = (totalPot * houseFeePercentage) / 100;
-    const prizePool =
-      totalPot - houseFee - (jackpotEnabled ? totalPot * 0.1 : 0);
+
+    // Calculate financials (aligned with SelectCard's calculateProfit)
+    const bet = parseFloat(betAmount);
+    const percentage = parseFloat(houseFeePercentage);
+    const selectedCount = gameCards.length;
+
+    const totalPot = bet * selectedCount;
+    const jackpotContribution = jackpotEnabled ? bet : 0; // Jackpot contribution is betAmount
+    const remainingAmount = totalPot - jackpotContribution; // Deduct jackpot first
+    const houseFee = (remainingAmount * percentage) / 100; // House fee on remaining amount
+    const prizePool = remainingAmount - houseFee; // Prize pool is what's left
+
+    // Log financials for debugging
+    console.log("[createSequentialGames] Input payload:", {
+      betAmount,
+      houseFeePercentage,
+      cardPoolLength: cardPool.length,
+      jackpotEnabled,
+    });
+    console.log("[createSequentialGames] Calculated financials:", {
+      totalPot,
+      jackpotContribution,
+      remainingAmount,
+      houseFee,
+      prizePool,
+    });
+
+    // Validate houseFee
+    if (!Number.isFinite(houseFee) || houseFee < 0) {
+      console.error("[createSequentialGames] Invalid houseFee:", houseFee);
+      return res.status(500).json({ message: "Invalid house fee calculation" });
+    }
 
     // Get next available game number
     const lastGame = await Game.findOne({ cashierId })
@@ -314,11 +355,12 @@ export const createSequentialGames = async (req, res, next) => {
       cashierId,
       betAmount,
       houseFeePercentage,
-      houseFee,
+      houseFee: parseFloat(houseFee.toFixed(2)), // Store as number with 2 decimal places
       selectedCards: gameCards,
       pattern,
-      prizePool,
+      prizePool: parseFloat(prizePool.toFixed(2)),
       jackpotEnabled,
+      jackpotContribution: parseFloat(jackpotContribution.toFixed(2)),
       moderatorWinnerCardId: winnerCardId,
       forcedCallSequence,
       selectedWinnerNumbers,
@@ -327,10 +369,15 @@ export const createSequentialGames = async (req, res, next) => {
       forcedCallIndex: 0,
       winnerCardNumbers,
     });
-    console.log(
-      `[createSequentialGames] Game saved with selectedWinnerNumbers:`,
-      game.selectedWinnerNumbers
-    );
+
+    // Log stored game data
+    console.log("[createSequentialGames] Stored game:", {
+      gameNumber: game.gameNumber,
+      houseFee: game.houseFee,
+      cardPoolLength: game.selectedCards.length,
+      prizePool: game.prizePool,
+      jackpotContribution: game.jackpotContribution,
+    });
 
     // Mark future winner as used
     if (futureWinner) {
@@ -346,6 +393,16 @@ export const createSequentialGames = async (req, res, next) => {
       console.log(
         `[createSequentialGames] 🎲 No future winner, Game ${gameNumber} is random`
       );
+    }
+
+    // Verify stored houseFee matches calculation
+    const expectedHouseFee = (remainingAmount * percentage) / 100;
+    if (Math.abs(game.houseFee - expectedHouseFee) > 0.01) {
+      console.error("[createSequentialGames] House fee mismatch:", {
+        stored: game.houseFee,
+        expected: expectedHouseFee,
+      });
+      return res.status(500).json({ message: "House fee storage error" });
     }
 
     res.json({ message: "Game created successfully", game });

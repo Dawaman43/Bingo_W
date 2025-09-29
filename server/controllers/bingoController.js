@@ -158,6 +158,70 @@ export const checkBingo = async (req, res, next) => {
       return res.status(400).json({ message: "Card not in game" });
     }
 
+    // ✅ NEW: Update lastCheckTime and check if a new number was called since last check
+    const currentTime = new Date();
+    const lastCalledNumber = game.calledNumbersLog.length
+      ? game.calledNumbersLog[game.calledNumbersLog.length - 1]
+      : null;
+    const lastCalledTime = lastCalledNumber ? lastCalledNumber.calledAt : null;
+
+    // If no new number was called since last check, reset checkCount and disqualification
+    if (
+      card.lastCheckTime &&
+      lastCalledTime &&
+      card.lastCheckTime >= lastCalledTime
+    ) {
+      console.log(
+        `[checkBingo] 🔄 No new number called since last check for card ${numericCardId}. Resetting checkCount and disqualification.`
+      );
+      card.checkCount = 1; // Reset to 1 since this is a valid check
+      card.disqualified = false; // Reset disqualification
+    } else {
+      // Increment checkCount only if a new number was called
+      card.checkCount = (card.checkCount || 0) + 1;
+    }
+
+    // Update lastCheckTime for this check
+    card.lastCheckTime = currentTime;
+    await game.save(); // Persist checkCount and lastCheckTime immediately
+
+    // ✅ Modified: Check disqualification status or excessive checks
+    if (card.disqualified || card.checkCount > 1) {
+      console.log(
+        `[checkBingo] ❌ Card ${numericCardId} is disqualified (disqualified: ${card.disqualified}, checkCount: ${card.checkCount})`
+      );
+      await GameLog.create({
+        gameId,
+        action: "checkBingo",
+        status: "disqualified",
+        details: {
+          cardId: numericCardId,
+          message: card.disqualified
+            ? "Card is disqualified due to previous late call or invalid check"
+            : "Card checked too many times (more than once)",
+          checkCount: card.checkCount,
+          disqualified: true,
+          timestamp: new Date(),
+        },
+      });
+      return res.json({
+        isBingo: false,
+        message: card.disqualified
+          ? "Card is disqualified and cannot win"
+          : "Card cannot win due to multiple checks",
+        winningPattern: null,
+        validBingoPatterns: [],
+        completedPatterns: [],
+        disqualified: true,
+        checkCount: card.checkCount,
+        game: {
+          ...game.toObject(),
+          winnerCardNumbers: game.winnerCardNumbers || [],
+          selectedWinnerNumbers: game.selectedWinnerNumbers || [],
+        },
+      });
+    }
+
     if (!["active", "paused", "completed"].includes(game.status)) {
       console.warn(`[checkBingo] ❌ Game not checkable: status=${game.status}`);
       await GameLog.create({
@@ -172,11 +236,6 @@ export const checkBingo = async (req, res, next) => {
       return res.status(400).json({ message: "Game not checkable" });
     }
 
-    const lastCalledNumber = game.calledNumbersLog.length
-      ? game.calledNumbersLog[game.calledNumbersLog.length - 1].number
-      : null;
-    const callsMade = game.calledNumbers.length;
-
     if (!lastCalledNumber) {
       console.log(`[checkBingo] ❌ No last called number - cannot check bingo`);
       return res.json({
@@ -185,6 +244,8 @@ export const checkBingo = async (req, res, next) => {
         winningPattern: null,
         validBingoPatterns: [],
         completedPatterns: [],
+        disqualified: false,
+        checkCount: card.checkCount,
         game: {
           ...game.toObject(),
           winnerCardNumbers: game.winnerCardNumbers || [],
@@ -255,7 +316,7 @@ export const checkBingo = async (req, res, next) => {
         const specificLineInfo = getSpecificLineInfo(
           card.numbers,
           pattern,
-          lastCalledNumber
+          lastCalledNumber.number
         );
         console.log(
           `[checkBingo] Pattern ${pattern}: specificLineInfo=`,
@@ -264,7 +325,7 @@ export const checkBingo = async (req, res, next) => {
 
         if (!specificLineInfo) {
           console.log(
-            `[checkBingo] ❌ Last called ${lastCalledNumber} not part of pattern ${pattern}`
+            `[checkBingo] ❌ Last called ${lastCalledNumber.number} not part of pattern ${pattern}`
           );
           continue;
         }
@@ -306,25 +367,24 @@ export const checkBingo = async (req, res, next) => {
         }
 
         console.log(
-          `[checkBingo] ✅ VALID BINGO! Pattern ${pattern} - specific line ${specificLineInfo.lineType} ${specificLineInfo.lineIndex} completed by last call ${lastCalledNumber}`
+          `[checkBingo] ✅ VALID BINGO! Pattern ${pattern} - specific line ${specificLineInfo.lineType} ${specificLineInfo.lineIndex} completed by last call ${lastCalledNumber.number}`
         );
         validBingoPatterns.push(pattern);
 
-        // ✅ FIXED: Store complete pattern info including selectedIndices
         if (!winningLineInfo) {
           const patternResult = getNumbersForPattern(
             card.numbers,
             pattern,
             game.calledNumbers,
-            true, // selectSpecificLine
+            true,
             specificLineInfo.lineIndex ? [specificLineInfo.lineIndex] : [],
-            true // includeMarked
+            true
           );
 
           winningLineInfo = {
             pattern,
             lineInfo: specificLineInfo,
-            ...patternResult, // Spread all properties: numbers, selectedIndices, rowIndex, colIndex, pattern
+            ...patternResult,
           };
 
           console.log(
@@ -348,7 +408,7 @@ export const checkBingo = async (req, res, next) => {
           winningLineInfo = {
             pattern,
             lineInfo: specificLineInfo,
-            ...patternResult, // Spread all properties: numbers, selectedIndices, rowIndex, colIndex, pattern
+            ...patternResult,
           };
           console.log(`[checkBingo] ✅ Preferred pattern match: ${pattern}`);
           break;
@@ -364,8 +424,8 @@ export const checkBingo = async (req, res, next) => {
           status: "failed",
           details: {
             cardId: numericCardId,
-            callsMade,
-            lastCalledNumber,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
             error: `Pattern check failed: ${err.message}`,
             pattern,
             timestamp: new Date(),
@@ -380,7 +440,7 @@ export const checkBingo = async (req, res, next) => {
         ? preferredPattern
         : validBingoPatterns[0];
       console.log(
-        `[checkBingo] 🎯 WINNER! Card ${numericCardId} wins with pattern "${winningPattern}"`
+        `[checkBingo] 🎯 Potential WINNER! Card ${numericCardId} matches pattern "${winningPattern}"`
       );
     } else {
       console.log(
@@ -395,7 +455,7 @@ export const checkBingo = async (req, res, next) => {
       validBingoPatterns,
       completedPatterns,
       effectivePattern: winningPattern || patternsToCheck[0],
-      lastCalledNumber,
+      lastCalledNumber: lastCalledNumber?.number,
       winningLineInfo: winningLineInfo || null,
       game: {
         ...game.toObject(),
@@ -407,39 +467,96 @@ export const checkBingo = async (req, res, next) => {
       lateCall: false,
       lateCallMessage: null,
       wouldHaveWon: null,
+      disqualified: card.disqualified || false,
+      checkCount: card.checkCount,
     };
 
-    // ✅ FIXED: Only check for late call on the CURRENT winning pattern, not all patterns
     let lateCallMessage = null;
     let wouldHaveWon = null;
-    
+
     if (isBingo && winningPattern) {
-      // Check if THIS SPECIFIC winning pattern had a late call opportunity
+      // ✅ Modified: Double-check disqualification and checkCount
+      if (card.disqualified || card.checkCount > 1) {
+        console.log(
+          `[checkBingo] ❌ Card ${numericCardId} is disqualified (disqualified: ${card.disqualified}, checkCount: ${card.checkCount})`
+        );
+        response.isBingo = false;
+        response.winningPattern = null;
+        response.winningLineInfo = null;
+        response.message = card.disqualified
+          ? "Card is disqualified and cannot win"
+          : "Card cannot win due to multiple checks";
+        response.disqualified = true;
+
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "disqualified",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            message: card.disqualified
+              ? "Card is disqualified from previous check"
+              : "Card checked too many times",
+            checkCount: card.checkCount,
+            disqualified: true,
+            timestamp: new Date(),
+          },
+        });
+        return res.json(response);
+      }
+
       const lateCallResult = await detectLateCallForCurrentPattern(
         card.numbers,
-        winningPattern, // Only check the current winning pattern
+        winningPattern,
         game.calledNumbers,
         gameId
       );
 
       if (lateCallResult && lateCallResult.hasMissedOpportunity) {
-        // This is a late call for the same pattern - invalidate the win
+        // ✅ NEW: Mark card as disqualified and save immediately
+        card.disqualified = true;
+        await game.save(); // Persist disqualification status
+
         lateCallMessage = lateCallResult.message;
         wouldHaveWon = lateCallResult.details;
         response.lateCall = true;
         response.lateCallMessage = lateCallMessage;
         response.wouldHaveWon = wouldHaveWon;
-        response.isBingo = false; // Invalidate the current win
+        response.isBingo = false;
         response.winningPattern = null;
         response.winningLineInfo = null;
-        
-        console.log(`[checkBingo] 🕒 LATE CALL DETECTED for pattern "${winningPattern}": ${lateCallMessage}`);
+        response.disqualified = true;
+        response.message = `Card disqualified due to late call: ${lateCallMessage}`;
+        response.checkCount = card.checkCount;
+
+        console.log(
+          `[checkBingo] 🕒 LATE CALL DETECTED for pattern "${winningPattern}": ${lateCallMessage}. Card ${numericCardId} disqualified.`
+        );
+
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "late_call",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            message: lateCallMessage,
+            disqualified: true,
+            checkCount: card.checkCount,
+            lateCallDetails: wouldHaveWon,
+            timestamp: new Date(),
+          },
+        });
+        return res.json(response); // Return early to prevent win processing
       } else {
-        // This is a legitimate win for this pattern
-        console.log(`[checkBingo] ✅ LEGITIMATE WIN for pattern "${winningPattern}" - no late call opportunity`);
+        console.log(
+          `[checkBingo] ✅ LEGITIMATE WIN for pattern "${winningPattern}" - no late call opportunity`
+        );
       }
     } else if (completedPatterns.length > 0 || game.status === "completed") {
-      // For non-winning checks, still check for any late call opportunities
       const lateCallResult = await detectLateCallOpportunity(
         card.numbers,
         game.calledNumbers,
@@ -448,12 +565,39 @@ export const checkBingo = async (req, res, next) => {
       );
 
       if (lateCallResult && lateCallResult.hasMissedOpportunity) {
+        // ✅ NEW: Mark card as disqualified and save immediately
+        card.disqualified = true;
+        await game.save(); // Persist disqualification status
+
         lateCallMessage = lateCallResult.message;
         wouldHaveWon = lateCallResult.details;
         response.lateCall = true;
         response.lateCallMessage = lateCallMessage;
         response.wouldHaveWon = wouldHaveWon;
-        console.log(`[checkBingo] 🕒 LATE CALL DETECTED (non-winning check): ${lateCallMessage}`);
+        response.disqualified = true;
+        response.message = `Card disqualified due to late call: ${lateCallMessage}`;
+        response.checkCount = card.checkCount;
+
+        console.log(
+          `[checkBingo] 🕒 LATE CALL DETECTED (non-winning check): ${lateCallMessage}. Card ${numericCardId} disqualified.`
+        );
+
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "late_call",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            message: lateCallMessage,
+            disqualified: true,
+            checkCount: card.checkCount,
+            lateCallDetails: wouldHaveWon,
+            timestamp: new Date(),
+          },
+        });
+        return res.json(response); // Return early
       }
     }
 
@@ -480,8 +624,8 @@ export const checkBingo = async (req, res, next) => {
         status: isBingo ? "success" : lateCallMessage ? "late_call" : "failed",
         details: {
           cardId: numericCardId,
-          callsMade,
-          lastCalledNumber,
+          callsMade: game.calledNumbers.length,
+          lastCalledNumber: lastCalledNumber?.number,
           message: isBingo
             ? `Bingo with ${winningPattern}`
             : lateCallMessage || "No valid bingo",
@@ -491,6 +635,8 @@ export const checkBingo = async (req, res, next) => {
           patternsChecked: patternsToCheck,
           lateCall: lateCallMessage ? true : false,
           lateCallDetails: wouldHaveWon,
+          disqualified: card.disqualified || false,
+          checkCount: card.checkCount,
           markedGrid: JSON.stringify(markedGrid),
           timestamp: new Date(),
         },
@@ -500,6 +646,39 @@ export const checkBingo = async (req, res, next) => {
     }
 
     if (isBingo) {
+      // ✅ Modified: Final disqualification and checkCount check
+      if (card.disqualified || card.checkCount > 1) {
+        console.log(
+          `[checkBingo] ❌ Card ${numericCardId} is disqualified (disqualified: ${card.disqualified}, checkCount: ${card.checkCount})`
+        );
+        response.isBingo = false;
+        response.winningPattern = null;
+        response.winningLineInfo = null;
+        response.message = card.disqualified
+          ? "Card is disqualified and cannot win"
+          : "Card cannot win due to multiple checks";
+        response.disqualified = true;
+        response.checkCount = card.checkCount;
+
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "disqualified",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            message: card.disqualified
+              ? "Card is disqualified from previous check"
+              : "Card checked too many times",
+            checkCount: card.checkCount,
+            disqualified: true,
+            timestamp: new Date(),
+          },
+        });
+        return res.json(response);
+      }
+
       console.log(
         `[checkBingo] 🏆 FINALIZING WIN - Card ${numericCardId} is the winner!`
       );
@@ -514,21 +693,27 @@ export const checkBingo = async (req, res, next) => {
         response.lateCall = false;
         response.lateCallMessage = null;
         response.wouldHaveWon = null;
+        response.checkCount = card.checkCount;
 
         if (completedPatterns.length > 0) {
           const lateCallResult = await detectLateCallForCurrentPattern(
             card.numbers,
-            patternsToCheck[0], // Use first pattern as fallback
+            patternsToCheck[0],
             game.calledNumbers,
             gameId
           );
           if (lateCallResult && lateCallResult.hasMissedOpportunity) {
+            card.disqualified = true;
+            await game.save(); // Persist disqualification status
+
             lateCallMessage = lateCallResult.message;
             response.lateCall = true;
             response.lateCallMessage = lateCallMessage;
             response.wouldHaveWon = lateCallResult.details;
+            response.disqualified = true;
+
             console.log(
-              `[checkBingo] 🕒 LATE CALL DETECTED (post-winner): ${lateCallMessage}`
+              `[checkBingo] 🕒 LATE CALL DETECTED (post-winner): ${lateCallMessage}. Card ${numericCardId} disqualified.`
             );
           }
         }
@@ -556,7 +741,7 @@ export const checkBingo = async (req, res, next) => {
         prize: game.winner.prize,
         isJackpot: jackpotAwarded,
         winningPattern,
-        lastCalledNumber,
+        lastCalledNumber: lastCalledNumber?.number,
         timestamp: new Date(),
       });
 
@@ -566,14 +751,16 @@ export const checkBingo = async (req, res, next) => {
         status: "success",
         details: {
           cardId: numericCardId,
-          callsMade,
-          lastCalledNumber,
+          callsMade: game.calledNumbers.length,
+          lastCalledNumber: lastCalledNumber?.number,
           jackpotAwarded,
           winningPattern,
           validBingoPatterns,
           identifier: resultIdentifier,
           completedByLastCall: true,
           winningLineInfo: winningLineInfo,
+          disqualified: false,
+          checkCount: card.checkCount,
           timestamp: new Date(),
         },
       });
@@ -587,9 +774,10 @@ export const checkBingo = async (req, res, next) => {
         isJackpot: jackpotAwarded,
         completedByLastCall: true,
       };
+      response.checkCount = card.checkCount;
 
       console.log(
-        `[checkBingo] ✅ Game completed! Winner: Card ${numericCardId} with pattern "${winningPattern}" on call ${lastCalledNumber}`
+        `[checkBingo] ✅ Game completed! Winner: Card ${numericCardId} with pattern "${winningPattern}" on call ${lastCalledNumber?.number}`
       );
     } else {
       await GameLog.create({
@@ -598,8 +786,8 @@ export const checkBingo = async (req, res, next) => {
         status: lateCallMessage ? "late_call" : "failed",
         details: {
           cardId: numericCardId,
-          callsMade,
-          lastCalledNumber,
+          callsMade: game.calledNumbers.length,
+          lastCalledNumber: lastCalledNumber?.number,
           message:
             lateCallMessage ||
             "No valid bingo - last call didn't complete any new specific line",
@@ -608,6 +796,8 @@ export const checkBingo = async (req, res, next) => {
           completedPatterns,
           lateCall: lateCallMessage ? true : false,
           lateCallDetails: wouldHaveWon,
+          disqualified: card.disqualified || false,
+          checkCount: card.checkCount,
           markedGrid: JSON.stringify(markedGrid),
           timestamp: new Date(),
         },
@@ -630,11 +820,17 @@ export const checkBingo = async (req, res, next) => {
     });
   }
 };
-
 // ✅ NEW FUNCTION: Pattern-specific late call detection
-const detectLateCallForCurrentPattern = async (cardNumbers, currentPattern, calledNumbers, gameId) => {
+const detectLateCallForCurrentPattern = async (
+  cardNumbers,
+  currentPattern,
+  calledNumbers,
+  gameId
+) => {
   try {
-    console.log(`[detectLateCallForCurrentPattern] Checking pattern "${currentPattern}" for late call opportunity`);
+    console.log(
+      `[detectLateCallForCurrentPattern] Checking pattern "${currentPattern}" for late call opportunity`
+    );
 
     // Get the numbers required for the CURRENT pattern only
     const { numbers: patternNumbers } = getNumbersForPattern(
@@ -646,20 +842,25 @@ const detectLateCallForCurrentPattern = async (cardNumbers, currentPattern, call
 
     // Filter out FREE spaces and convert to numbers
     const requiredNumbers = patternNumbers
-      .filter(num => num !== 'FREE' && !isNaN(parseInt(num)))
-      .map(num => parseInt(num));
+      .filter((num) => num !== "FREE" && !isNaN(parseInt(num)))
+      .map((num) => parseInt(num));
 
-    console.log(`[detectLateCallForCurrentPattern] Required numbers for "${currentPattern}":`, requiredNumbers);
+    console.log(
+      `[detectLateCallForCurrentPattern] Required numbers for "${currentPattern}":`,
+      requiredNumbers
+    );
 
     if (requiredNumbers.length === 0) {
-      console.log(`[detectLateCallForCurrentPattern] No numbers found for pattern "${currentPattern}"`);
+      console.log(
+        `[detectLateCallForCurrentPattern] No numbers found for pattern "${currentPattern}"`
+      );
       return null;
     }
 
     // Find when each required number was called
     const callHistory = [];
-    requiredNumbers.forEach(requiredNum => {
-      const callIndex = calledNumbers.findIndex(num => num === requiredNum);
+    requiredNumbers.forEach((requiredNum) => {
+      const callIndex = calledNumbers.findIndex((num) => num === requiredNum);
       if (callIndex !== -1) {
         callHistory.push({
           number: requiredNum,
@@ -671,47 +872,67 @@ const detectLateCallForCurrentPattern = async (cardNumbers, currentPattern, call
     // Sort by call order
     callHistory.sort((a, b) => a.callIndex - b.callIndex);
 
-    console.log(`[detectLateCallForCurrentPattern] Call history for pattern "${currentPattern}":`, callHistory);
+    console.log(
+      `[detectLateCallForCurrentPattern] Call history for pattern "${currentPattern}":`,
+      callHistory
+    );
 
     if (callHistory.length < requiredNumbers.length) {
-      console.log(`[detectLateCallForCurrentPattern] Pattern "${currentPattern}" not fully complete yet`);
+      console.log(
+        `[detectLateCallForCurrentPattern] Pattern "${currentPattern}" not fully complete yet`
+      );
       return null;
     }
 
     // Check if all but one number were called before the current call
     const currentCallIndex = calledNumbers.length;
     const numbersCalledBeforeCurrent = callHistory.filter(
-      call => call.callIndex < currentCallIndex
+      (call) => call.callIndex < currentCallIndex
     );
 
-    const wasPatternCompleteEarlier = numbersCalledBeforeCurrent.length === requiredNumbers.length - 1;
+    const wasPatternCompleteEarlier =
+      numbersCalledBeforeCurrent.length === requiredNumbers.length - 1;
 
     if (wasPatternCompleteEarlier) {
-      const completingNumber = callHistory.find(call => call.callIndex === currentCallIndex - 1);
-      
-      console.log(`[detectLateCallForCurrentPattern] LATE CALL DETECTED for pattern "${currentPattern}"!`);
-      console.log(`[detectLateCallForCurrentPattern] Would have been complete on call #${numbersCalledBeforeCurrent.length + 1} with number ${completingNumber.number}`);
+      const completingNumber = callHistory.find(
+        (call) => call.callIndex === currentCallIndex - 1
+      );
+
+      console.log(
+        `[detectLateCallForCurrentPattern] LATE CALL DETECTED for pattern "${currentPattern}"!`
+      );
+      console.log(
+        `[detectLateCallForCurrentPattern] Would have been complete on call #${
+          numbersCalledBeforeCurrent.length + 1
+        } with number ${completingNumber.number}`
+      );
 
       return {
         hasMissedOpportunity: true,
-        message: `You won before with ${currentPattern.replace('_', ' ')} pattern on call #${numbersCalledBeforeCurrent.length + 1} (number ${completingNumber.number})`,
+        message: `You won before with ${currentPattern.replace(
+          "_",
+          " "
+        )} pattern on call #${numbersCalledBeforeCurrent.length + 1} (number ${
+          completingNumber.number
+        })`,
         details: {
           pattern: currentPattern,
           completingNumber: completingNumber.number,
           callIndex: numbersCalledBeforeCurrent.length + 1,
           validPatterns: [currentPattern],
-          numbersCalledBefore: numbersCalledBeforeCurrent.map(c => c.number),
-          totalRequired: requiredNumbers.length
+          numbersCalledBefore: numbersCalledBeforeCurrent.map((c) => c.number),
+          totalRequired: requiredNumbers.length,
         },
-        earliestCallIndex: numbersCalledBeforeCurrent.length + 1
+        earliestCallIndex: numbersCalledBeforeCurrent.length + 1,
       };
     }
 
-    console.log(`[detectLateCallForCurrentPattern] No late call opportunity for current pattern "${currentPattern}"`);
+    console.log(
+      `[detectLateCallForCurrentPattern] No late call opportunity for current pattern "${currentPattern}"`
+    );
     return null;
-
   } catch (error) {
-    console.error('[detectLateCallForCurrentPattern] Error:', error);
+    console.error("[detectLateCallForCurrentPattern] Error:", error);
     return null;
   }
 };

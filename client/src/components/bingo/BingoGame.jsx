@@ -205,27 +205,104 @@ const BingoGame = () => {
   }, []); // Remove `language` dependency if sounds are language-agnostic
   // Load game data
   useEffect(() => {
-    const gameId = searchParams.get("id");
+    const gameId =
+      searchParams.get("id") || sessionStorage.getItem("currentGameId");
     if (!gameId) {
+      console.error("[BingoGame] No game ID found");
       setCallError("No game ID found");
       setIsErrorModalOpen(true);
+      setIsLoading(false);
       navigate("/create-game");
       return;
     }
-    setIsLoading(true);
-    fetchGame(gameId)
-      .then((response) => {
-        setGameData(response);
-        setIsLoading(false);
-      })
-      .catch((err) => {
-        setCallError(err.message);
+    sessionStorage.setItem("currentGameId", gameId);
+    const loadGame = async () => {
+      try {
+        setIsLoading(true);
+        const fetchedGame = await fetchGame(gameId);
+        console.log(
+          "[BingoGame] Fetched game data:",
+          JSON.stringify(fetchedGame, null, 2)
+        );
+        if (!fetchedGame.gameNumber) {
+          console.warn("[BingoGame] gameNumber is missing in fetchedGame");
+        }
+        if (!fetchedGame._id) {
+          throw new Error("Fetched game data missing _id");
+        }
+        setGameData(fetchedGame);
+        setCalledNumbers(fetchedGame.calledNumbers || []);
+        // Set prizePool directly from fetchedGame to avoid extra API call
+        setGameData((prev) => ({
+          ...prev,
+          prizePool: fetchedGame.prizePool || 0,
+        }));
+        await fetchBingoCards(gameId);
+        await updateJackpotDisplay();
+        if (user?.role === "moderator") {
+          await fetchJackpotCandidates();
+          if (!fetchedGame.cashierId) {
+            const pairedCashier = await moderatorService.getPairedCashier();
+            setGameData((prev) => ({
+              ...prev,
+              cashierId: pairedCashier.data.cashierId,
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("[BingoGame] loadGame error:", error.message);
+        setCallError(error.message || "Failed to load game");
         setIsErrorModalOpen(true);
-        setIsLoading(false);
+        setGameData(null);
         navigate("/create-game");
-      });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadGame();
   }, [searchParams, fetchGame, navigate]);
 
+  // Update prize pool when gameData._id changes
+  useEffect(() => {
+    if (gameData?._id) {
+      console.log(
+        "[BingoGame] Triggering updatePrizePoolDisplay for game:",
+        gameData._id
+      );
+      updatePrizePoolDisplay();
+    }
+  }, [gameData?._id]);
+
+  const updatePrizePoolDisplay = async () => {
+    if (!gameData?._id) {
+      console.warn(
+        "[updatePrizePoolDisplay] No game ID available, skipping update"
+      );
+      return;
+    }
+    try {
+      console.log(
+        "[updatePrizePoolDisplay] Fetching prize pool for game:",
+        gameData._id
+      );
+      const game = await gameService.getGame(gameData._id);
+      console.log("[updatePrizePoolDisplay] Fetched game data:", {
+        gameId: game._id,
+        prizePool: game.prizePool,
+      });
+      setGameData((prev) => ({
+        ...prev,
+        prizePool: game.prizePool || 0,
+      }));
+    } catch (error) {
+      console.error(
+        "[updatePrizePoolDisplay] Error fetching prize pool:",
+        error.message
+      );
+      setCallError(error.message || "Failed to fetch prize pool");
+      setIsErrorModalOpen(true);
+    }
+  };
   // Initialize p5.js for jackpot animation
   useEffect(() => {
     if (isJackpotWinnerModalOpen && jackpotCanvasRef.current && p5) {
@@ -534,6 +611,7 @@ const BingoGame = () => {
         setCalledNumbers(fetchedGame.calledNumbers || []);
         await fetchBingoCards(gameId);
         await updateJackpotDisplay();
+        await updatePrizePoolDisplay(); // Add this to fetch prize pool
         if (user?.role === "moderator") {
           await fetchJackpotCandidates();
           if (!fetchedGame.cashierId) {
@@ -1294,6 +1372,7 @@ const BingoGame = () => {
     let numberToCall;
 
     try {
+      await updatePrizePoolDisplay();
       // Handle manual number input
       if (manualNum !== null && manualNum !== undefined && manualNum !== "") {
         console.log("[BingoGame] Manual call with number:", manualNum);
@@ -1662,6 +1741,7 @@ const BingoGame = () => {
     try {
       const response = await finishGame(gameData._id);
       setGameData(response.game);
+      await updatePrizePoolDisplay(); // Add this to sync prize pool
       SoundService.playSound("game_finish");
       setIsGameFinishedModalOpen(true);
     } catch (error) {
@@ -1843,6 +1923,7 @@ const BingoGame = () => {
           selectedWinnerNumbers: response.game?.selectedWinnerNumbers || [],
           lastCalledNumbers: [response.lastCalledNumber],
         }));
+        await updatePrizePoolDisplay(); // Add this to sync prize pool
         setIsWinnerModalOpen(true);
         setIsGameOver(true);
         setIsPlaying(false);
