@@ -1,12 +1,11 @@
-// models/Game.js (Full corrected file)
 import mongoose from "mongoose";
 
 const gameSchema = new mongoose.Schema({
-  gameNumber: { type: Number, required: true }, // Removed unique constraint
+  gameNumber: { type: Number, required: true },
   cashierId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true, // Associate game with cashier
+    required: true,
   },
   betAmount: { type: Number, required: true },
   houseFeePercentage: { type: Number, required: true },
@@ -15,6 +14,10 @@ const gameSchema = new mongoose.Schema({
     {
       id: { type: Number, required: true },
       numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
+      disqualified: { type: Boolean, default: false },
+      checkCount: { type: Number, default: 0 }, // ✅ Added
+      lastCheckCallCount: { type: Number, default: 0 },
+      lastCheckTime: { type: Date, default: null },
     },
   ],
   pattern: {
@@ -45,28 +48,24 @@ const gameSchema = new mongoose.Schema({
     },
   ],
   moderatorWinnerCardId: { type: Number, default: null },
-  forcedPattern: { type: String, default: null }, // Added for explicit random pattern when "all"
+  forcedPattern: { type: String, default: null },
   selectedWinnerRowIndices: { type: [Number], default: [] },
   forcedCallSequence: {
     type: [Number],
     default: [],
   },
-  // ✅ NEW: Track progress in forced sequence
   forcedCallIndex: {
     type: Number,
     default: 0,
   },
-  // ✅ NEW: Total calls for exact win (sequence length)
   targetWinCall: {
     type: Number,
     default: null,
   },
-  // ✅ NEW: Store the actual winner card numbers from database
   winnerCardNumbers: {
-    type: [[{ type: mongoose.Schema.Types.Mixed }]], // 5x5 array like selectedCards
+    type: [[{ type: mongoose.Schema.Types.Mixed }]],
     default: null,
   },
-  // ✅ NEW: Store the specific numbers required for the winning pattern
   selectedWinnerNumbers: {
     type: [Number],
     default: [],
@@ -81,7 +80,6 @@ const gameSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
-  // Add to your Game schema
   configuredBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -98,7 +96,6 @@ gameSchema.pre("save", function (next) {
   next();
 });
 
-// Ensure unique gameNumber per cashier
 gameSchema.index({ cashierId: 1, gameNumber: 1 }, { unique: true });
 
 export default mongoose.model("Game", gameSchema);

@@ -1021,20 +1021,22 @@ export const createGameRecord = async ({
   cashierId,
   betAmount,
   houseFeePercentage,
+  houseFee,
   selectedCards,
   pattern,
   prizePool,
-  potentialJackpot,
-  moderatorWinnerCardId,
-  selectedWinnerRowIndices = [],
+  jackpotContribution,
   jackpotEnabled = true,
-  forcedCallSequence = [],
+  moderatorWinnerCardId = null,
+  selectedWinnerRowIndices = [],
   forcedPattern = null,
+  forcedCallSequence = [],
   winnerCardNumbers = null,
   selectedWinnerNumbers = [],
   targetWinCall = null,
   forcedCallIndex = 0,
 }) => {
+  // Validate inputs
   if (
     !selectedCards ||
     !Array.isArray(selectedCards) ||
@@ -1060,23 +1062,43 @@ export const createGameRecord = async ({
     throw new Error("Invalid cashier ID");
   }
 
-  console.log(
-    `[createGameRecord] Creating game with selectedWinnerNumbers:`,
-    selectedWinnerNumbers
-  );
-  const houseFee =
-    betAmount * (houseFeePercentage / 100) * selectedCards.length;
+  if (!Number.isFinite(houseFee) || houseFee < 0) {
+    throw new Error(`Invalid houseFee: ${houseFee}`);
+  }
 
+  if (!Number.isFinite(prizePool) || prizePool < 0) {
+    throw new Error(`Invalid prizePool: ${prizePool}`);
+  }
+
+  if (!Number.isFinite(jackpotContribution) || jackpotContribution < 0) {
+    throw new Error(`Invalid jackpotContribution: ${jackpotContribution}`);
+  }
+
+  // Log financials for debugging
+  console.log("[createGameRecord] Creating game with:", {
+    gameNumber,
+    betAmount,
+    houseFeePercentage,
+    houseFee,
+    selectedCardsLength: selectedCards.length,
+    prizePool,
+    jackpotContribution,
+    jackpotEnabled,
+    selectedWinnerNumbers,
+  });
+
+  // Create the game
   const game = new Game({
     gameNumber,
     cashierId,
     betAmount,
     houseFeePercentage,
-    houseFee,
+    houseFee: parseFloat(houseFee.toFixed(2)),
     selectedCards,
     pattern,
-    prizePool,
-    potentialJackpot,
+    prizePool: parseFloat(prizePool.toFixed(2)),
+    jackpotContribution: parseFloat(jackpotContribution.toFixed(2)),
+    jackpotEnabled,
     status: "pending",
     calledNumbers: [],
     calledNumbersLog: [],
@@ -1086,7 +1108,6 @@ export const createGameRecord = async ({
     forcedCallSequence,
     forcedCallIndex,
     targetWinCall,
-    jackpotEnabled,
     winnerCardNumbers,
     selectedWinnerNumbers,
     winner: null,
@@ -1094,6 +1115,15 @@ export const createGameRecord = async ({
 
   await game.save();
 
+  // Log stored game data
+  console.log("[createGameRecord] Game created:", {
+    gameNumber: game.gameNumber,
+    houseFee: game.houseFee,
+    prizePool: game.prizePool,
+    jackpotContribution: game.jackpotContribution,
+  });
+
+  // Create game log
   await GameLog.create({
     gameId: game._id,
     action: "createGameRecord",
@@ -1106,6 +1136,7 @@ export const createGameRecord = async ({
     },
   });
 
+  // Delete future winning counter if moderatorWinnerCardId is provided
   if (moderatorWinnerCardId) {
     await Counter.deleteOne({
       _id: `futureWinning_${gameNumber}_${cashierId}`,
