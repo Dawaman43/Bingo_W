@@ -86,7 +86,9 @@ const BingoGame = () => {
     try {
       const jackpotData = await gameService.getJackpot(user.id);
       console.log("[fetchJackpotAmount] Fetched jackpot data:", jackpotData);
-      return jackpotData.amount || 0;
+
+      // Convert amount to integer safely
+      return parseInt(jackpotData.amount, 10) || 0;
     } catch (error) {
       console.error("[fetchJackpotAmount] Error fetching jackpot:", error);
       return 0;
@@ -484,7 +486,7 @@ const BingoGame = () => {
       setCallError("No game ID found");
       setIsErrorModalOpen(true);
       setIsLoading(false);
-      navigate("/create-game");
+      navigate("/cashier-dashboard");
       return;
     }
     sessionStorage.setItem("currentGameId", gameId);
@@ -514,7 +516,7 @@ const BingoGame = () => {
         setCallError(error.message || "Failed to load game");
         setIsErrorModalOpen(true);
         setGameData(null);
-        navigate("/create-game");
+        navigate("/cashier-dashboard");
       } finally {
         setIsLoading(false);
       }
@@ -1418,7 +1420,7 @@ const BingoGame = () => {
       rowNumbers.push(
         <div
           key={`letter-${row}`}
-          className={`w-18 h-18 ${letters[row].color} text-black flex justify-center items-center text-2xl font-bold border border-[#2a3969]`}
+          className={`w-14 h-14 ${letters[row].color} text-black flex justify-center items-center text-xl font-bold border border-[#2a3969]`}
         >
           {letters[row].letter}
         </div>
@@ -1427,7 +1429,7 @@ const BingoGame = () => {
         rowNumbers.push(
           <div
             key={i}
-            className={`w-18 h-18 flex justify-center items-center text-2xl font-bold cursor-default transition-all duration-300 ${
+            className={`w-14 h-14 flex justify-center items-center text-xl font-bold cursor-default transition-all duration-300 ${
               calledNumbers.includes(i)
                 ? "bg-[#0a1174] text-white border border-[#2a3969]"
                 : "bg-[#e02d2d] text-white border border-[#2a3969]"
@@ -1622,13 +1624,13 @@ const BingoGame = () => {
           </div>
         </div>
         {/* Last Number Container */}
-        <div className="flex items-center gap-4 translate-x-20">
+        <div className="flex items-center gap-4 ">
           <div className="flex flex-col items-center">
             <p className="w-38 h-38 flex justify-center items-center bg-[#f0e14a] shadow-[inset_0_0_10px_white] rounded-full text-8xl font-black text-black">
               {currentNumber || "-"}
             </p>
           </div>
-          <div className="translate-x-28 flex flex-col items-center">
+          <div className=" flex flex-col items-center">
             <div className="flex items-center gap-2">
               <span className="text-5xl font-black text-white">
                 {gameData?.prizePool?.toFixed(2) || 0} ብር
@@ -1641,7 +1643,7 @@ const BingoGame = () => {
 
       {/* Jackpot Display (already positioned bottom left) */}
       <div
-        className={`fixed bottom-5 left-[0.1%] bg-[#0f1a4a] border-3 border-[#f0e14a] rounded-xl p-4 text-center shadow-lg z-10 min-w-[300px] transition-all duration-300 ${
+        className={`fixed bottom-5 left-[0.1%] bg-[#0f1a4a] border-3 border-[#f0e14a] rounded-xl p-4 text-center shadow-lg z-10 min-w-[200px] transition-all duration-300 ${
           isJackpotAnimating ? "animate-pulse scale-105 animate-bounce" : ""
         }`}
       >
