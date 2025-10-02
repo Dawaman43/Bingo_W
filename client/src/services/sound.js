@@ -74,8 +74,8 @@ class SoundService {
         }.opus`,
       ],
       ["shuffle", `/sounds?path=effects/shuffle.opus`],
-      ["jackpot_running", `/sounds?path=effects/jackpot-running.opus`],
-      ["jackpot_congrats", `/sounds?path=effects/jackpot-congrats.opus`],
+      ["jackpot-running", `/sounds?path=effects/jackpot-running.opus`],
+      ["jackpot-congrats", `/sounds?path=effects/jackpot-congrats.opus`],
     ];
 
     const allAudio = [...numberSounds, ...staticSounds];
@@ -97,17 +97,23 @@ class SoundService {
     console.log("Audio cache keys:", Object.keys(this.audioCache));
   }
 
-  playSound(key) {
+  playSound(key, options = {}) {
     const audio = this.audioCache[key];
-    if (audio) {
-      audio.currentTime = 0;
-      audio
-        .play()
-        .then(() => console.log(`Played sound: ${key}`))
-        .catch((err) => console.error(`Error playing sound ${key}:`, err));
-    } else {
+    if (!audio) {
       console.warn(`Audio for ${key} not found in cache`);
+      return;
     }
+    if (options.stop) {
+      audio.pause();
+      audio.currentTime = 0;
+      return;
+    }
+    audio.loop = options.loop || false;
+    audio.currentTime = 0;
+    audio
+      .play()
+      .then(() => console.log(`Played sound: ${key}`))
+      .catch((err) => console.error(`Error playing sound ${key}:`, err));
   }
 }
 

@@ -1,58 +1,45 @@
-import mongoose from "mongoose";
 import { getCashierIdFromUser } from "../utils/gameUtils.js";
 import Game from "../models/Game.js";
 import Jackpot from "../models/Jackpot.js";
 import JackpotLog from "../models/JackpotLog.js";
 import Result from "../models/Result.js";
 import User from "../models/User.js";
+import FutureWinner from "../models/FutureWinner.js";
 import { validationResult } from "express-validator";
-import { emitJackpotAwarded } from "../socket.js";
+import mongoose from "mongoose";
 
 // Get current jackpot
-export const getJackpot = async (req, res, next) => {
+export const getJackpot = async (req, res) => {
   try {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    // Fetch the jackpot document for this cashier
     const jackpot = await Jackpot.findOne({ cashierId });
+    if (!jackpot) return res.status(404).json({ message: "Jackpot not found" });
 
-    // Always return the actual jackpot amount from database (persistent across games)
-    // Removed the activeGames check that was resetting to 0 when no active games exist
-    const amount = jackpot ? jackpot.amount : 0;
-    const enabled = jackpot ? jackpot.enabled : true;
-
-    // Optional: Still fetch active games count for informational purposes
-    // but don't use it to reset the jackpot amount
     const activeGames = await Game.countDocuments({
-      status: { $in: ["active", "pending"] },
       cashierId,
-    });
-
-    console.log(`[getJackpot] Retrieved for cashier ${cashierId}:`, {
-      amount,
-      enabled,
-      activeGames,
-      hasJackpotDoc: !!jackpot,
-      lastUpdated: jackpot ? jackpot.lastUpdated : "none",
+      isActive: true,
     });
 
     res.json({
       message: "Jackpot retrieved successfully",
       data: {
-        amount,
-        baseAmount: jackpot ? jackpot.baseAmount : 0,
-        enabled,
-        lastUpdated: jackpot ? jackpot.lastUpdated : new Date(),
-        // Optional: Include active games count for frontend display
+        amount: jackpot.amount,
+        baseAmount: jackpot.baseAmount || 0,
+        enabled: jackpot.enabled,
+        lastUpdated: jackpot.lastUpdated || new Date(),
         activeGames,
-        // Optional: Include whether jackpot exists in DB
-        jackpotExists: !!jackpot,
+        jackpotExists: true,
+        winnerCardId: jackpot.winnerCardId || null,
+        winnerMessage: jackpot.winnerMessage || null,
+        lastAwardedAmount: jackpot.drawAmount || 0,
+        lastAwardedTimestamp: jackpot.drawTimestamp || null,
       },
     });
   } catch (error) {
     console.error("[getJackpot] Error:", error);
-    next(error);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -69,7 +56,7 @@ export const setJackpotAmount = async (req, res, next) => {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    const { amount } = req.body;
+    const { amount, gameId } = req.body;
 
     if (typeof amount !== "number" || amount < 0) {
       return res.status(400).json({
@@ -77,12 +64,26 @@ export const setJackpotAmount = async (req, res, next) => {
       });
     }
 
+    // Validate gameId (gameNumber) if provided
+    if (gameId !== undefined) {
+      if (typeof gameId !== "number") {
+        return res.status(400).json({
+          message: "gameId must be a number",
+        });
+      }
+      const gameExists = await Game.findOne({ gameNumber: gameId, cashierId });
+      if (!gameExists) {
+        return res.status(400).json({
+          message: `Game with gameNumber ${gameId} not found for cashier`,
+        });
+      }
+    }
+
     let jackpot = await Jackpot.findOne({ cashierId });
     const oldAmount = jackpot ? jackpot.amount : 0;
     const changeAmount = amount - oldAmount;
 
     if (!jackpot) {
-      // Create new jackpot
       jackpot = new Jackpot({
         cashierId,
         amount,
@@ -91,24 +92,31 @@ export const setJackpotAmount = async (req, res, next) => {
         lastUpdated: new Date(),
       });
     } else {
-      // Update existing jackpot
       jackpot.amount = amount;
-      jackpot.baseAmount = amount; // Reset base amount when manually set
+      jackpot.baseAmount = amount;
       jackpot.lastUpdated = new Date();
     }
 
     await jackpot.save();
 
-    // Log the manual update
     await JackpotLog.create({
       cashierId,
       amount: changeAmount,
-      reason: `Manual jackpot update by moderator - set to ${amount}`,
-      gameId: null,
+      reason: `Manual jackpot update by moderator - set to ${amount}${
+        gameId !== undefined ? ` for game ${gameId}` : ""
+      }`,
+      gameId:
+        gameId !== undefined
+          ? (
+              await Game.findOne({ gameNumber: gameId, cashierId })
+            )._id
+          : null,
     });
 
     console.log(
-      `[setJackpotAmount] Moderator set jackpot to ${amount} (change: ${changeAmount})`
+      `[setJackpotAmount] Moderator set jackpot to ${amount} (change: ${changeAmount})${
+        gameId !== undefined ? ` for game ${gameId}` : ""
+      }`
     );
 
     res.json({
@@ -118,6 +126,7 @@ export const setJackpotAmount = async (req, res, next) => {
         newAmount: amount,
         changeAmount,
         totalJackpot: jackpot.amount,
+        gameId: gameId !== undefined ? gameId : null,
       },
     });
   } catch (error) {
@@ -126,7 +135,7 @@ export const setJackpotAmount = async (req, res, next) => {
   }
 };
 
-// Add contribution to existing jackpot (called from game creation)
+// Add contribution to existing jackpot
 export const addJackpotContribution = async (req, res, next) => {
   try {
     await getCashierIdFromUser(req, res, () => {});
@@ -143,7 +152,6 @@ export const addJackpotContribution = async (req, res, next) => {
     let jackpot = await Jackpot.findOne({ cashierId });
 
     if (!jackpot) {
-      // Create jackpot if it doesn't exist
       jackpot = new Jackpot({
         cashierId,
         amount: contributionAmount,
@@ -152,7 +160,6 @@ export const addJackpotContribution = async (req, res, next) => {
         lastUpdated: new Date(),
       });
     } else {
-      // Add to existing jackpot
       const oldAmount = jackpot.amount;
       jackpot.amount += contributionAmount;
       jackpot.lastUpdated = new Date();
@@ -160,7 +167,6 @@ export const addJackpotContribution = async (req, res, next) => {
 
     await jackpot.save();
 
-    // Log the contribution
     await JackpotLog.create({
       cashierId,
       amount: contributionAmount,
@@ -220,7 +226,6 @@ export const toggleJackpot = async (req, res, next) => {
       }
     );
 
-    // Log the status change
     await JackpotLog.create({
       cashierId,
       amount: 0,
@@ -243,8 +248,8 @@ export const toggleJackpot = async (req, res, next) => {
   }
 };
 
-// Award jackpot to specific card (with or without game context)
-export const awardJackpot = async (req, res, next) => {
+export const awardJackpot = async (req, res) => {
+  let session = null;
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -253,155 +258,442 @@ export const awardJackpot = async (req, res, next) => {
         .json({ message: "Validation failed", errors: errors.array() });
     }
 
+    const user = req.user;
+    if (!user || !user.role) {
+      return res
+        .status(401)
+        .json({ message: "Unauthorized. User role missing." });
+    }
+
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
+    const { cardId, drawAmount, message, gameId } = req.body;
 
-    const { gameId, cardId, drawAmount, message } = req.body;
-
-    if (!cardId || !drawAmount) {
-      return res.status(400).json({
-        message: "cardId and drawAmount are required",
-      });
-    }
-
-    if (drawAmount <= 0) {
-      return res.status(400).json({ message: "Draw amount must be positive" });
-    }
-
-    const jackpot = await Jackpot.findOne({ cashierId });
-    if (!jackpot || !jackpot.enabled) {
-      return res.status(400).json({ message: "Jackpot is not enabled" });
-    }
-
-    if (drawAmount > jackpot.amount) {
-      return res.status(400).json({
-        message: "Draw amount cannot exceed available jackpot amount",
-      });
-    }
-
-    let game = null;
-    if (gameId) {
-      game = await Game.findById(gameId);
-      if (!game) {
-        return res.status(404).json({ message: "Game not found" });
+    session = await mongoose.startSession();
+    const result = await session.withTransaction(async () => {
+      const jackpot = await Jackpot.findOne({ cashierId }).session(session);
+      if (!jackpot || !jackpot.enabled) {
+        throw new Error("Jackpot is not enabled");
       }
 
-      const selectedCard = game.selectedCards.find((c) => c.id === cardId);
-      if (!selectedCard) {
-        return res.status(400).json({ message: "Card not found in game" });
+      // Resolve game document if numeric gameId is provided
+      let gameDoc = null;
+      let isFutureGame = false;
+      if (gameId !== undefined && gameId !== null) {
+        if (typeof gameId !== "number") {
+          throw new Error("Game ID must be a number (gameNumber)");
+        }
+        gameDoc = await Game.findOne({ gameNumber: gameId, cashierId }).session(
+          session
+        );
+        if (!gameDoc) {
+          isFutureGame = true;
+          console.log(
+            `[awardJackpot] Configuring jackpot for future game ${gameId}`
+          );
+        }
       }
 
-      if (game.jackpotWinner) {
-        return res.status(400).json({
-          message: "Jackpot winner already selected for this game",
-        });
+      let actualDrawAmount;
+      let winnerCardId;
+      let winnerMessage;
+      let logData;
+      let triggeredByCashier = false;
+
+      if (user.role === "moderator") {
+        // Moderator sets cardId, drawAmount, message
+        if (!cardId || !drawAmount || !message) {
+          throw new Error("cardId, drawAmount, and message are required");
+        }
+
+        if (drawAmount > jackpot.amount) {
+          throw new Error("Draw amount cannot exceed jackpot");
+        }
+
+        actualDrawAmount = drawAmount;
+        winnerCardId = cardId.toString();
+        winnerMessage = message;
+
+        jackpot.winnerCardId = winnerCardId;
+        jackpot.winnerMessage = winnerMessage;
+        jackpot.amount -= actualDrawAmount;
+        jackpot.lastUpdated = new Date();
+        jackpot.lastAwardedAmount = actualDrawAmount;
+        jackpot.drawTimestamp = new Date();
+
+        await jackpot.save({ session });
+
+        const gameQualifier = isFutureGame
+          ? `future game ${gameId}`
+          : `game ${gameId}`;
+        logData = {
+          cashierId,
+          amount: -actualDrawAmount,
+          reason: `Jackpot awarded to card ${winnerCardId}: ${actualDrawAmount} birr - ${winnerMessage} for ${gameQualifier}`,
+          gameId: gameDoc ? gameDoc._id : null,
+          isAward: true,
+          winnerCardId,
+          message: winnerMessage,
+          triggeredByCashier: false,
+          timestamp: new Date(),
+        };
+
+        await JackpotLog.create([logData], { session });
+
+        // ✅ For future games: Store in FutureWinner for auto-apply on game start
+        if (isFutureGame) {
+          // Upsert FutureWinner with jackpot config (assume existing winner config or create minimal)
+          const futureWinnerUpsert = {
+            gameNumber: gameId,
+            cashierId,
+            cardId: parseInt(cardId), // Match schema type
+            jackpotEnabled: true,
+            jackpotDrawAmount: actualDrawAmount,
+            jackpotMessage: winnerMessage,
+            configuredBy: user.id,
+            used: false,
+          };
+          // Minimal fields; if full winner config needed, fetch Card and generate pattern/sequence here or require in request
+          // For now, assume jackpot-only; extend if winner pattern also needed
+
+          await FutureWinner.findOneAndUpdate(
+            { gameNumber: gameId, cashierId },
+            {
+              $set: futureWinnerUpsert,
+              $setOnInsert: {
+                /* defaults for missing fields */
+              },
+            },
+            { upsert: true, session, new: true }
+          );
+
+          console.log(
+            `[awardJackpot] 💰 Stored jackpot config in FutureWinner for game ${gameId}`
+          );
+        }
+      } else if (user.role === "cashier") {
+        // Cashier just triggers existing moderator-set jackpot
+        if (!jackpot.winnerCardId || !jackpot.winnerMessage) {
+          throw new Error("No winner set by moderator");
+        }
+
+        actualDrawAmount = jackpot.amount;
+        winnerCardId = jackpot.winnerCardId;
+        winnerMessage = jackpot.winnerMessage;
+        triggeredByCashier = true;
+
+        jackpot.amount = 0;
+        jackpot.winnerCardId = null;
+        jackpot.winnerMessage = null;
+        jackpot.lastUpdated = new Date();
+        jackpot.lastAwardedAmount = 0;
+        jackpot.drawTimestamp = null;
+
+        await jackpot.save({ session });
+
+        const gameQualifier = isFutureGame
+          ? `future game ${gameId}`
+          : `game ${gameId}`;
+        logData = {
+          cashierId,
+          amount: -actualDrawAmount,
+          reason: `Jackpot awarded to card ${winnerCardId}: ${actualDrawAmount} birr - ${winnerMessage} for ${gameQualifier}`,
+          gameId: gameDoc ? gameDoc._id : null,
+          isAward: true,
+          winnerCardId,
+          message: winnerMessage,
+          triggeredByCashier: true,
+          timestamp: new Date(),
+        };
+
+        await JackpotLog.create([logData], { session });
+      } else {
+        throw new Error("Invalid user role");
       }
-    }
 
-    const actualDrawAmount = Math.min(drawAmount, jackpot.amount);
+      await Result.create(
+        [
+          {
+            gameId: gameDoc ? gameDoc._id : null,
+            winnerCardId,
+            prize: actualDrawAmount,
+            isJackpot: true,
+            message: winnerMessage,
+            identifier: `jackpot_${Date.now()}_${winnerCardId}`,
+            timestamp: new Date(),
+          },
+        ],
+        { session }
+      );
 
-    // Update game if provided
-    if (game) {
-      game.jackpotWinner = {
-        cardId,
-        prize: actualDrawAmount,
-        message: message || `Jackpot win! Card ${cardId}`,
-      };
-      await game.save();
-    }
-
-    // Deduct jackpot
-    const oldJackpotAmount = jackpot.amount;
-    jackpot.amount -= actualDrawAmount;
-    jackpot.lastUpdated = new Date();
-    await jackpot.save();
-
-    // Log jackpot award
-    await JackpotLog.create({
-      cashierId,
-      amount: -actualDrawAmount,
-      reason: `Jackpot awarded to card ${cardId}: ${actualDrawAmount} birr - ${
-        message || "Manual jackpot award"
-      }`,
-      gameId: gameId || null,
-    });
-
-    // Create result record with required identifier
-    await Result.create({
-      gameId: gameId || null,
-      winnerCardId: cardId,
-      prize: actualDrawAmount,
-      isJackpot: true,
-      message: message || `Jackpot win! Card ${cardId}`,
-      identifier: `jackpot_${Date.now()}_${cardId}`, // Required field
-    });
-
-    console.log(
-      `[awardJackpot] Awarded ${actualDrawAmount} to card ${cardId} from jackpot ${oldJackpotAmount}${
-        gameId ? ` for game ${gameId}` : " (manual award)"
-      }`
-    );
-
-    // Emit Socket.IO event to notify clients
-    emitJackpotAwarded(cashierId, {
-      userId: cardId, // Map cardId to userId for frontend compatibility
-      prize: actualDrawAmount,
-      drawDate: new Date().toISOString(),
-      message: message || `Jackpot win! Card ${cardId}`,
-      gameId: gameId || null,
-      remainingJackpot: jackpot.amount,
-    });
-
-    res.json({
-      message: `Jackpot awarded successfully to card ${cardId}`,
-      data: {
-        gameId: gameId || null,
-        cardId,
+      // Return data for response
+      return {
+        gameId: gameId ?? null,
+        cardId: winnerCardId,
         drawAmount: actualDrawAmount,
-        previousJackpot: oldJackpotAmount,
         remainingJackpot: jackpot.amount,
-        message: message || `Jackpot win! Card ${cardId}`,
-      },
+        message: winnerMessage,
+        isFutureGame,
+      };
+    });
+
+    // Transaction succeeded, send response
+    return res.json({
+      message: `Jackpot awarded successfully to card ${result.cardId}${
+        result.isFutureGame ? " (configured for future game)" : ""
+      }`,
+      data: result,
     });
   } catch (error) {
     console.error("[awardJackpot] Error:", error);
-    next(error);
+    if (session) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        console.error("[awardJackpot] Abort error:", abortErr);
+      }
+      await session.endSession();
+    }
+    const badRequestErrors = [
+      "Jackpot is not enabled",
+      "Game ID must be a number (gameNumber)",
+      "cardId, drawAmount, and message are required",
+      "Draw amount cannot exceed jackpot",
+      "No winner set by moderator",
+      "Invalid user role",
+    ];
+    if (badRequestErrors.some((msg) => error.message.includes(msg))) {
+      return res.status(400).json({ message: error.message });
+    }
+    return res
+      .status(500)
+      .json({ message: "Internal server error", error: error.message });
+  } finally {
+    if (session) {
+      await session.endSession();
+    }
   }
 };
-// Get jackpot award history
+
 export const getJackpotHistory = async (req, res, next) => {
   try {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    // Get jackpot logs for this cashier
-    const logs = await JackpotLog.find({ cashierId })
+    const logs = await JackpotLog.find({ cashierId, isAward: true })
       .sort({ timestamp: -1 })
       .limit(50)
       .populate("gameId", "gameNumber status");
 
-    // Filter and format logs for better display
     const formattedLogs = logs.map((log) => ({
+      _id: log._id,
       timestamp: log.timestamp,
       amount: log.amount,
       reason: log.reason,
       game: log.gameId
-        ? {
-            gameNumber: log.gameId.gameNumber,
-            status: log.gameId.status,
-          }
+        ? { gameNumber: log.gameId.gameNumber, status: log.gameId.status }
         : null,
-      isContribution: log.amount > 0 && log.reason.includes("contribution"),
-      isAward: log.amount < 0 && log.reason.includes("awarded"),
-      isManual: log.reason.includes("Manual jackpot update"),
+      winnerCardId: log.winnerCardId,
+      message: log.message,
+      triggeredByCashier: log.triggeredByCashier || false,
+      cashierId: log.cashierId,
     }));
 
     res.json({
-      message: "Jackpot history retrieved successfully",
+      message: "Jackpot award history retrieved successfully",
       data: formattedLogs,
     });
   } catch (error) {
     console.error("[getJackpotHistory] Error:", error);
+    next(error);
+  }
+};
+
+// Delete a jackpot award log (moderator-only, non-triggered awards only)
+export const deleteJackpotLog = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res
+        .status(400)
+        .json({ message: "Validation failed", errors: errors.array() });
+    }
+
+    const user = req.user;
+    if (!user || user.role !== "moderator") {
+      return res
+        .status(403)
+        .json({ message: "Unauthorized. Moderator role required." });
+    }
+
+    await getCashierIdFromUser(req, res, () => {});
+    const cashierId = req.cashierId;
+    const { logId } = req.params;
+
+    const log = await JackpotLog.findOne({
+      _id: logId,
+      cashierId,
+      isAward: true,
+    });
+    if (!log) {
+      return res.status(404).json({ message: "Jackpot award log not found" });
+    }
+
+    if (log.triggeredByCashier) {
+      return res
+        .status(403)
+        .json({ message: "Cannot delete cashier-triggered award" });
+    }
+
+    const jackpot = await Jackpot.findOne({ cashierId });
+    if (!jackpot) {
+      return res.status(400).json({ message: "Jackpot not found" });
+    }
+
+    const awardAmount = -log.amount;
+    jackpot.amount += awardAmount;
+    jackpot.lastUpdated = new Date();
+
+    const latestAward = await JackpotLog.findOne({
+      cashierId,
+      isAward: true,
+      timestamp: { $gt: log.timestamp },
+    });
+    if (!latestAward) {
+      jackpot.winnerCardId = null;
+      jackpot.winnerMessage = null;
+    }
+
+    await jackpot.save();
+    await JackpotLog.deleteOne({ _id: logId });
+    await Result.deleteOne({
+      identifier: log.reason.match(/jackpot_\d+_\d+/)[0],
+    });
+
+    console.log(
+      `[deleteJackpotLog] Moderator deleted award log ${logId}, restored ${awardAmount} to jackpot`
+    );
+
+    res.json({
+      message: "Jackpot award log deleted successfully",
+      data: {
+        restoredAmount: awardAmount,
+        newJackpotAmount: jackpot.amount,
+      },
+    });
+  } catch (error) {
+    console.error("[deleteJackpotLog] Error:", error);
+    next(error);
+  }
+};
+
+// Update a jackpot award log (moderator-only, non-triggered awards only)
+export const updateJackpotLog = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res
+        .status(400)
+        .json({ message: "Validation failed", errors: errors.array() });
+    }
+
+    const user = req.user;
+    if (!user || user.role !== "moderator") {
+      return res
+        .status(403)
+        .json({ message: "Unauthorized. Moderator role required." });
+    }
+
+    await getCashierIdFromUser(req, res, () => {});
+    const cashierId = req.cashierId;
+    const { logId } = req.params;
+    const { amount, winnerCardId, message } = req.body;
+
+    const log = await JackpotLog.findOne({
+      _id: logId,
+      cashierId,
+      isAward: true,
+    });
+    if (!log) {
+      return res.status(404).json({ message: "Jackpot award log not found" });
+    }
+
+    if (log.triggeredByCashier) {
+      return res
+        .status(403)
+        .json({ message: "Cannot update cashier-triggered award" });
+    }
+
+    const jackpot = await Jackpot.findOne({ cashierId });
+    if (!jackpot) {
+      return res.status(400).json({ message: "Jackpot not found" });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({ message: "Amount must be positive" });
+    }
+
+    if (amount > jackpot.amount + -log.amount) {
+      return res.status(400).json({
+        message: "Updated amount cannot exceed available jackpot amount",
+      });
+    }
+
+    if (!winnerCardId || !message) {
+      return res.status(400).json({
+        message: "winnerCardId and message are required",
+      });
+    }
+
+    const oldAmount = -log.amount;
+    const newAmount = amount;
+    const amountDifference = oldAmount - newAmount;
+
+    log.amount = -newAmount;
+    log.winnerCardId = winnerCardId;
+    log.message = message;
+    log.reason = `Jackpot awarded to card ${winnerCardId}: ${newAmount} birr - ${message}`;
+    await log.save();
+
+    jackpot.amount += amountDifference;
+    jackpot.lastUpdated = new Date();
+
+    const latestAward = await JackpotLog.findOne({
+      cashierId,
+      isAward: true,
+      timestamp: { $gt: log.timestamp },
+    });
+    if (!latestAward) {
+      jackpot.winnerCardId = winnerCardId;
+      jackpot.winnerMessage = message;
+    }
+
+    await jackpot.save();
+
+    await Result.updateOne(
+      { identifier: log.reason.match(/jackpot_\d+_\d+/)[0] },
+      {
+        winnerCardId,
+        prize: newAmount,
+        message,
+      }
+    );
+
+    console.log(
+      `[updateJackpotLog] Moderator updated award log ${logId}: amount ${newAmount}, card ${winnerCardId}`
+    );
+
+    res.json({
+      message: "Jackpot award log updated successfully",
+      data: {
+        amount: newAmount,
+        winnerCardId,
+        message,
+        newJackpotAmount: jackpot.amount,
+      },
+    });
+  } catch (error) {
+    console.error("[updateJackpotLog] Error:", error);
     next(error);
   }
 };
@@ -452,6 +744,7 @@ export const getPairedCashier = async (req, res, next) => {
   }
 };
 
+// Update jackpot settings
 export const updateJackpot = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -468,19 +761,17 @@ export const updateJackpot = async (req, res, next) => {
     const update = { lastUpdated: new Date() };
     const logs = [];
 
-    // Handle amount update - set exact amount
     if (amount !== undefined) {
       if (typeof amount !== "number" || amount < 0) {
         return res.status(400).json({ message: "Invalid amount" });
       }
 
-      // Get current amount to calculate change
       const currentJackpot = await Jackpot.findOne({ cashierId });
       const currentAmount = currentJackpot ? currentJackpot.amount : 0;
       const changeAmount = amount - currentAmount;
 
       update.amount = amount;
-      update.baseAmount = amount; // Reset base amount when manually updated
+      update.baseAmount = amount;
 
       logs.push({
         cashierId,
@@ -490,7 +781,6 @@ export const updateJackpot = async (req, res, next) => {
       });
     }
 
-    // Handle enabled status
     if (enabled !== undefined) {
       if (typeof enabled !== "boolean") {
         return res.status(400).json({ message: "Invalid enabled value" });
@@ -504,7 +794,6 @@ export const updateJackpot = async (req, res, next) => {
       });
     }
 
-    // ✅ Correct check: both must be undefined to be invalid
     if (amount === undefined && enabled === undefined) {
       return res.status(400).json({
         message: "No valid updates provided (amount or enabled required)",
@@ -517,7 +806,6 @@ export const updateJackpot = async (req, res, next) => {
       setDefaultsOnInsert: true,
     });
 
-    // Create logs for changes
     for (const log of logs) {
       await JackpotLog.create(log);
     }
@@ -537,6 +825,34 @@ export const updateJackpot = async (req, res, next) => {
     });
   } catch (error) {
     console.error("[updateJackpot] Error:", error);
+    next(error);
+  }
+};
+
+// adminController.js
+export const getJackpotStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid game ID" });
+    }
+
+    const game = await Game.findById(id).lean();
+    if (!game) {
+      return res.status(404).json({ message: "Game not found" });
+    }
+
+    console.log(`[getJackpotStatus] Fetched game ${id}:`, {
+      gameNumber: game.gameNumber,
+      jackpotEnabled: game.jackpotEnabled,
+    });
+
+    res.json({
+      message: "Jackpot status retrieved successfully",
+      jackpotEnabled: !!game.jackpotEnabled,
+    });
+  } catch (error) {
+    console.error("[getJackpotStatus] Error:", error);
     next(error);
   }
 };

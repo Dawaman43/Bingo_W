@@ -27,6 +27,7 @@ const jackpotSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+
   // Moderator-controlled draw settings
   drawAmount: {
     type: Number,
@@ -43,6 +44,16 @@ const jackpotSchema = new mongoose.Schema({
   drawTimestamp: {
     type: Date,
     default: null,
+  },
+
+  // Winner info
+  winnerCardId: { type: String, default: null },
+  winnerMessage: { type: String, default: null },
+
+  // ✅ NEW FIELD
+  lastAwardedAmount: {
+    type: Number,
+    default: 0,
   },
 });
 

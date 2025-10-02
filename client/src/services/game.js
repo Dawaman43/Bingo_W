@@ -660,6 +660,32 @@ const gameService = {
       throw error;
     }
   },
+  // game.js
+  getJackpotStatus: async (gameId) => {
+    try {
+      if (!gameId) throw new Error("Game ID is required");
+      console.log(
+        "gameService.getJackpotStatus - Fetching status for game:",
+        gameId
+      );
+      const response = await API.get(`/games/${gameId}/jackpot-status`);
+      console.log("gameService.getJackpotStatus response:", response.data);
+      return {
+        enabled: response.data.jackpotEnabled || false,
+        // Include additional fields if needed
+      };
+    } catch (error) {
+      console.error(
+        "gameService.getJackpotStatus error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
 };
 
 export default gameService;

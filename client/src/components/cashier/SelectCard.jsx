@@ -5,7 +5,7 @@ import moderatorService from "../../services/moderator";
 import { useAuth } from "../../context/AuthContext";
 
 const SelectCard = () => {
-  const dropdownRef = useRef(null); // ✅ This creates the ref
+  const dropdownRef = useRef(null);
   const [open, setOpen] = useState(false);
   const { user, loading } = useAuth();
   const navigate = useNavigate();
@@ -17,7 +17,6 @@ const SelectCard = () => {
   const [housePercentage, setHousePercentage] = useState(
     localStorage.getItem("housePercentage") || "15"
   );
-
   const [pattern, setPattern] = useState(
     localStorage.getItem("gamePattern") || "all"
   );
@@ -35,7 +34,6 @@ const SelectCard = () => {
   });
   const [showProfit, setShowProfit] = useState(false);
   const [validCardIds, setValidCardIds] = useState([]);
-  // Keep currentJackpot state but make it secret (no UI display)
   const [currentJackpot, setCurrentJackpot] = useState(0);
 
   const cardsPerPage = 100;
@@ -70,59 +68,40 @@ const SelectCard = () => {
 
   const options = [10, 15, 20, 25, 30];
 
-  // Fetch current jackpot from database (kept secret)
+  // Fetch current jackpot
   useEffect(() => {
     const fetchCurrentJackpot = async () => {
-      if (!user || loading) {
-        return;
-      }
+      if (!user || loading) return;
 
       try {
         console.log("[SelectCard] Fetching current jackpot for user:", user.id);
-        // Try to get jackpot using gameService first (preferred method)
-        let jackpotData;
-        try {
-          // Get cashierId based on user role
-          let cashierId = user.id;
-          if (user.role === "moderator" && user.managedCashier) {
-            cashierId = user.managedCashier;
-          }
-
-          jackpotData = await gameService.getJackpot(cashierId);
-          console.log(
-            "[SelectCard] Jackpot data from gameService:",
-            jackpotData
-          );
-        } catch (gameServiceError) {
-          console.warn(
-            "[SelectCard] gameService.getJackpot failed, trying moderatorService:",
-            gameServiceError.message
-          );
-          // Fallback to moderatorService
-          jackpotData = await moderatorService.getJackpot();
-          console.log(
-            "[SelectCard] Jackpot data from moderatorService:",
-            jackpotData
-          );
-        }
-
+        const cashierId =
+          user.role === "moderator" && user.managedCashier
+            ? user.managedCashier
+            : user.id;
+        const jackpotData = await gameService.getJackpot(cashierId);
         const jackpotAmount =
           jackpotData?.amount || jackpotData?.data?.amount || 0;
         setCurrentJackpot(jackpotAmount);
-
         console.log(
           `[SelectCard] Current jackpot loaded: ${jackpotAmount} Birr`
         );
       } catch (error) {
-        console.error("[SelectCard] Failed to fetch current jackpot:", error);
+        console.error(
+          "[SelectCard] Failed to fetch current jackpot:",
+          error.message
+        );
         setCurrentJackpot(0);
-        console.warn("[SelectCard] Using 0 as fallback jackpot amount");
+        showAlert(
+          "Failed to fetch jackpot amount, using 0 as fallback",
+          "warning"
+        );
       }
     };
-
     fetchCurrentJackpot();
   }, [user, loading]);
 
+  // Fetch available cards
   useEffect(() => {
     const fetchCards = async () => {
       setCardsLoading(true);
@@ -171,6 +150,7 @@ const SelectCard = () => {
     if (!loading && user) fetchCards();
   }, [loading, user]);
 
+  // Restore selected cards
   useEffect(() => {
     const savedSelectedCards = localStorage.getItem("selectedCards");
     if (savedSelectedCards) {
@@ -192,6 +172,7 @@ const SelectCard = () => {
     }
   }, [validCardIds]);
 
+  // Save selected cards
   useEffect(() => {
     if (selectedCards.length > 0) {
       localStorage.setItem("selectedCards", JSON.stringify(selectedCards));
@@ -200,8 +181,8 @@ const SelectCard = () => {
     }
   }, [selectedCards]);
 
+  // Save settings and calculate profit
   useEffect(() => {
-    // Save settings to localStorage whenever they change
     localStorage.setItem("betAmount", betAmount);
     localStorage.setItem("housePercentage", housePercentage);
     localStorage.setItem("gamePattern", pattern);
@@ -226,11 +207,11 @@ const SelectCard = () => {
     }
 
     const totalPot = bet * selectedCount;
-    const jackpotAmount = bet; // Jackpot contribution is always the bet amount per game
+    const jackpotAmount = bet;
     const remainingAmount = totalPot - jackpotAmount;
     const houseFee = (remainingAmount * percentage) / 100;
     const prizePool = remainingAmount - houseFee;
-    const projectedJackpot = currentJackpot + jackpotAmount; // Current + new contribution
+    const projectedJackpot = currentJackpot + jackpotAmount;
 
     setProfitData({
       totalPot: totalPot.toFixed(2),
@@ -321,7 +302,7 @@ const SelectCard = () => {
       // Step 1: Prepare game payload
       const betAmountNum = parseFloat(betAmount);
       const housePercentageNum = parseInt(housePercentage);
-      const jackpotContribution = betAmountNum; // Jackpot contribution = bet amount per game
+      const jackpotContribution = betAmountNum;
 
       const payload = {
         startGameNumber: 1,
@@ -335,7 +316,7 @@ const SelectCard = () => {
 
       console.log("[SelectCard] Step 1 - Creating game with payload:", {
         ...payload,
-        cardPool: `${payload.cardPool.length} cards`, // Don't log all card IDs
+        cardPool: `${payload.cardPool.length} cards`,
         jackpotContribution,
       });
 
@@ -349,6 +330,7 @@ const SelectCard = () => {
       }
 
       const gameId = game._id;
+      localStorage.setItem("currentGameId", gameId); // Use localStorage for persistence
       console.log(`[SelectCard] Step 2 - Game created successfully: ${gameId}`);
       console.log(`[SelectCard] Game details:`, {
         gameNumber: game.gameNumber,
@@ -366,7 +348,7 @@ const SelectCard = () => {
         gameId,
       });
 
-      // Step 4: Handle jackpot contribution (if enabled and amount > 0)
+      // Step 4: Handle jackpot contribution
       let jackpotUpdatedSuccessfully = false;
       let finalJackpotAmount = currentJackpot;
 
@@ -374,153 +356,46 @@ const SelectCard = () => {
         console.log(
           `[SelectCard] Step 4 - Processing jackpot contribution: ${jackpotContribution} Birr`
         );
+        const cashierId =
+          user.role === "moderator" && user.managedCashier
+            ? user.managedCashier
+            : user.id;
+        console.log(`[SelectCard] Using cashierId: ${cashierId}`);
 
-        // Get correct cashierId for jackpot operations
-        let cashierId = user.id;
-        if (user.role === "moderator" && user.managedCashier) {
-          cashierId = user.managedCashier;
-          console.log(
-            `[SelectCard] Moderator detected - using managed cashier: ${cashierId}`
-          );
-        }
-
-        // Method 1: Primary - Use dedicated jackpot contribution endpoint
         try {
-          console.log(
-            `[SelectCard] Method 1 - Calling addJackpotContribution for cashier ${cashierId}`
-          );
           const jackpotResponse = await gameService.addJackpotContribution(
             gameId,
             jackpotContribution
           );
-
-          console.log("[SelectCard] Method 1 - Success:", {
+          console.log("[SelectCard] Jackpot contribution success:", {
             message: jackpotResponse.message,
             newTotal:
               jackpotResponse.newTotal || jackpotResponse.data?.newTotal,
             contributionAmount: jackpotResponse.contributionAmount,
           });
 
-          // Verify the update by fetching current jackpot
+          // Verify the update
           const verificationData = await gameService.getJackpot(cashierId);
           finalJackpotAmount =
             verificationData?.amount ||
             verificationData?.data?.amount ||
             currentJackpot + jackpotContribution;
           setCurrentJackpot(finalJackpotAmount);
-
           jackpotUpdatedSuccessfully = true;
           console.log(
-            `[SelectCard] ✅ Method 1 - Jackpot verified: ${finalJackpotAmount.toFixed(
+            `[SelectCard] ✅ Jackpot updated: ${finalJackpotAmount.toFixed(
               2
             )} Birr`
           );
-        } catch (method1Error) {
+        } catch (error) {
           console.error(
-            "[SelectCard] Method 1 failed:",
-            method1Error.response?.data || method1Error.message
+            "[SelectCard] Jackpot contribution failed:",
+            error.message
           );
-
-          // Method 2: Fallback - Manual jackpot update
-          try {
-            console.log(
-              "[SelectCard] Method 2 - Trying manual jackpot update..."
-            );
-
-            // Get current jackpot amount
-            const currentJackpotData = await gameService.getJackpot(cashierId);
-            const currentAmount =
-              currentJackpotData?.amount ||
-              currentJackpotData?.data?.amount ||
-              0;
-            const newAmount = currentAmount + jackpotContribution;
-
-            console.log(
-              `[SelectCard] Method 2 - Current: ${currentAmount}, Adding: ${jackpotContribution}, New: ${newAmount}`
-            );
-
-            const updateResponse = await gameService.updateJackpot(newAmount);
-            console.log(
-              "[SelectCard] Method 2 - Update response:",
-              updateResponse
-            );
-
-            // Verify the update
-            const verificationData = await gameService.getJackpot(cashierId);
-            finalJackpotAmount =
-              verificationData?.amount ||
-              verificationData?.data?.amount ||
-              newAmount;
-            setCurrentJackpot(finalJackpotAmount);
-
-            jackpotUpdatedSuccessfully = true;
-            console.log(
-              `[SelectCard] ✅ Method 2 - Manual update successful: ${finalJackpotAmount.toFixed(
-                2
-              )} Birr`
-            );
-          } catch (method2Error) {
-            console.error(
-              "[SelectCard] Method 2 failed:",
-              method2Error.response?.data || method2Error.message
-            );
-
-            // Method 3: Final fallback - Direct API call to backend
-            try {
-              console.log(
-                "[SelectCard] Method 3 - Direct API call to /jackpot/contribute..."
-              );
-
-              const directResponse = await API.post(
-                "/jackpot/contribute",
-                {
-                  contributionAmount: jackpotContribution,
-                  gameId: gameId,
-                  cashierId: cashierId, // Include cashierId explicitly
-                },
-                {
-                  headers: {
-                    "Content-Type": "application/json",
-                    // Include any other headers needed for auth
-                  },
-                }
-              );
-
-              console.log(
-                "[SelectCard] Method 3 - Direct response:",
-                directResponse.data
-              );
-
-              // Final verification
-              const finalVerification = await gameService.getJackpot(cashierId);
-              finalJackpotAmount =
-                finalVerification?.amount ||
-                finalVerification?.data?.amount ||
-                currentJackpot + jackpotContribution;
-              setCurrentJackpot(finalJackpotAmount);
-
-              jackpotUpdatedSuccessfully = true;
-              console.log(
-                `[SelectCard] ✅ Method 3 - Direct API successful: ${finalJackpotAmount.toFixed(
-                  2
-                )} Birr`
-              );
-            } catch (method3Error) {
-              console.error(
-                "[SelectCard] Method 3 failed:",
-                method3Error.response?.data || method3Error.message
-              );
-              console.warn(
-                `[SelectCard] ❌ All jackpot update methods failed for contribution: ${jackpotContribution}`
-              );
-              console.warn(
-                "[SelectCard] Game created successfully but jackpot not updated - manual intervention required"
-              );
-
-              // Don't throw error - game creation should still succeed
-              jackpotUpdatedSuccessfully = false;
-            }
-          }
+          showAlert(
+            "Game created but jackpot update failed. Contact support.",
+            "warning"
+          );
         }
       } else {
         console.log(
@@ -540,34 +415,26 @@ const SelectCard = () => {
         )} Birr`
       );
 
-      // Clear local storage and state
       localStorage.removeItem("selectedCards");
       setSelectedCards([]);
 
-      // Show success message
-      const successMessage = jackpotUpdatedSuccessfully
-        ? `Game started successfully!`
-        : "Game started successfully! (Jackpot update pending)";
+      showAlert(
+        jackpotUpdatedSuccessfully
+          ? "Game started successfully!"
+          : "Game started successfully! (Jackpot update pending)",
+        "success"
+      );
 
-      showAlert(successMessage, "success");
-
-      // Navigate to game after brief delay
-      setTimeout(() => {
-        console.log(`[SelectCard] Navigating to bingo-game?id=${gameId}`);
-        navigate(`/bingo-game?id=${gameId}`);
-      }, 1500);
+      console.log(`[SelectCard] Navigating to bingo-game?id=${gameId}`);
+      navigate(`/bingo-game?id=${gameId}`);
     } catch (error) {
       console.error("[SelectCard] handleStartGame - CRITICAL ERROR:", {
         message: error.message,
-        fullError: error,
         response: error.response?.data,
         status: error.response?.status,
-        step: "Unknown",
       });
 
       let errorMessage = "Failed to start game";
-
-      // Enhanced error message based on error type
       if (error.response?.status === 401) {
         errorMessage = "Authentication failed. Please log in again.";
         navigate("/login");
@@ -577,11 +444,12 @@ const SelectCard = () => {
       } else if (error.response?.status === 400) {
         errorMessage =
           error.response.data.message || "Invalid game data provided.";
-      } else if (error.message.includes("Invalid game response")) {
-        errorMessage = "Server returned invalid game data. Please try again.";
-      } else if (error.message.includes("missing game ID")) {
+      } else if (
+        error.message.includes("Invalid game response") ||
+        error.message.includes("missing game ID")
+      ) {
         errorMessage =
-          "Game created but ID not received. Server issue - contact support.";
+          "Server returned invalid game data. Please try again or contact support.";
       } else if (
         error.message.includes("Network Error") ||
         error.code === "ECONNABORTED"
@@ -595,20 +463,16 @@ const SelectCard = () => {
           "An unexpected error occurred.";
       }
 
-      console.error(`[SelectCard] Showing error to user: ${errorMessage}`);
       showAlert(errorMessage, "error");
-
-      // Log error for debugging
       console.error("[SelectCard] Full error details:", {
         timestamp: new Date().toISOString(),
         userId: user?.id,
         userRole: user?.role,
-        betAmount: betAmount,
+        betAmount,
         selectedCardsCount: selectedCards.length,
         error: error.response?.data || error.message,
       });
     } finally {
-      // Always reset loading state
       setLoadingGame(false);
       console.log("[SelectCard] handleStartGame - Loading state reset");
     }
@@ -741,24 +605,22 @@ const SelectCard = () => {
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 House Fee Percentage
               </label>
-
-              {/* Box */}
               <div
                 className="w-full h-10 p-2 border-2 border-gray-400 dark:border-gray-600 rounded bg-white dark:bg-gray-700 cursor-pointer"
                 onClick={() => setOpen((prev) => !prev)}
               >
                 <span className="text-gray-800 dark:text-gray-200">
-                  {open && housePercentage ? `${housePercentage}%` : ""}
+                  {housePercentage
+                    ? `${housePercentage}%`
+                    : "Select percentage"}
                 </span>
               </div>
-
-              {/* Dropdown options */}
               {open && (
                 <div className="absolute left-0 w-full bg-white dark:bg-gray-700 border dark:border-gray-600 rounded mt-1 z-10 shadow-lg">
                   {options.map((val) => (
                     <div
                       key={val}
-                      className="p-2 text-transparent hover:text-gray-800 dark:hover:text-gray-200 hover:bg-indigo-500 hover:text-white cursor-pointer transition-colors"
+                      className="p-2 hover:bg-indigo-500 hover:text-white cursor-pointer transition-colors"
                       onClick={() => {
                         setHousePercentage(val);
                         setOpen(false);
@@ -770,7 +632,6 @@ const SelectCard = () => {
                 </div>
               )}
             </div>
-
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 Bet Amount
