@@ -5,7 +5,7 @@ import { LanguageContext } from "../../context/LanguageProvider";
 import { useBingoGame } from "../../hooks/useBingoGame";
 import gameService from "../../services/game";
 import SoundService from "../../services/sound";
-import BingoModals from "./modals/BingoModals";
+import BingoModals from "./Modals/BingoModals";
 import { FaMoneyBillWave } from "react-icons/fa";
 
 const BingoGame = () => {
