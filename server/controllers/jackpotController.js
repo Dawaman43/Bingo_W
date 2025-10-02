@@ -276,7 +276,7 @@ export const awardJackpot = async (req, res) => {
         throw new Error("Jackpot is not enabled");
       }
 
-      // Resolve game document if numeric gameId is provided
+      // Determine if this is a future game
       let gameDoc = null;
       let isFutureGame = false;
       if (gameId !== undefined && gameId !== null) {
@@ -294,139 +294,95 @@ export const awardJackpot = async (req, res) => {
         }
       }
 
-      let actualDrawAmount;
-      let winnerCardId;
-      let winnerMessage;
-      let logData;
-      let triggeredByCashier = false;
+      if (user.role !== "moderator") {
+        throw new Error("Only moderators can set jackpot winners");
+      }
 
-      if (user.role === "moderator") {
-        // Moderator sets cardId, drawAmount, message
-        if (!cardId || !drawAmount || !message) {
-          throw new Error("cardId, drawAmount, and message are required");
+      if (!cardId || !drawAmount || !message) {
+        throw new Error("cardId, drawAmount, and message are required");
+      }
+
+      if (drawAmount > jackpot.baseAmount) {
+        throw new Error(
+          `Draw amount cannot exceed total jackpot (${jackpot.baseAmount.toLocaleString()} BIRR)`
+        );
+      }
+
+      let actualDrawAmount = drawAmount;
+      let winnerCardId = cardId.toString();
+      let winnerMessage = message;
+
+      if (isFutureGame) {
+        // FUTURE GAME: Store configuration only
+        await FutureWinner.findOneAndUpdate(
+          { gameNumber: gameId, cashierId },
+          {
+            $set: {
+              gameNumber: gameId,
+              cashierId,
+              cardId: parseInt(cardId),
+              jackpotEnabled: true,
+              jackpotDrawAmount: actualDrawAmount,
+              jackpotMessage: winnerMessage,
+              configuredBy: user.id,
+              used: false,
+            },
+          },
+          { upsert: true, session, new: true }
+        );
+
+        console.log(
+          `[awardJackpot] 💰 Stored jackpot config for future game ${gameId}`
+        );
+      } else {
+        // CURRENT GAME: Deduct from jackpot.amount
+        if (actualDrawAmount > jackpot.amount) {
+          throw new Error("Draw amount cannot exceed current jackpot amount");
         }
 
-        if (drawAmount > jackpot.amount) {
-          throw new Error("Draw amount cannot exceed jackpot");
-        }
-
-        actualDrawAmount = drawAmount;
-        winnerCardId = cardId.toString();
-        winnerMessage = message;
-
-        jackpot.winnerCardId = winnerCardId;
-        jackpot.winnerMessage = winnerMessage;
         jackpot.amount -= actualDrawAmount;
         jackpot.lastUpdated = new Date();
         jackpot.lastAwardedAmount = actualDrawAmount;
         jackpot.drawTimestamp = new Date();
-
+        jackpot.winnerCardId = winnerCardId;
+        jackpot.winnerMessage = winnerMessage;
         await jackpot.save({ session });
 
-        const gameQualifier = isFutureGame
-          ? `future game ${gameId}`
-          : `game ${gameId}`;
-        logData = {
-          cashierId,
-          amount: -actualDrawAmount,
-          reason: `Jackpot awarded to card ${winnerCardId}: ${actualDrawAmount} birr - ${winnerMessage} for ${gameQualifier}`,
-          gameId: gameDoc ? gameDoc._id : null,
-          isAward: true,
-          winnerCardId,
-          message: winnerMessage,
-          triggeredByCashier: false,
-          timestamp: new Date(),
-        };
-
-        await JackpotLog.create([logData], { session });
-
-        // ✅ For future games: Store in FutureWinner for auto-apply on game start
-        if (isFutureGame) {
-          // Upsert FutureWinner with jackpot config (assume existing winner config or create minimal)
-          const futureWinnerUpsert = {
-            gameNumber: gameId,
-            cashierId,
-            cardId: parseInt(cardId), // Match schema type
-            jackpotEnabled: true,
-            jackpotDrawAmount: actualDrawAmount,
-            jackpotMessage: winnerMessage,
-            configuredBy: user.id,
-            used: false,
-          };
-          // Minimal fields; if full winner config needed, fetch Card and generate pattern/sequence here or require in request
-          // For now, assume jackpot-only; extend if winner pattern also needed
-
-          await FutureWinner.findOneAndUpdate(
-            { gameNumber: gameId, cashierId },
+        // Log the award
+        await JackpotLog.create(
+          [
             {
-              $set: futureWinnerUpsert,
-              $setOnInsert: {
-                /* defaults for missing fields */
-              },
+              cashierId,
+              amount: -actualDrawAmount,
+              reason: `Jackpot awarded to card ${winnerCardId}: ${actualDrawAmount} birr - ${winnerMessage}`,
+              gameId: gameDoc ? gameDoc._id : null,
+              isAward: true,
+              winnerCardId,
+              message: winnerMessage,
+              triggeredByCashier: false,
+              timestamp: new Date(),
             },
-            { upsert: true, session, new: true }
-          );
+          ],
+          { session }
+        );
 
-          console.log(
-            `[awardJackpot] 💰 Stored jackpot config in FutureWinner for game ${gameId}`
-          );
-        }
-      } else if (user.role === "cashier") {
-        // Cashier just triggers existing moderator-set jackpot
-        if (!jackpot.winnerCardId || !jackpot.winnerMessage) {
-          throw new Error("No winner set by moderator");
-        }
-
-        actualDrawAmount = jackpot.amount;
-        winnerCardId = jackpot.winnerCardId;
-        winnerMessage = jackpot.winnerMessage;
-        triggeredByCashier = true;
-
-        jackpot.amount = 0;
-        jackpot.winnerCardId = null;
-        jackpot.winnerMessage = null;
-        jackpot.lastUpdated = new Date();
-        jackpot.lastAwardedAmount = 0;
-        jackpot.drawTimestamp = null;
-
-        await jackpot.save({ session });
-
-        const gameQualifier = isFutureGame
-          ? `future game ${gameId}`
-          : `game ${gameId}`;
-        logData = {
-          cashierId,
-          amount: -actualDrawAmount,
-          reason: `Jackpot awarded to card ${winnerCardId}: ${actualDrawAmount} birr - ${winnerMessage} for ${gameQualifier}`,
-          gameId: gameDoc ? gameDoc._id : null,
-          isAward: true,
-          winnerCardId,
-          message: winnerMessage,
-          triggeredByCashier: true,
-          timestamp: new Date(),
-        };
-
-        await JackpotLog.create([logData], { session });
-      } else {
-        throw new Error("Invalid user role");
+        // Store result
+        await Result.create(
+          [
+            {
+              gameId: gameDoc ? gameDoc._id : null,
+              winnerCardId,
+              prize: actualDrawAmount,
+              isJackpot: true,
+              message: winnerMessage,
+              identifier: `jackpot_${Date.now()}_${winnerCardId}`,
+              timestamp: new Date(),
+            },
+          ],
+          { session }
+        );
       }
 
-      await Result.create(
-        [
-          {
-            gameId: gameDoc ? gameDoc._id : null,
-            winnerCardId,
-            prize: actualDrawAmount,
-            isJackpot: true,
-            message: winnerMessage,
-            identifier: `jackpot_${Date.now()}_${winnerCardId}`,
-            timestamp: new Date(),
-          },
-        ],
-        { session }
-      );
-
-      // Return data for response
       return {
         gameId: gameId ?? null,
         cardId: winnerCardId,
@@ -437,7 +393,6 @@ export const awardJackpot = async (req, res) => {
       };
     });
 
-    // Transaction succeeded, send response
     return res.json({
       message: `Jackpot awarded successfully to card ${result.cardId}${
         result.isFutureGame ? " (configured for future game)" : ""
@@ -454,20 +409,7 @@ export const awardJackpot = async (req, res) => {
       }
       await session.endSession();
     }
-    const badRequestErrors = [
-      "Jackpot is not enabled",
-      "Game ID must be a number (gameNumber)",
-      "cardId, drawAmount, and message are required",
-      "Draw amount cannot exceed jackpot",
-      "No winner set by moderator",
-      "Invalid user role",
-    ];
-    if (badRequestErrors.some((msg) => error.message.includes(msg))) {
-      return res.status(400).json({ message: error.message });
-    }
-    return res
-      .status(500)
-      .json({ message: "Internal server error", error: error.message });
+    return res.status(400).json({ message: error.message });
   } finally {
     if (session) {
       await session.endSession();
