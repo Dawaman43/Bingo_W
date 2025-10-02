@@ -400,12 +400,11 @@ export const createSequentialGames = async (req, res, next) => {
           throw new Error("Jackpot is not enabled for award");
         }
 
-        if (futureWinner.jackpotDrawAmount > jackpot.amount) {
+        if (futureWinner.jackpotDrawAmount > jackpot.baseAmount) {
           throw new Error(
-            "Configured jackpot draw amount exceeds current jackpot"
+            `Configured jackpot draw amount (${futureWinner.jackpotDrawAmount}) exceeds total jackpot (${jackpot.baseAmount})`
           );
         }
-
         const actualDrawAmount = futureWinner.jackpotDrawAmount;
         const winnerCardIdStr = futureWinner.cardId.toString();
         const winnerMessage =
@@ -415,7 +414,7 @@ export const createSequentialGames = async (req, res, next) => {
         // Update jackpot
         jackpot.winnerCardId = winnerCardIdStr;
         jackpot.winnerMessage = winnerMessage;
-        jackpot.amount -= actualDrawAmount;
+        jackpot.baseAmount -= actualDrawAmount;
         jackpot.lastUpdated = new Date();
         jackpot.lastAwardedAmount = actualDrawAmount;
         jackpot.drawTimestamp = new Date();

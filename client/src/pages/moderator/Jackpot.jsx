@@ -36,24 +36,30 @@ const JackpotManager = () => {
     try {
       setLoading(true);
       setError("");
+      const historyData = await moderatorService.getJackpotHistory();
+      console.log("[JackpotManager] Fetched history:", historyData);
+      setHistory(Array.isArray(historyData) ? historyData : []);
+
       const jackpotData = await moderatorService.getJackpot();
       console.log("[JackpotManager] Fetched jackpot:", jackpotData);
-      setJackpot(jackpotData);
-      setEnabled(jackpotData.enabled);
-      if (jackpotData.winnerCardId) {
-        setAwardCardId(jackpotData.winnerCardId);
+      // Fix: No adjustment needed for baseAmount (backend handles deductions). Preserve fetched values.
+      const correctedJackpot = {
+        ...jackpotData,
+        amount: Math.max(0, jackpotData.amount),
+        baseAmount: Math.max(0, jackpotData.baseAmount),
+      };
+      setJackpot(correctedJackpot);
+      setEnabled(correctedJackpot.enabled);
+      if (correctedJackpot.winnerCardId) {
+        setAwardCardId(correctedJackpot.winnerCardId);
         setSelectedWinnerCard({
-          id: parseInt(jackpotData.winnerCardId),
-          number: parseInt(jackpotData.winnerCardId),
+          id: parseInt(correctedJackpot.winnerCardId),
+          number: parseInt(correctedJackpot.winnerCardId),
         });
       } else {
         setAwardCardId("");
         setSelectedWinnerCard(null);
       }
-
-      const historyData = await moderatorService.getJackpotHistory();
-      console.log("[JackpotManager] Fetched history:", historyData);
-      setHistory(Array.isArray(historyData) ? historyData : []);
     } catch (err) {
       console.error("[JackpotManager] Fetch error:", err);
       if (retryCount < 2) {
@@ -93,6 +99,7 @@ const JackpotManager = () => {
       setUpdating(true);
       setError("");
       setSuccess("");
+      // Fix: Pass new total (amount + add) to set the accumulated total.
       const result = await moderatorService.setJackpotAmount(
         jackpot.amount + amountToAdd,
         gameId
@@ -100,15 +107,15 @@ const JackpotManager = () => {
       console.log("[JackpotManager] Add amount result:", result);
       setJackpot({
         ...jackpot,
-        amount: result.newAmount,
-        baseAmount: result.newAmount,
+        amount: Math.max(0, result.newAmount),
+        baseAmount: jackpot.baseAmount + amountToAdd, // Add to available too (no deduction).
       });
       setAddAmount("");
       setAddGameId(""); // Clear gameId input
       setSuccess(
         `Added ${amountToAdd.toLocaleString()} BIRR to jackpot!${
           gameId !== undefined ? ` (Game #${gameId})` : ""
-        } New total: ${result.newAmount.toLocaleString()} BIRR`
+        } New total: ${Math.max(0, result.newAmount).toLocaleString()} BIRR`
       );
       setTimeout(fetchData, 500); // Refresh history
     } catch (err) {
@@ -215,18 +222,18 @@ const JackpotManager = () => {
     setEditSelectedWinnerCard({ id: cardId, number: cardId });
   };
 
-  // Calculate remaining amount for award
+  // Fix: Use baseAmount for remaining (available after pending deduction).
   const getRemainingAmount = () => {
     const awardAmt = parseFloat(awardAmount) || 0;
-    return Math.max(0, (jackpot?.amount || 0) - awardAmt);
+    return Math.max(0, (jackpot?.baseAmount || 0) - awardAmt);
   };
 
-  // Calculate remaining amount for edit
+  // Fix: Use baseAmount, add back original pending, subtract new amount.
   const getEditRemainingAmount = () => {
     const editAmt = parseFloat(editAmount) || 0;
     const originalAmount =
       history.find((h) => h._id === editLogId)?.amount || 0;
-    return Math.max(0, (jackpot?.amount || 0) + -originalAmount - editAmt);
+    return Math.max(0, (jackpot?.baseAmount || 0) + originalAmount - editAmt);
   };
 
   // Award jackpot
@@ -235,6 +242,7 @@ const JackpotManager = () => {
     const cardId = parseInt(awardCardId);
     const gameId = awardGameId ? parseInt(awardGameId) : undefined;
 
+    // Validation
     if (!amountToAward || amountToAward <= 0) {
       setError("Please enter a valid positive amount to award.");
       return;
@@ -245,8 +253,10 @@ const JackpotManager = () => {
       return;
     }
 
-    if (amountToAward > jackpot.amount) {
-      setError("Award amount cannot exceed current jackpot amount.");
+    if (amountToAward > jackpot.baseAmount) {
+      setError(
+        `Award amount cannot exceed available jackpot (${jackpot.baseAmount.toLocaleString()} BIRR).`
+      );
       return;
     }
 
@@ -263,40 +273,48 @@ const JackpotManager = () => {
     try {
       setAwarding(true);
       setError("");
+
       const result = await moderatorService.awardJackpot(
         gameId,
         cardId,
         amountToAward,
         awardMessage
       );
+
       console.log("[JackpotManager] Award jackpot result:", result);
+
       const updatedJackpot = await moderatorService.getJackpot();
       console.log("[JackpotManager] Updated jackpot:", updatedJackpot);
-      setJackpot(updatedJackpot);
-      setEnabled(updatedJackpot.enabled);
+      const historyData = await moderatorService.getJackpotHistory();
+      console.log("[JackpotManager] Updated history:", historyData);
+      // Fix: No adjustment. Preserve fetched amount/baseAmount.
+      const correctedJackpot = {
+        ...updatedJackpot,
+        amount: Math.max(0, updatedJackpot.amount),
+        baseAmount: Math.max(0, updatedJackpot.baseAmount),
+      };
+      setJackpot(correctedJackpot);
+      setEnabled(correctedJackpot.enabled);
+      setHistory(Array.isArray(historyData) ? historyData : []);
 
-      if (updatedJackpot.winnerCardId) {
-        setAwardCardId(updatedJackpot.winnerCardId);
+      if (correctedJackpot.winnerCardId) {
+        setAwardCardId(correctedJackpot.winnerCardId);
         setSelectedWinnerCard({
-          id: parseInt(updatedJackpot.winnerCardId),
-          number: parseInt(updatedJackpot.winnerCardId),
+          id: parseInt(correctedJackpot.winnerCardId),
+          number: parseInt(correctedJackpot.winnerCardId),
         });
       } else {
         setAwardCardId("");
         setSelectedWinnerCard(null);
       }
 
-      const historyData = await moderatorService.getJackpotHistory();
-      console.log("[JackpotManager] Updated history:", historyData);
-      setHistory(Array.isArray(historyData) ? historyData : []);
-
-      const remainingJackpot =
-        result?.data?.remainingJackpot ?? updatedJackpot.amount;
+      const remainingJackpot = getRemainingAmount();
       setSuccess(
         `🎉 Jackpot Awarded! ${amountToAward.toLocaleString()} BIRR to Card #${cardId}!${
           gameId !== undefined ? ` (Game #${gameId})` : ""
         }\n💬 Message: "${awardMessage}"\n💰 Remaining: ${remainingJackpot.toLocaleString()} BIRR`
       );
+
       setShowAwardModal(false);
     } catch (err) {
       console.error("[JackpotManager] Award jackpot error:", err);
@@ -319,26 +337,31 @@ const JackpotManager = () => {
       const result = await moderatorService.deleteJackpotLog(logId);
       console.log("[JackpotManager] Delete award result:", result);
       const updatedJackpot = await moderatorService.getJackpot();
-      setJackpot(updatedJackpot);
-      setEnabled(updatedJackpot.enabled);
-
-      if (updatedJackpot.winnerCardId) {
-        setAwardCardId(updatedJackpot.winnerCardId);
-        setSelectedWinnerCard({
-          id: parseInt(updatedJackpot.winnerCardId),
-          number: parseInt(updatedJackpot.winnerCardId),
-        });
-      } else {
-        setAwardCardId("");
-        setSelectedWinnerCard(null);
-      }
-
       const historyData = await moderatorService.getJackpotHistory();
       console.log(
         "[JackpotManager] Updated history after delete:",
         historyData
       );
+      // Fix: No adjustment. Preserve fetched values.
+      const correctedJackpot = {
+        ...updatedJackpot,
+        amount: Math.max(0, updatedJackpot.amount),
+        baseAmount: Math.max(0, updatedJackpot.baseAmount),
+      };
+      setJackpot(correctedJackpot);
+      setEnabled(correctedJackpot.enabled);
       setHistory(Array.isArray(historyData) ? historyData : []);
+
+      if (correctedJackpot.winnerCardId) {
+        setAwardCardId(correctedJackpot.winnerCardId);
+        setSelectedWinnerCard({
+          id: parseInt(correctedJackpot.winnerCardId),
+          number: parseInt(correctedJackpot.winnerCardId),
+        });
+      } else {
+        setAwardCardId("");
+        setSelectedWinnerCard(null);
+      }
 
       setSuccess(
         `Award deleted successfully! Restored ${result.data.restoredAmount.toLocaleString()} BIRR to jackpot.`
@@ -369,10 +392,10 @@ const JackpotManager = () => {
       return;
     }
 
-    if (
-      amountToUpdate >
-      jackpot.amount + -(history.find((h) => h._id === editLogId)?.amount || 0)
-    ) {
+    const originalAmount =
+      history.find((h) => h._id === editLogId)?.amount || 0;
+    // Fix: Max = baseAmount + original (release old pending reservation).
+    if (amountToUpdate > jackpot.baseAmount + originalAmount) {
       setError("Updated amount cannot exceed available jackpot amount.");
       return;
     }
@@ -399,26 +422,31 @@ const JackpotManager = () => {
       );
       console.log("[JackpotManager] Update award result:", result);
       const updatedJackpot = await moderatorService.getJackpot();
-      setJackpot(updatedJackpot);
-      setEnabled(updatedJackpot.enabled);
-
-      if (updatedJackpot.winnerCardId) {
-        setAwardCardId(updatedJackpot.winnerCardId);
-        setSelectedWinnerCard({
-          id: parseInt(updatedJackpot.winnerCardId),
-          number: parseInt(updatedJackpot.winnerCardId),
-        });
-      } else {
-        setAwardCardId("");
-        setSelectedWinnerCard(null);
-      }
-
       const historyData = await moderatorService.getJackpotHistory();
       console.log(
         "[JackpotManager] Updated history after update:",
         historyData
       );
+      // Fix: No adjustment. Preserve fetched values.
+      const correctedJackpot = {
+        ...updatedJackpot,
+        amount: Math.max(0, updatedJackpot.amount),
+        baseAmount: Math.max(0, updatedJackpot.baseAmount),
+      };
+      setJackpot(correctedJackpot);
+      setEnabled(correctedJackpot.enabled);
       setHistory(Array.isArray(historyData) ? historyData : []);
+
+      if (correctedJackpot.winnerCardId) {
+        setAwardCardId(correctedJackpot.winnerCardId);
+        setSelectedWinnerCard({
+          id: parseInt(correctedJackpot.winnerCardId),
+          number: parseInt(correctedJackpot.winnerCardId),
+        });
+      } else {
+        setAwardCardId("");
+        setSelectedWinnerCard(null);
+      }
 
       setSuccess(
         `Award updated successfully! ${amountToUpdate.toLocaleString()} BIRR to Card #${cardId}${
@@ -526,15 +554,16 @@ const JackpotManager = () => {
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600 dark:text-gray-400">
-                    Amount:
+                    Total Accumulated:
                   </span>
+                  {/* Fix: Use amount for total accumulated. */}
                   <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
                     {jackpot.amount.toLocaleString()} BIRR
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600 dark:text-gray-400">
-                    Base Amount:
+                    Available:
                   </span>
                   <span className="text-lg font-medium text-gray-800 dark:text-gray-200">
                     {jackpot.baseAmount.toLocaleString()} BIRR
@@ -621,6 +650,7 @@ const JackpotManager = () => {
                     {updating ? "Adding..." : "Add Amount"}
                   </button>
                 </div>
+                {/* Fix: Use amount for current total and new total preview. */}
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Current: {jackpot.amount.toLocaleString()} BIRR
                   {addAmount && parseFloat(addAmount) > 0 && (
@@ -675,21 +705,21 @@ const JackpotManager = () => {
                 </label>
                 <button
                   onClick={handleOpenAwardModal}
-                  disabled={awarding || jackpot.amount === 0 || !enabled}
+                  disabled={awarding || jackpot.baseAmount === 0 || !enabled}
                   className={`w-full p-3 rounded-lg text-white font-semibold transition-all duration-200 ${
-                    awarding || jackpot.amount === 0 || !enabled
+                    awarding || jackpot.baseAmount === 0 || !enabled
                       ? "bg-gray-400 cursor-not-allowed"
                       : "bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
                   }`}
                 >
                   {awarding
                     ? "Awarding..."
-                    : `🎉 Award Jackpot (${jackpot.amount.toLocaleString()} BIRR)`}
+                    : `🎉 Award Jackpot (${jackpot.baseAmount.toLocaleString()} BIRR)`}
                 </button>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {jackpot.amount > 0 && enabled
+                  {jackpot.baseAmount > 0 && enabled
                     ? `Set or update the jackpot winner, amount, game number, and message`
-                    : jackpot.amount === 0
+                    : jackpot.baseAmount === 0
                     ? "No jackpot amount available to award"
                     : "Jackpot must be enabled to award"}
                 </p>
@@ -823,10 +853,10 @@ const JackpotManager = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md text-center">
               <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                {jackpot.amount.toLocaleString()}
+                {jackpot.baseAmount.toLocaleString()}
               </div>
               <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Current Amount (BIRR)
+                Available (BIRR)
               </div>
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md text-center">
@@ -868,10 +898,10 @@ const JackpotManager = () => {
               <div className="p-6 space-y-4">
                 <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded-lg text-center">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Current Jackpot
+                    Available to Award
                   </p>
                   <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                    {jackpot.amount.toLocaleString()} BIRR
+                    {jackpot.baseAmount.toLocaleString()} BIRR
                   </p>
                 </div>
 
@@ -883,11 +913,11 @@ const JackpotManager = () => {
                     type="number"
                     value={awardAmount}
                     onChange={(e) => setAwardAmount(e.target.value)}
-                    placeholder="Enter amount (max: current jackpot)"
+                    placeholder="Enter amount (max: available)"
                     className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     disabled={awarding}
                     min="0.01"
-                    max={jackpot.amount}
+                    max={jackpot.baseAmount}
                     step="0.01"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -951,7 +981,7 @@ const JackpotManager = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Game Number (Optional)
+                    Game Number
                   </label>
                   <input
                     type="number"
@@ -1047,6 +1077,7 @@ const JackpotManager = () => {
                     !awardCardId ||
                     !awardMessage.trim() ||
                     parseFloat(awardAmount) <= 0 ||
+                    parseFloat(awardAmount) > jackpot.baseAmount ||
                     parseInt(awardCardId) < 1 ||
                     parseInt(awardCardId) > 100
                       ? "bg-gray-400 cursor-not-allowed"
@@ -1104,10 +1135,10 @@ const JackpotManager = () => {
               <div className="p-6 space-y-4">
                 <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded-lg text-center">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Current Jackpot
+                    Current Available
                   </p>
                   <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                    {jackpot.amount.toLocaleString()} BIRR
+                    {jackpot.baseAmount.toLocaleString()} BIRR
                   </p>
                 </div>
 

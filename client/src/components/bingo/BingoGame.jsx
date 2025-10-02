@@ -51,9 +51,9 @@ const BingoGame = () => {
     useState(null);
   const jackpotCountdownIntervalRef = useRef(null);
   const [runJackpotBtnText, setRunJackpotBtnText] = useState("Run Jackpot");
-  const [jackpotWinnerId, setJackpotWinnerId] = useState("--");
-  const [jackpotPrizeAmount, setJackpotPrizeAmount] = useState("0 BIRR");
-  const [jackpotDrawDate, setJackpotDrawDate] = useState("--");
+  const [jackpotWinnerId, setJackpotWinnerId] = useState("---");
+  const [jackpotPrizeAmount, setJackpotPrizeAmount] = useState("--- BIRR");
+  const [jackpotDrawDate, setJackpotDrawDate] = useState("----");
   const [isJackpotDrawn, setIsJackpotDrawn] = useState(false); // New state to track if jackpot has been drawn
   const [isJackpotEnabled, setIsJackpotEnabled] = useState(false);
   const [isJackpotAnimating, setIsJackpotAnimating] = useState(false);
@@ -88,7 +88,7 @@ const BingoGame = () => {
       console.log("[fetchJackpotAmount] Fetched jackpot data:", jackpotData);
 
       // Convert amount to integer safely
-      return parseInt(jackpotData.amount, 10) || 0;
+      return parseInt(jackpotData.baseAmount, 10) || 0;
     } catch (error) {
       console.error("[fetchJackpotAmount] Error fetching jackpot:", error);
       return 0;
@@ -164,7 +164,7 @@ const BingoGame = () => {
     if (winnerData) {
       setIsJackpotEnabled(true);
       setJackpotWinnerData(winnerData);
-      setJackpotPrizeAmount(`${winnerData.payout_amount || 0} BIRR`);
+      const actualPrize = `${winnerData.payout_amount || 0} BIRR`;
       const drawDate = new Date(winnerData.win_date);
       const formattedDate = drawDate.toLocaleDateString("en-US", {
         year: "numeric",
@@ -173,11 +173,13 @@ const BingoGame = () => {
         hour: "2-digit",
         minute: "2-digit",
       });
-      setJackpotDrawDate(formattedDate);
+      const actualId = String(winnerData.winning_number);
+      setJackpotPrizeAmount(isJackpotDrawn ? actualPrize : "--- BIRR");
+      setJackpotDrawDate(isJackpotDrawn ? formattedDate : "----");
+      setJackpotWinnerId(isJackpotDrawn ? actualId : "---");
       const isPastDraw = drawDate <= new Date();
       setIsJackpotTimeReached(isPastDraw);
       setIsJackpotDrawn(false);
-      setJackpotWinnerId(isPastDraw ? winnerData.winning_number : "--");
       if (isPastDraw) {
         setRunJackpotBtnText("Run Jackpot");
       } else {
@@ -185,10 +187,10 @@ const BingoGame = () => {
       }
     } else {
       setIsJackpotEnabled(false);
-      setJackpotPrizeAmount("---");
-      setJackpotDrawDate("--");
+      setJackpotPrizeAmount("--- BIRR");
+      setJackpotDrawDate("----");
+      setJackpotWinnerId("---");
       setIsJackpotTimeReached(false);
-      setJackpotWinnerId("--");
       setIsJackpotDrawn(false);
       setRunJackpotBtnText("Run Jackpot");
     }
@@ -231,7 +233,7 @@ const BingoGame = () => {
       clearInterval(jackpotWinnerShuffleInterval);
     }
     if (!jackpotWinnerData) {
-      setJackpotWinnerId("--");
+      setJackpotWinnerId("---");
       return;
     }
     setIsJackpotAnimating(true);
@@ -250,6 +252,18 @@ const BingoGame = () => {
         clearInterval(interval);
         const finalId = parseInt(jackpotWinnerData.winning_number).toString();
         setJackpotWinnerId(finalId);
+        const actualPrize = `${jackpotWinnerData.payout_amount || 0} BIRR`;
+        setJackpotPrizeAmount(actualPrize);
+        const drawDate = new Date(jackpotWinnerData.win_date);
+        const formattedDate = drawDate.toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        setJackpotDrawDate(formattedDate);
+        setIsJackpotDrawn(true);
         SoundService.playSound("jackpot-running", { stop: true });
         SoundService.playSound("jackpot-congrats");
         // Trigger celebration animations
@@ -455,7 +469,6 @@ const BingoGame = () => {
     // Since predefined, just animate reveal
     shuffleWinnerIdAnimation();
     setRunJackpotBtnText("Jackpot Drawn");
-    setIsJackpotDrawn(true);
     await updateJackpotDisplay();
   };
   // Update jackpot after game using service
@@ -1470,7 +1483,9 @@ const BingoGame = () => {
 
   // Format winner ID without leading zeros
   const formattedWinnerId =
-    jackpotWinnerId === "--" ? "--" : parseInt(jackpotWinnerId, 10).toString();
+    jackpotWinnerId === "---"
+      ? "---"
+      : parseInt(jackpotWinnerId, 10).toString();
 
   // In the component
   if (!user) return <div>Loading...</div>;
@@ -1543,7 +1558,7 @@ const BingoGame = () => {
         {generateBoard()}
       </div>
       {/* Controls and Last Number */}
-      <div className="w-full flex items-center gap-4 max-w-[1200px] max-md:flex-col">
+      <div className="w-full flex items-center gap-4 max-w-[1000px] max-md:flex-col translate-x-40">
         <div className="flex-1 flex flex-col items-center">
           {/* Control Buttons */}
           <div className="flex flex-wrap justify-center gap-2 mb-4 w-full">
@@ -1662,7 +1677,7 @@ const BingoGame = () => {
             Prize: <span className="text-[#f0e14a]">{jackpotPrizeAmount}</span>
           </div>
           <div className="text-[#e9a64c] font-bold mt-2">
-            Draw Date: <span>{jackpotDrawDate}</span>
+            Draw Date: <span className="text-[#f0e14a]">{jackpotDrawDate}</span>
           </div>
         </div>
         <button
