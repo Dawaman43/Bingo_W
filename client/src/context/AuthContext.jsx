@@ -8,30 +8,36 @@ import {
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
+  // Initialize user from localStorage with logs
   const [user, setUser] = useState(() => {
-    const storedUser = localStorage.getItem("user");
-    return storedUser ? JSON.parse(storedUser) : null;
+    try {
+      const storedUser = localStorage.getItem("user");
+      console.log("[AuthContext] Stored user from localStorage:", storedUser);
+      return storedUser ? JSON.parse(storedUser) : null;
+    } catch (err) {
+      console.error("[AuthContext] Error parsing user from localStorage:", err);
+      return null;
+    }
   });
-  const [token, setToken] = useState(
-    () => localStorage.getItem("token") || null
-  );
-  const [loading, setLoading] = useState(true);
 
-  // Verify token on mount with retry
+  const [token, setToken] = useState(() => {
+    const storedToken = localStorage.getItem("token");
+    console.log("[AuthContext] Stored token from localStorage:", storedToken);
+    return storedToken || null;
+  });
+
+  // Verify token in background with logs
   useEffect(() => {
     const verifyUser = async (retries = 2, delay = 1000) => {
       if (!token) {
-        console.log("[AuthContext] No token found in localStorage");
-        setLoading(false);
+        console.log("[AuthContext] No token found, skipping verification");
         return;
       }
+
       try {
         console.log("[AuthContext] Verifying token with getMe...");
         const data = await getMe(token);
-        console.log(
-          "[AuthContext] getMe response:",
-          JSON.stringify(data, null, 2)
-        );
+        console.log("[AuthContext] getMe response:", data);
         setUser(data.user);
         localStorage.setItem("user", JSON.stringify(data.user));
       } catch (err) {
@@ -40,6 +46,7 @@ export const AuthProvider = ({ children }) => {
           status: err.response?.status,
           data: err.response?.data,
         });
+
         if (retries > 0) {
           console.log(
             `[AuthContext] Retrying getMe (${retries} attempts left)...`
@@ -47,13 +54,12 @@ export const AuthProvider = ({ children }) => {
           await new Promise((resolve) => setTimeout(resolve, delay));
           return verifyUser(retries - 1, delay * 2);
         }
+
         console.warn("[AuthContext] All retries failed, clearing auth state");
+        setUser(null);
+        setToken(null);
         localStorage.removeItem("token");
         localStorage.removeItem("user");
-        setToken(null);
-        setUser(null);
-      } finally {
-        setLoading(false);
       }
     };
 
@@ -61,32 +67,24 @@ export const AuthProvider = ({ children }) => {
   }, [token]);
 
   const loginUser = async (credentials) => {
-    try {
-      console.log("[AuthContext] Logging in with credentials:", credentials);
-      const data = await loginService(credentials);
-      console.log(
-        "[AuthContext] Login response:",
-        JSON.stringify(data, null, 2)
-      );
-      if (data.token) {
-        setUser(data.user);
-        setToken(data.token);
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
-      }
-      return data;
-    } catch (err) {
-      console.error("[AuthContext] Login failed:", err.message);
-      throw err;
+    console.log("[AuthContext] loginUser called with:", credentials);
+    const data = await loginService(credentials);
+    console.log("[AuthContext] loginUser response:", data);
+    if (data.token) {
+      setUser(data.user);
+      setToken(data.token);
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
     }
+    return data;
   };
 
   const logoutUser = async () => {
+    console.log("[AuthContext] logoutUser called");
     try {
-      console.log("[AuthContext] Logging out...");
       await logoutService();
     } catch (err) {
-      console.error("[AuthContext] Logout error:", err.message);
+      console.error("[AuthContext] logoutService error:", err.message);
     }
     setUser(null);
     setToken(null);
@@ -95,10 +93,10 @@ export const AuthProvider = ({ children }) => {
     console.log("[AuthContext] Auth state cleared");
   };
 
+  console.log("[AuthContext] Rendering provider, user:", user, "token:", token);
+
   return (
-    <AuthContext.Provider
-      value={{ user, token, loginUser, logoutUser, loading }}
-    >
+    <AuthContext.Provider value={{ user, token, loginUser, logoutUser }}>
       {children}
     </AuthContext.Provider>
   );

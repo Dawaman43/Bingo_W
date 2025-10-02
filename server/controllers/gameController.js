@@ -71,7 +71,7 @@ export const getGameById = async (req, res, next) => {
       });
     }
 
-    const game = await Game.findOne({ _id: id, cashierId });
+    const game = await Game.findOne({ _id: id, cashierId }).lean();
     if (!game) {
       return res.status(404).json({
         message: "Game not found or you are not authorized to access it",
@@ -79,12 +79,27 @@ export const getGameById = async (req, res, next) => {
       });
     }
 
+    console.log("[getGameById] Retrieved game:", {
+      gameId: id,
+      gameNumber: game.gameNumber,
+      cashierId: game.cashierId,
+      jackpotEnabled: game.jackpotEnabled,
+      jackpotWinnerCardId: game.jackpotWinnerCardId,
+      jackpotAwardedAmount: game.jackpotAwardedAmount,
+      jackpotWinnerMessage: game.jackpotWinnerMessage,
+      jackpotDrawTimestamp: game.jackpotDrawTimestamp,
+    });
+
     res.json({
       message: "Game retrieved successfully",
       game,
     });
   } catch (error) {
-    console.error("[getGameById] Error:", error);
+    console.error("[getGameById] Error:", {
+      message: error.message,
+      stack: error.stack,
+      gameId: req.params.id,
+    });
     next(error);
   }
 };

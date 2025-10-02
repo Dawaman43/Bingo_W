@@ -15,7 +15,7 @@ const gameSchema = new mongoose.Schema({
       id: { type: Number, required: true },
       numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
       disqualified: { type: Boolean, default: false },
-      checkCount: { type: Number, default: 0 }, // ✅ Added
+      checkCount: { type: Number, default: 0 },
       lastCheckCallCount: { type: Number, default: 0 },
       lastCheckTime: { type: Date, default: null },
     },
@@ -50,34 +50,24 @@ const gameSchema = new mongoose.Schema({
   moderatorWinnerCardId: { type: Number, default: null },
   forcedPattern: { type: String, default: null },
   selectedWinnerRowIndices: { type: [Number], default: [] },
-  forcedCallSequence: {
-    type: [Number],
-    default: [],
-  },
-  forcedCallIndex: {
-    type: Number,
-    default: 0,
-  },
-  targetWinCall: {
-    type: Number,
-    default: null,
-  },
+  forcedCallSequence: { type: [Number], default: [] },
+  forcedCallIndex: { type: Number, default: 0 },
+  targetWinCall: { type: Number, default: null },
   winnerCardNumbers: {
     type: [[{ type: mongoose.Schema.Types.Mixed }]],
     default: null,
   },
-  selectedWinnerNumbers: {
-    type: [Number],
-    default: [],
-  },
+  selectedWinnerNumbers: { type: [Number], default: [] },
   winner: {
     cardId: { type: Number },
     prize: { type: Number },
   },
-  jackpotEnabled: {
-    type: Boolean,
-    default: true,
-  },
+  jackpotEnabled: { type: Boolean, default: true },
+  // New jackpot fields
+  jackpotWinnerCardId: { type: String, default: null },
+  jackpotAwardedAmount: { type: Number, default: 0 },
+  jackpotWinnerMessage: { type: String, default: null },
+  jackpotDrawTimestamp: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   configuredBy: {
@@ -85,10 +75,7 @@ const gameSchema = new mongoose.Schema({
     ref: "User",
     default: null,
   },
-  configuredAt: {
-    type: Date,
-    default: null,
-  },
+  configuredAt: { type: Date, default: null },
 });
 
 gameSchema.pre("save", function (next) {

@@ -2,6 +2,9 @@ import User from "../models/User.js";
 import Game from "../models/Game.js";
 import GameLog from "../models/GameLog.js";
 import JackpotCandidate from "../models/JackpotCandidate.js";
+import Jackpot from "../models/Jackpot.js";
+import JackpotLog from "../models/JackpotLog.js";
+import Result from "../models/Result.js";
 import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 import FutureWinner from "../models/FutureWinner.js";
@@ -258,6 +261,7 @@ export const getAllCards = async (req, res, next) => {
 };
 
 export const createSequentialGames = async (req, res, next) => {
+  let session = null;
   try {
     const {
       betAmount = 10,
@@ -298,18 +302,16 @@ export const createSequentialGames = async (req, res, next) => {
       numbers: c.numbers,
     }));
 
-    // Calculate financials (aligned with SelectCard's calculateProfit)
+    // Calculate financials
     const bet = parseFloat(betAmount);
     const percentage = parseFloat(houseFeePercentage);
     const selectedCount = gameCards.length;
-
     const totalPot = bet * selectedCount;
-    const jackpotContribution = jackpotEnabled ? bet : 0; // Jackpot contribution is betAmount
-    const remainingAmount = totalPot - jackpotContribution; // Deduct jackpot first
-    const houseFee = (remainingAmount * percentage) / 100; // House fee on remaining amount
-    const prizePool = remainingAmount - houseFee; // Prize pool is what's left
+    const jackpotContribution = jackpotEnabled ? bet : 0;
+    const remainingAmount = totalPot - jackpotContribution;
+    const houseFee = (remainingAmount * percentage) / 100;
+    const prizePool = remainingAmount - houseFee;
 
-    // Log financials for debugging
     console.log("[createSequentialGames] Input payload:", {
       betAmount,
       houseFeePercentage,
@@ -349,13 +351,13 @@ export const createSequentialGames = async (req, res, next) => {
     let selectedWinnerNumbers = futureWinner?.playableNumbers || [];
     let selectedWinnerRowIndices = futureWinner?.selectedWinnerRowIndices || [];
 
-    // Create the game
+    // Create the game with jackpot fields
     const game = await createGameRecord({
       gameNumber,
       cashierId,
       betAmount,
       houseFeePercentage,
-      houseFee: parseFloat(houseFee.toFixed(2)), // Store as number with 2 decimal places
+      houseFee: parseFloat(houseFee.toFixed(2)),
       selectedCards: gameCards,
       pattern,
       prizePool: parseFloat(prizePool.toFixed(2)),
@@ -368,26 +370,122 @@ export const createSequentialGames = async (req, res, next) => {
       targetWinCall: forcedCallSequence.length || null,
       forcedCallIndex: 0,
       winnerCardNumbers,
+      // Initialize jackpot fields
+      jackpotWinnerCardId: null,
+      jackpotAwardedAmount: 0,
+      jackpotWinnerMessage: null,
+      jackpotDrawTimestamp: null,
     });
 
-    // Log stored game data
     console.log("[createSequentialGames] Stored game:", {
       gameNumber: game.gameNumber,
       houseFee: game.houseFee,
       cardPoolLength: game.selectedCards.length,
       prizePool: game.prizePool,
       jackpotContribution: game.jackpotContribution,
+      jackpotWinnerCardId: game.jackpotWinnerCardId,
+      jackpotAwardedAmount: game.jackpotAwardedAmount,
     });
+
+    // Apply jackpot award if configured in FutureWinner
+    if (
+      futureWinner &&
+      futureWinner.jackpotEnabled &&
+      futureWinner.jackpotDrawAmount > 0
+    ) {
+      session = await mongoose.startSession();
+      await session.withTransaction(async () => {
+        const jackpot = await Jackpot.findOne({ cashierId }).session(session);
+        if (!jackpot || !jackpot.enabled) {
+          throw new Error("Jackpot is not enabled for award");
+        }
+
+        if (futureWinner.jackpotDrawAmount > jackpot.amount) {
+          throw new Error(
+            "Configured jackpot draw amount exceeds current jackpot"
+          );
+        }
+
+        const actualDrawAmount = futureWinner.jackpotDrawAmount;
+        const winnerCardIdStr = futureWinner.cardId.toString();
+        const winnerMessage =
+          futureWinner.jackpotMessage ||
+          `Jackpot won by card ${winnerCardIdStr}`;
+
+        // Update jackpot
+        jackpot.winnerCardId = winnerCardIdStr;
+        jackpot.winnerMessage = winnerMessage;
+        jackpot.amount -= actualDrawAmount;
+        jackpot.lastUpdated = new Date();
+        jackpot.lastAwardedAmount = actualDrawAmount;
+        jackpot.drawTimestamp = new Date();
+        await jackpot.save({ session });
+
+        // Create JackpotLog
+        const logData = {
+          cashierId,
+          amount: -actualDrawAmount,
+          reason: `Jackpot pre-awarded for game ${gameNumber} to card ${winnerCardIdStr}: ${actualDrawAmount} birr - ${winnerMessage}`,
+          gameId: game._id,
+          isAward: true,
+          winnerCardId: winnerCardIdStr,
+          message: winnerMessage,
+          triggeredByCashier: false,
+          timestamp: new Date(),
+        };
+        await JackpotLog.create([logData], { session });
+
+        // Create Result
+        await Result.create(
+          [
+            {
+              gameId: game._id,
+              winnerCardId: winnerCardIdStr,
+              prize: actualDrawAmount,
+              isJackpot: true,
+              message: winnerMessage,
+              identifier: `jackpot_${Date.now()}_${winnerCardIdStr}`,
+              timestamp: new Date(),
+            },
+          ],
+          { session }
+        );
+
+        // Update game with jackpot details
+        await Game.findByIdAndUpdate(
+          game._id,
+          {
+            $set: {
+              jackpotWinnerCardId: winnerCardIdStr,
+              jackpotAwardedAmount: actualDrawAmount,
+              jackpotWinnerMessage: winnerMessage,
+              jackpotDrawTimestamp: new Date(),
+            },
+          },
+          { session }
+        );
+
+        console.log(
+          `[createSequentialGames] 💰 Applied configured jackpot award for game ${gameNumber}: card ${winnerCardIdStr}, amount ${actualDrawAmount}`
+        );
+      });
+    }
 
     // Mark future winner as used
     if (futureWinner) {
       await FutureWinner.findByIdAndUpdate(
         futureWinner._id,
-        { $set: { used: true } },
+        {
+          $set: {
+            used: true,
+            usedAt: new Date(),
+            gameId: game._id,
+          },
+        },
         { new: true }
       );
       console.log(
-        `[createSequentialGames] Marked FutureWinner for game ${gameNumber} as used`
+        `[createSequentialGames] Marked FutureWinner (incl. jackpot) for game ${gameNumber} as used`
       );
     } else {
       console.log(
@@ -395,7 +493,7 @@ export const createSequentialGames = async (req, res, next) => {
       );
     }
 
-    // Verify stored houseFee matches calculation
+    // Verify stored houseFee
     const expectedHouseFee = (remainingAmount * percentage) / 100;
     if (Math.abs(game.houseFee - expectedHouseFee) > 0.01) {
       console.error("[createSequentialGames] House fee mismatch:", {
@@ -408,7 +506,19 @@ export const createSequentialGames = async (req, res, next) => {
     res.json({ message: "Game created successfully", game });
   } catch (err) {
     console.error("[createSequentialGames] Error:", err);
+    if (session) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        console.error("[createSequentialGames] Abort error:", abortErr);
+      }
+      await session.endSession();
+    }
     next(err);
+  } finally {
+    if (session) {
+      await session.endSession();
+    }
   }
 };
 

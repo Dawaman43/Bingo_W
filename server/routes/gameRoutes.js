@@ -10,6 +10,7 @@ import {
   toggleJackpot,
   awardJackpot,
   getJackpotHistory,
+  getJackpotStatus,
 } from "../controllers/jackpotController.js";
 import { getCashierReport } from "../controllers/reportController.js";
 import {
@@ -59,6 +60,7 @@ router.patch("/jackpot/toggle", verifyToken, validate, toggleJackpot);
 router.post("/jackpot/award", verifyToken, validate, awardJackpot);
 router.get("/jackpot/history", verifyToken, getJackpotHistory);
 router.patch("/jackpot", verifyToken, updateJackpot);
+router.get("/:id/jackpot-status", verifyToken, getJackpotStatus);
 
 // ----------------- Admin Report Routes -----------------
 router.get("/admin/cashier-report", verifyToken, async (req, res, next) => {

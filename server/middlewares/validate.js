@@ -43,15 +43,17 @@ export const validate = [
     .isInt({ min: 1 })
     .withMessage("Card ID must be a positive integer"),
   body("gameId")
-    .optional({ nullable: true }) // Allow null explicitly
+    .optional({ nullable: true })
     .custom((value) => {
       if (value === null) return true; // Allow null
+      if (typeof value === "number") return true; // Allow numeric gameNumber
       if (!mongoose.isValidObjectId(value)) {
-        throw new Error("Game ID must be a valid MongoDB ID");
+        throw new Error("Game ID must be a valid MongoDB ID, number, or null");
       }
       return true;
     })
-    .withMessage("Game ID must be a valid MongoDB ID or null"),
+    .withMessage("Game ID must be a valid MongoDB ID, number, or null"),
+
   body("drawAmount")
     .optional()
     .isFloat({ min: 0.01 })
