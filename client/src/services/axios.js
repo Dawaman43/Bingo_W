@@ -2,6 +2,7 @@ import axios from "axios";
 
 const API = axios.create({
   baseURL: "https://bingo-web-9lh2.onrender.com/api",
+ // baseURL: "https://localhost:5000/api",
   withCredentials: true, // only if you actually use cookies
 });
 
