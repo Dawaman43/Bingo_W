@@ -606,10 +606,17 @@ const SelectCard = () => {
                 House Fee Percentage
               </label>
               <div
-                className="w-full h-10 p-2 border-2 border-gray-400 dark:border-gray-600 rounded bg-white dark:bg-gray-700 cursor-pointer"
+                tabIndex={0}
+                className="w-full h-10 p-2 border-2 border-gray-400 dark:border-gray-600 rounded bg-white dark:bg-gray-700 cursor-pointer group"
                 onClick={() => setOpen((prev) => !prev)}
               >
-                <span className="text-gray-800 dark:text-gray-200">
+                <span
+                  className={`text-gray-800 dark:text-gray-200 ${
+                    housePercentage
+                      ? "opacity-0 group-hover:opacity-100 group-focus:opacity-100 transition-opacity"
+                      : ""
+                  }`}
+                >
                   {housePercentage
                     ? `${housePercentage}%`
                     : "Select percentage"}
