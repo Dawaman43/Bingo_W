@@ -1013,7 +1013,6 @@ const detectLateCallForCurrentPattern = async (
 export const finishGame = async (req, res) => {
   const gameId = req.params.id;
 
-  // Helper to safely log without breaking main flow
   const safeLog = async (logData) => {
     try {
       await GameLog.create(logData);
@@ -1027,7 +1026,12 @@ export const finishGame = async (req, res) => {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    // ✅ Validate gameId format
+    // Validate cashierId
+    if (!cashierId) {
+      console.warn(`[finishGame] cashierId missing for game ${gameId}`);
+    }
+
+    // ✅ Validate gameId
     if (!mongoose.isValidObjectId(gameId)) {
       await safeLog({
         gameId,
@@ -1076,22 +1080,37 @@ export const finishGame = async (req, res) => {
     // ✅ Handle jackpot safely
     if (game.jackpotEnabled && game.winner) {
       try {
+        if (!cashierId) throw new Error("Missing cashierId for jackpot");
+
         const jackpot = await Jackpot.findOne({ cashierId });
-        if (jackpot) {
-          jackpot.amount = (jackpot.amount || 0) + (game.potentialJackpot || 0);
+        if (!jackpot) {
+          console.warn(
+            `[finishGame] No jackpot found for cashierId ${cashierId}`
+          );
+        } else {
+          // Safe update
+          jackpot.amount = (jackpot.amount ?? 0) + (game.potentialJackpot ?? 0);
           await jackpot.save();
 
-          // Log jackpot contribution
-          await JackpotLog.create({
-            cashierId,
-            amount: game.potentialJackpot || 0,
-            reason: "Game contribution",
-            gameId,
-          });
+          try {
+            await JackpotLog.create({
+              cashierId,
+              amount: game.potentialJackpot ?? 0,
+              reason: "Game contribution",
+              gameId,
+            });
+          } catch (logErr) {
+            console.error(
+              `[finishGame] JackpotLog creation failed for game ${gameId}:`,
+              logErr.message
+            );
+          }
         }
       } catch (jackpotErr) {
-        console.error("Jackpot handling failed:", jackpotErr);
-        // Do NOT throw, continue finishing the game
+        console.error(
+          `[finishGame] Jackpot processing failed for game ${gameId}:`,
+          jackpotErr.message
+        );
       }
     }
 
@@ -1105,21 +1124,21 @@ export const finishGame = async (req, res) => {
       status: "success",
       details: {
         gameNumber: game.gameNumber,
-        winnerCardId: game.winner?.cardId || null,
-        prize: game.winner?.prize || null,
-        moderatorWinnerCardId: game.moderatorWinnerCardId || null,
-        winnerCardNumbers: game.winnerCardNumbers || [],
-        selectedWinnerNumbers: game.selectedWinnerNumbers || [],
+        winnerCardId: game.winner?.cardId ?? null,
+        prize: game.winner?.prize ?? null,
+        moderatorWinnerCardId: game.moderatorWinnerCardId ?? null,
+        winnerCardNumbers: game.winnerCardNumbers ?? [],
+        selectedWinnerNumbers: game.selectedWinnerNumbers ?? [],
       },
     });
 
-    // ✅ Respond with game data
+    // ✅ Respond
     res.json({
       message: "Game completed successfully",
       game: {
         ...game.toObject(),
-        winnerCardNumbers: game.winnerCardNumbers || [],
-        selectedWinnerNumbers: game.selectedWinnerNumbers || [],
+        winnerCardNumbers: game.winnerCardNumbers ?? [],
+        selectedWinnerNumbers: game.selectedWinnerNumbers ?? [],
       },
     });
   } catch (error) {
@@ -1129,12 +1148,12 @@ export const finishGame = async (req, res) => {
       gameId,
       action: "finishGame",
       status: "failed",
-      details: { error: error.message || "Unknown error" },
+      details: { error: error.message ?? "Unknown error" },
     });
 
     res.status(500).json({
       message: "Internal server error",
-      error: error.message || "Unknown error",
+      error: error.message ?? "Unknown error",
     });
   }
 };
