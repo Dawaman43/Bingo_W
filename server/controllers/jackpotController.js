@@ -24,40 +24,40 @@ export const getJackpot = async (req, res) => {
       isActive: true,
     });
 
-    // 🟢 Respond with default object if no jackpot exists
-    if (!jackpot) {
-      return res.json({
-        message: "No jackpot",
-        data: {
-          amount: 0,
-          baseAmount: 0,
-          enabled: false,
-          lastUpdated: new Date(),
-          activeGames,
-          jackpotExists: false,
-          winnerCardId: null,
-          winnerMessage: null,
-          lastAwardedAmount: 0,
-          lastAwardedTimestamp: null,
-        },
-      });
-    }
+    // 🟢 Prepare default jackpot object
+    const defaultJackpot = {
+      amount: 0,
+      baseAmount: 0,
+      enabled: false,
+      lastUpdated: new Date(),
+      activeGames,
+      jackpotExists: false,
+      winnerCardId: null,
+      winnerMessage: null,
+      lastAwardedAmount: 0,
+      lastAwardedTimestamp: null,
+    };
 
-    // 🟢 Respond with jackpot details if it exists
+    // 🟢 If jackpot exists, merge its data with defaults
+    const responseData = jackpot
+      ? {
+          ...defaultJackpot,
+          amount: jackpot.amount,
+          baseAmount: jackpot.baseAmount || 0,
+          enabled: jackpot.enabled,
+          lastUpdated: jackpot.lastUpdated || new Date(),
+          jackpotExists: true,
+          winnerCardId: jackpot.winnerCardId || null,
+          winnerMessage: jackpot.winnerMessage || null,
+          lastAwardedAmount: jackpot.drawAmount || 0,
+          lastAwardedTimestamp: jackpot.drawTimestamp || null,
+        }
+      : defaultJackpot;
+
+    // 🟢 Send response
     res.json({
-      message: "Jackpot retrieved successfully",
-      data: {
-        amount: jackpot.amount,
-        baseAmount: jackpot.baseAmount || 0,
-        enabled: jackpot.enabled,
-        lastUpdated: jackpot.lastUpdated || new Date(),
-        activeGames,
-        jackpotExists: true,
-        winnerCardId: jackpot.winnerCardId || null,
-        winnerMessage: jackpot.winnerMessage || null,
-        lastAwardedAmount: jackpot.drawAmount || 0,
-        lastAwardedTimestamp: jackpot.drawTimestamp || null,
-      },
+      message: jackpot ? "Jackpot retrieved successfully" : "No jackpot",
+      data: responseData,
     });
   } catch (error) {
     console.error("[getJackpot] Error:", error);
