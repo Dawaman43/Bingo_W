@@ -11,17 +11,20 @@ import mongoose from "mongoose";
 // Get current jackpot
 export const getJackpot = async (req, res) => {
   try {
+    // 🟢 Retrieve cashierId from user
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
+    // 🟢 Fetch jackpot for this cashier
     const jackpot = await Jackpot.findOne({ cashierId });
 
+    // 🟢 Count active games for display
     const activeGames = await Game.countDocuments({
       cashierId,
       isActive: true,
     });
 
-    // 🟢 If no jackpot, respond simply
+    // 🟢 Respond with default object if no jackpot exists
     if (!jackpot) {
       return res.json({
         message: "No jackpot",
@@ -40,7 +43,7 @@ export const getJackpot = async (req, res) => {
       });
     }
 
-    // 🟢 If jackpot exists, respond normally
+    // 🟢 Respond with jackpot details if it exists
     res.json({
       message: "Jackpot retrieved successfully",
       data: {
