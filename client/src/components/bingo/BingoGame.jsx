@@ -584,9 +584,6 @@ const BingoGame = () => {
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
       setCalledNumbers(game.calledNumbers || []);
       setIsGameOver(game.status === "completed");
-      if (game.status === "completed") {
-        updateJackpotAfterGame(game.prizePool || 0);
-      }
     }
   }, [game]);
 
@@ -1216,7 +1213,7 @@ const BingoGame = () => {
       setGameData(response.game);
       await updatePrizePoolDisplay();
       SoundService.playSound("game_finish");
-      updateJackpotAfterGame(gameData.prizePool || 0);
+
       setIsGameFinishedModalOpen(true);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
