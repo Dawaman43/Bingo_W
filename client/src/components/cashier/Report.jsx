@@ -91,6 +91,7 @@ const CashierReport = () => {
   });
   const [searchTerm, setSearchTerm] = useState("");
   const [currentJackpot, setCurrentJackpot] = useState(0);
+  const [controlLoading, setControlLoading] = useState({}); // Per-game loading
   const [gamesStatusData, setGamesStatusData] = useState({
     labels: ["Active/Pending", "Finished"],
     datasets: [
@@ -237,8 +238,18 @@ const CashierReport = () => {
       });
       updateSummaryStats(data);
       updateCharts(data.games);
-      const jackpotData = await gameService.getJackpot(cashierId); // Pass cashierId
-      setCurrentJackpot(jackpotData.amount || 0);
+
+      // Handle jackpot fetch separately to avoid failing the entire report
+      try {
+        const jackpotData = await gameService.getJackpot(cashierId);
+        setCurrentJackpot(jackpotData.amount || 0);
+      } catch (jackpotError) {
+        console.warn(
+          "[fetchReportData] No jackpot found, setting to 0 Birr:",
+          jackpotError.message
+        );
+        setCurrentJackpot(0);
+      }
     } catch (error) {
       console.error("[fetchReportData] Error fetching report:", error);
       setError(error.message || "Failed to fetch report data");
@@ -541,82 +552,135 @@ const CashierReport = () => {
   };
 
   const handleGameControl = async (gameId, action) => {
+    const gameIndex = reportData.games.findIndex((g) => g._id === gameId);
+    if (gameIndex === -1) {
+      alert("Game not found");
+      return;
+    }
+
     const previousReportData = { ...reportData };
     const previousSummaryStats = { ...summaryStats };
     const previousGamesStatusData = { ...gamesStatusData };
+    const targetGame = { ...reportData.games[gameIndex] };
+
+    setControlLoading((prev) => ({ ...prev, [`${gameId}-${action}`]: true }));
 
     try {
       let newStatus;
-      if (action === "play") {
-        newStatus = "active";
-      } else if (action === "pause") {
-        newStatus = "paused";
-      } else if (action === "stop") {
-        newStatus = "completed";
+      let apiCall;
+      let successMessage;
+
+      switch (action) {
+        case "play":
+          newStatus = "active";
+          apiCall = () => gameService.startGame(gameId);
+          successMessage =
+            targetGame.status === "paused"
+              ? "Game resumed successfully!"
+              : "Game started successfully!";
+          break;
+        case "pause":
+          newStatus = "paused";
+          apiCall = () => gameService.pauseGame(gameId);
+          successMessage = "Game paused successfully!";
+          break;
+        case "stop":
+          newStatus = "completed";
+          apiCall = () => gameService.finishGame(gameId);
+          successMessage = "Game stopped and completed successfully!";
+          break;
+        default:
+          throw new Error(
+            `Invalid action: ${action} for status: ${targetGame.status}`
+          );
       }
 
-      setReportData((prev) => {
-        const updatedGames = prev.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
-        );
-        const newActiveGames = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        return {
-          ...prev,
-          games: updatedGames,
-          activeGames: newActiveGames,
-        };
-      });
+      // Optimistic UI update
+      const updatedGames = reportData.games.map((g, idx) =>
+        idx === gameIndex ? { ...g, status: newStatus } : g
+      );
+      setReportData((prev) => ({
+        ...prev,
+        games: updatedGames,
+        activeGames: updatedGames.filter((g) =>
+          ["active", "pending"].includes(g.status)
+        ).length,
+      }));
+      setSummaryStats((prev) => ({
+        ...prev,
+        activeGames: updatedGames.filter((g) =>
+          ["active", "pending"].includes(g.status)
+        ).length,
+        completedGames: updatedGames.filter((g) => g.status === "completed")
+          .length,
+      }));
+      setGamesStatusData((prev) => ({
+        ...prev,
+        datasets: [
+          {
+            ...prev.datasets[0],
+            data: [
+              updatedGames.filter((g) =>
+                ["active", "pending"].includes(g.status)
+              ).length,
+              updatedGames.filter((g) => g.status === "completed").length,
+            ],
+          },
+        ],
+      }));
 
-      setSummaryStats((prev) => {
-        const updatedGames = reportData.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
-        );
-        const newActive = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        const newCompleted = updatedGames.filter(
-          (g) => g.status === "completed"
-        ).length;
-        return {
-          ...prev,
-          activeGames: newActive,
-          completedGames: newCompleted,
-        };
-      });
+      // API call
+      const result = await apiCall();
+      console.log(`[handleGameControl] ${action} response:`, result);
 
-      setGamesStatusData((prev) => {
-        const updatedGames = reportData.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
-        );
-        const newActive = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        const newFinished = updatedGames.filter(
-          (g) => g.status === "completed"
-        ).length;
-        return {
-          ...prev,
-          datasets: [{ ...prev.datasets[0], data: [newActive, newFinished] }],
-        };
-      });
-
-      if (action === "play") {
-        await gameService.startGame(gameId);
-      } else if (action === "pause") {
-        await gameService.pauseGame(gameId);
-      } else if (action === "stop") {
-        await gameService.finishGame(gameId);
+      // Handle jackpot after stop
+      if (action === "stop" && targetGame.jackpotEnabled) {
+        try {
+          const contribution = parseFloat(targetGame.betAmount) || 0;
+          if (contribution > 0) {
+            await gameService.addJackpotContribution(gameId, contribution);
+            const updatedJackpot = await gameService.getJackpot(
+              getCurrentUser().id
+            );
+            setCurrentJackpot(updatedJackpot.amount || currentJackpot);
+            console.log(
+              `[handleGameControl] Jackpot finalized: ${updatedJackpot.amount}`
+            );
+          }
+        } catch (jackpotError) {
+          console.warn(
+            `[handleGameControl] Jackpot finalization failed: ${jackpotError.message}`
+          );
+        }
       }
 
-      console.log(`Game ${action}ed successfully`);
+      // Sync charts
+      updateCharts(updatedGames);
+
+      // Show success
+      alert(successMessage);
     } catch (error) {
-      console.error(`Error ${action}ing game:`, error);
+      // Use structured error from API if exists
+      const errMessage =
+        error.response?.data?.message || error.message || "Unknown error";
+
+      console.error(
+        `[handleGameControl] Error ${action}ing game ${gameId}:`,
+        errMessage
+      );
+
+      // Rollback UI
       setReportData(previousReportData);
       setSummaryStats(previousSummaryStats);
       setGamesStatusData(previousGamesStatusData);
-      alert(`Failed to ${action} game: ${error.message || "Unknown error"}`);
+
+      alert(`Failed to ${action} game: ${errMessage}`);
+    } finally {
+      setControlLoading((prev) => {
+        const newState = { ...prev };
+        delete newState[`${gameId}-${action}`];
+        return newState;
+      });
     }
   };
 
@@ -626,6 +690,10 @@ const CashierReport = () => {
 
   const renderTableRow = (game, index) => {
     const houseFee = parseFloat(game.houseFee) || 0;
+    const isLoading =
+      controlLoading[`${game._id}-play`] ||
+      controlLoading[`${game._id}-pause`] ||
+      controlLoading[`${game._id}-stop`];
     return (
       <tr
         key={game._id || index}
@@ -672,6 +740,7 @@ const CashierReport = () => {
             <button
               onClick={() => handleViewGame(game._id)}
               className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition-colors"
+              disabled={isLoading}
             >
               View
             </button>
@@ -679,32 +748,31 @@ const CashierReport = () => {
               <>
                 <button
                   onClick={() => handleGameControl(game._id, "pause")}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                  disabled={isLoading}
                 >
-                  Pause
+                  {isLoading ? "..." : "Pause"}
                 </button>
                 <button
                   onClick={() => handleGameControl(game._id, "stop")}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                  disabled={isLoading}
                 >
-                  Stop
+                  {isLoading ? "..." : "Stop"}
                 </button>
               </>
             )}
-            {game.status === "pending" && (
+            {(game.status === "pending" || game.status === "paused") && (
               <button
                 onClick={() => handleGameControl(game._id, "play")}
-                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                disabled={isLoading}
               >
-                Play
-              </button>
-            )}
-            {game.status === "paused" && (
-              <button
-                onClick={() => handleGameControl(game._id, "play")}
-                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
-              >
-                Resume
+                {isLoading
+                  ? "..."
+                  : game.status === "paused"
+                  ? "Resume"
+                  : "Play"}
               </button>
             )}
           </div>

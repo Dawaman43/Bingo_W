@@ -317,28 +317,19 @@ const gameService = {
       throw error;
     }
   },
-
-  finishGame: async (gameId, moderatorCardId = null) => {
+  pauseGame: async (gameId) => {
     try {
       if (!gameId) throw new Error("Game ID is required");
-      console.log(
-        `gameService.finishGame - Finishing game ${gameId}, moderatorCardId: ${moderatorCardId}`
-      );
-      const response = await API.post(`/games/${gameId}/finish`, {
-        moderatorCardId,
-      });
-      console.log(
-        "gameService.finishGame full response:",
-        JSON.stringify(response, null, 2)
-      );
-      console.log(
-        "gameService.finishGame response.data.data:",
-        response.data.data
-      );
-      return response.data.data;
+
+      console.log(`gameService.pauseGame - Pausing game ${gameId}`);
+
+      const response = await API.post(`/games/${gameId}/pause`);
+      console.log("gameService.pauseGame response:", response.data);
+
+      return response.data;
     } catch (error) {
       console.error(
-        "gameService.finishGame error:",
+        "gameService.pauseGame error:",
         JSON.stringify(
           error.response?.data || { message: error.message },
           null,
@@ -346,6 +337,42 @@ const gameService = {
         )
       );
       throw error;
+    }
+  },
+
+  finishGame: async (gameId, moderatorCardId = null) => {
+    if (!gameId) throw new Error("Game ID is required");
+
+    console.log(
+      `gameService.finishGame - Finishing game ${gameId}, moderatorCardId: ${moderatorCardId}`
+    );
+
+    try {
+      const response = await API.post(`/games/${gameId}/finish`, {
+        moderatorCardId,
+      });
+
+      // Log full response safely
+      console.log(
+        "gameService.finishGame full response:",
+        response?.data ? JSON.stringify(response.data, null, 2) : response
+      );
+
+      // Return game object directly
+      return response.data?.game || null;
+    } catch (error) {
+      // Safely handle errors whether JSON exists or not
+      const errData = error.response?.data || {
+        message: error.message || "Unknown error",
+      };
+
+      console.error(
+        "gameService.finishGame error:",
+        JSON.stringify(errData, null, 2)
+      );
+
+      // Throw a more structured error for the UI
+      throw new Error(errData.message || "Failed to finish game");
     }
   },
 

@@ -11,31 +11,53 @@ import mongoose from "mongoose";
 // Get current jackpot
 export const getJackpot = async (req, res) => {
   try {
+    // 🟢 Retrieve cashierId from user
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
+    // 🟢 Fetch jackpot for this cashier
     const jackpot = await Jackpot.findOne({ cashierId });
-    if (!jackpot) return res.status(404).json({ message: "Jackpot not found" });
 
+    // 🟢 Count active games for display
     const activeGames = await Game.countDocuments({
       cashierId,
       isActive: true,
     });
 
+    // 🟢 Prepare default jackpot object
+    const defaultJackpot = {
+      amount: 0,
+      baseAmount: 0,
+      enabled: false,
+      lastUpdated: new Date(),
+      activeGames,
+      jackpotExists: false,
+      winnerCardId: null,
+      winnerMessage: null,
+      lastAwardedAmount: 0,
+      lastAwardedTimestamp: null,
+    };
+
+    // 🟢 If jackpot exists, merge its data with defaults
+    const responseData = jackpot
+      ? {
+          ...defaultJackpot,
+          amount: jackpot.amount,
+          baseAmount: jackpot.baseAmount || 0,
+          enabled: jackpot.enabled,
+          lastUpdated: jackpot.lastUpdated || new Date(),
+          jackpotExists: true,
+          winnerCardId: jackpot.winnerCardId || null,
+          winnerMessage: jackpot.winnerMessage || null,
+          lastAwardedAmount: jackpot.drawAmount || 0,
+          lastAwardedTimestamp: jackpot.drawTimestamp || null,
+        }
+      : defaultJackpot;
+
+    // 🟢 Send response
     res.json({
-      message: "Jackpot retrieved successfully",
-      data: {
-        amount: jackpot.amount,
-        baseAmount: jackpot.baseAmount || 0,
-        enabled: jackpot.enabled,
-        lastUpdated: jackpot.lastUpdated || new Date(),
-        activeGames,
-        jackpotExists: true,
-        winnerCardId: jackpot.winnerCardId || null,
-        winnerMessage: jackpot.winnerMessage || null,
-        lastAwardedAmount: jackpot.drawAmount || 0,
-        lastAwardedTimestamp: jackpot.drawTimestamp || null,
-      },
+      message: jackpot ? "Jackpot retrieved successfully" : "No jackpot",
+      data: responseData,
     });
   } catch (error) {
     console.error("[getJackpot] Error:", error);
@@ -87,13 +109,11 @@ export const setJackpotAmount = async (req, res, next) => {
       jackpot = new Jackpot({
         cashierId,
         amount,
-        baseAmount: amount,
         enabled: true,
         lastUpdated: new Date(),
       });
     } else {
       jackpot.amount = amount;
-      jackpot.baseAmount = amount;
       jackpot.lastUpdated = new Date();
     }
 
@@ -138,35 +158,40 @@ export const setJackpotAmount = async (req, res, next) => {
 // Add contribution to existing jackpot
 export const addJackpotContribution = async (req, res, next) => {
   try {
+    // Get the cashierId from the authenticated user
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
     const { contributionAmount, gameId } = req.body;
 
+    // Validate contribution
     if (!contributionAmount || contributionAmount <= 0) {
       return res.status(400).json({
         message: "Valid contribution amount required",
       });
     }
 
+    // Find existing jackpot for cashier
     let jackpot = await Jackpot.findOne({ cashierId });
 
     if (!jackpot) {
+      // No jackpot exists yet, create new one
       jackpot = new Jackpot({
         cashierId,
         amount: contributionAmount,
-        baseAmount: contributionAmount,
         enabled: true,
         lastUpdated: new Date(),
       });
     } else {
-      const oldAmount = jackpot.amount;
+      // Jackpot exists, increment amount
       jackpot.amount += contributionAmount;
       jackpot.lastUpdated = new Date();
     }
 
+    // Save updated jackpot
     await jackpot.save();
 
+    // Log the contribution
     await JackpotLog.create({
       cashierId,
       amount: contributionAmount,
@@ -302,9 +327,9 @@ export const awardJackpot = async (req, res) => {
         throw new Error("cardId, drawAmount, and message are required");
       }
 
-      if (drawAmount > jackpot.baseAmount) {
+      if (drawAmount > jackpot.amount) {
         throw new Error(
-          `Draw amount cannot exceed total jackpot (${jackpot.baseAmount.toLocaleString()} BIRR)`
+          `Draw amount cannot exceed total jackpot (${jackpot.amount.toLocaleString()} BIRR)`
         );
       }
 
@@ -713,7 +738,6 @@ export const updateJackpot = async (req, res, next) => {
       const changeAmount = amount - currentAmount;
 
       update.amount = amount;
-      update.baseAmount = amount;
 
       logs.push({
         cashierId,
@@ -760,7 +784,6 @@ export const updateJackpot = async (req, res, next) => {
       message: "Jackpot updated successfully",
       data: {
         amount: jackpot.amount,
-        baseAmount: jackpot.baseAmount,
         enabled: jackpot.enabled,
         lastUpdated: jackpot.lastUpdated,
       },
