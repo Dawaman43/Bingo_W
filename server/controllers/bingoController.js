@@ -1013,6 +1013,7 @@ const detectLateCallForCurrentPattern = async (
 export const finishGame = async (req, res) => {
   const gameId = req.params.id;
 
+  // Helper to log safely without throwing
   const safeLog = async (logData) => {
     try {
       await GameLog.create(logData);
@@ -1022,15 +1023,10 @@ export const finishGame = async (req, res) => {
   };
 
   try {
-    // ✅ Get cashierId safely
-    try {
-      await getCashierIdFromUser(req, res, () => {});
-    } catch (err) {
-      console.error("[finishGame] Failed to get cashierId:", err.message);
-    }
-    const cashierId = req.cashierId;
+    // ✅ Get cashierId directly from token payload
+    const cashierId = req.user?.id;
     if (!cashierId) {
-      console.warn(`[finishGame] Missing cashierId for game ${gameId}`);
+      console.warn(`[finishGame] cashierId missing for game ${gameId}`);
     }
 
     // ✅ Validate gameId
@@ -1041,21 +1037,20 @@ export const finishGame = async (req, res) => {
         status: "failed",
         details: { error: "Invalid game ID format" },
       });
-      return res
-        .status(400)
-        .json({
-          message: "Invalid game ID format",
-          errorCode: "INVALID_GAME_ID",
-        });
+      return res.status(400).json({
+        message: "Invalid game ID format",
+        errorCode: "INVALID_GAME_ID",
+      });
     }
 
-    // ✅ Find game safely
+    // ✅ Find game
     let game;
     try {
       game = await Game.findOne({ _id: gameId, cashierId });
     } catch (err) {
       console.error("[finishGame] Error finding game:", err.message);
     }
+
     if (!game) {
       await safeLog({
         gameId,
@@ -1063,12 +1058,10 @@ export const finishGame = async (req, res) => {
         status: "failed",
         details: { error: "Game not found or unauthorized" },
       });
-      return res
-        .status(404)
-        .json({
-          message: "Game not found or you are not authorized to access it",
-          errorCode: "GAME_NOT_FOUND",
-        });
+      return res.status(404).json({
+        message: "Game not found or you are not authorized to access it",
+        errorCode: "GAME_NOT_FOUND",
+      });
     }
 
     // ✅ Check game status
@@ -1079,45 +1072,44 @@ export const finishGame = async (req, res) => {
         status: "failed",
         details: { error: "Game not active or paused", status: game.status },
       });
-      return res
-        .status(400)
-        .json({
-          message: "Game is not active or paused",
-          errorCode: "GAME_NOT_ACTIVE_OR_PAUSED",
-        });
+      return res.status(400).json({
+        message: "Game is not active or paused",
+        errorCode: "GAME_NOT_ACTIVE_OR_PAUSED",
+      });
     }
 
     // ✅ Update game status
     game.status = "completed";
 
-    // ✅ Jackpot handling (fully safe)
+    // ✅ Handle jackpot safely
     if (game.jackpotEnabled && game.winner) {
       try {
         if (!cashierId) throw new Error("Missing cashierId for jackpot");
+
         const jackpot = await Jackpot.findOne({ cashierId });
         if (jackpot) {
           jackpot.amount = (jackpot.amount ?? 0) + (game.potentialJackpot ?? 0);
+
           try {
             await jackpot.save();
           } catch (err) {
-            console.error(
-              `[finishGame] Jackpot save failed for game ${gameId}:`,
-              err.message
-            );
+            console.error(`[finishGame] Jackpot save failed:`, err.message);
           }
 
-          try {
-            await JackpotLog.create({
-              cashierId,
-              amount: game.potentialJackpot ?? 0,
-              reason: "Game contribution",
-              gameId,
-            });
-          } catch (err) {
-            console.error(
-              `[finishGame] JackpotLog creation failed for game ${gameId}:`,
-              err.message
-            );
+          if (cashierId) {
+            try {
+              await JackpotLog.create({
+                cashierId,
+                amount: game.potentialJackpot ?? 0,
+                reason: "Game contribution",
+                gameId,
+              });
+            } catch (err) {
+              console.error(
+                `[finishGame] JackpotLog creation failed:`,
+                err.message
+              );
+            }
           }
         } else {
           console.warn(
@@ -1125,21 +1117,15 @@ export const finishGame = async (req, res) => {
           );
         }
       } catch (err) {
-        console.error(
-          `[finishGame] Jackpot processing error for game ${gameId}:`,
-          err.message
-        );
+        console.error(`[finishGame] Jackpot processing error:`, err.message);
       }
     }
 
-    // ✅ Save completed game safely
+    // ✅ Save completed game
     try {
       await game.save();
     } catch (err) {
-      console.error(
-        `[finishGame] Game save failed for game ${gameId}:`,
-        err.message
-      );
+      console.error(`[finishGame] Game save failed:`, err.message);
     }
 
     // ✅ Log success
@@ -1157,7 +1143,7 @@ export const finishGame = async (req, res) => {
       },
     });
 
-    // ✅ Respond with JSON
+    // ✅ Respond
     res.json({
       message: "Game completed successfully",
       game: {
