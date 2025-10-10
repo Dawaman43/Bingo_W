@@ -157,20 +157,24 @@ export const setJackpotAmount = async (req, res, next) => {
 // Add contribution to existing jackpot
 export const addJackpotContribution = async (req, res, next) => {
   try {
+    // Get the cashierId from the authenticated user
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
     const { contributionAmount, gameId } = req.body;
 
+    // Validate contribution
     if (!contributionAmount || contributionAmount <= 0) {
       return res.status(400).json({
         message: "Valid contribution amount required",
       });
     }
 
+    // Find existing jackpot for cashier
     let jackpot = await Jackpot.findOne({ cashierId });
 
     if (!jackpot) {
+      // No jackpot exists yet, create new one
       jackpot = new Jackpot({
         cashierId,
         amount: contributionAmount,
@@ -179,14 +183,16 @@ export const addJackpotContribution = async (req, res, next) => {
         lastUpdated: new Date(),
       });
     } else {
-      const oldAmount = jackpot.amount;
+      // Jackpot exists, increment both amount and baseAmount
       jackpot.amount += contributionAmount;
-      jackpot.baseAmount += contributionAmount; // <-- add to baseAmount as well
+      jackpot.baseAmount += contributionAmount; // <-- update baseAmount too
       jackpot.lastUpdated = new Date();
     }
 
+    // Save updated jackpot
     await jackpot.save();
 
+    // Log the contribution
     await JackpotLog.create({
       cashierId,
       amount: contributionAmount,
@@ -195,7 +201,7 @@ export const addJackpotContribution = async (req, res, next) => {
     });
 
     console.log(
-      `[addJackpotContribution] Added ${contributionAmount} to jackpot. New total: ${jackpot.amount}`
+      `[addJackpotContribution] Added ${contributionAmount} to jackpot. New total: ${jackpot.amount}, baseAmount: ${jackpot.baseAmount}`
     );
 
     res.json({
@@ -204,6 +210,7 @@ export const addJackpotContribution = async (req, res, next) => {
         contributionAmount,
         previousAmount: jackpot.amount - contributionAmount,
         newTotal: jackpot.amount,
+        newBaseAmount: jackpot.baseAmount,
       },
     });
   } catch (error) {
