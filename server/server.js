@@ -20,22 +20,24 @@ await connectDB();
 // Middleware
 app.use(
   cors({
-    origin: "https://jokerbingo.xyz", // Frontend origin
-    credentials: true, // Allow credentials
+    origin: "https://jokerbingo.xyz",
+    credentials: true,
   })
 );
-
 app.use(express.json());
-// Disk usage
-const getDiskUsage = () =>
+
+// === Resource monitoring helpers ===
+
+// Container disk usage (actual app folder size)
+const getContainerDiskUsage = () =>
   new Promise((resolve, reject) => {
-    exec("df -h /", (err, stdout) => {
+    exec("du -sh .", (err, stdout) => {
       if (err) return reject(err);
-      resolve(stdout);
+      resolve(stdout.trim());
     });
   });
 
-// CPU usage
+// CPU usage per core
 const getCpuUsage = () => {
   const cpus = os.cpus();
   return cpus.map((cpu, index) => {
@@ -76,23 +78,21 @@ const getBandwidthUsage = () =>
     });
   });
 
+// === Routes ===
+
 // Test route
 app.get("/", (req, res) => res.send("Server is running"));
 
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/games", gameRoutes);
-app.use("/api/sounds", soundRoutes);
+// Resource monitoring endpoint
 app.get("/resources", async (req, res) => {
   try {
-    const disk = await getDiskUsage();
+    const disk = await getContainerDiskUsage();
     const cpu = getCpuUsage();
     const memory = getMemoryUsage();
     const bandwidth = await getBandwidthUsage();
 
     res.json({
-      diskUsage: disk,
+      containerDiskUsage: disk,
       cpuUsage: cpu,
       memoryUsage: memory,
       bandwidthUsage: bandwidth,
@@ -104,11 +104,15 @@ app.get("/resources", async (req, res) => {
   }
 });
 
-// Create HTTP server and initialize Socket.io
+// API routes
+app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/games", gameRoutes);
+app.use("/api/sounds", soundRoutes);
+
+// === HTTP server + Socket.io ===
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
-
-// Initialize Socket.io with the HTTP server
 initSocket(server);
 
 // Start server
