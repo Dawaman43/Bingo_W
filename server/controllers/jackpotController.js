@@ -181,6 +181,7 @@ export const addJackpotContribution = async (req, res, next) => {
     } else {
       const oldAmount = jackpot.amount;
       jackpot.amount += contributionAmount;
+      jackpot.baseAmount += contributionAmount; // <-- add to baseAmount as well
       jackpot.lastUpdated = new Date();
     }
 
