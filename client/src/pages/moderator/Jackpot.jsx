@@ -42,23 +42,27 @@ const JackpotManager = () => {
 
       const jackpotData = await moderatorService.getJackpot();
       console.log("[JackpotManager] Fetched jackpot:", jackpotData);
-      // Fix: No adjustment needed for baseAmount (backend handles deductions). Preserve fetched values.
-      const correctedJackpot = {
-        ...jackpotData,
-        amount: Math.max(0, jackpotData.amount),
-        baseAmount: Math.max(0, jackpotData.baseAmount),
-      };
-      setJackpot(correctedJackpot);
-      setEnabled(correctedJackpot.enabled);
-      if (correctedJackpot.winnerCardId) {
-        setAwardCardId(correctedJackpot.winnerCardId);
-        setSelectedWinnerCard({
-          id: parseInt(correctedJackpot.winnerCardId),
-          number: parseInt(correctedJackpot.winnerCardId),
-        });
+      if (!jackpotData) {
+        setJackpot(null);
       } else {
-        setAwardCardId("");
-        setSelectedWinnerCard(null);
+        // Fix: No adjustment needed for baseAmount (backend handles deductions). Preserve fetched values.
+        const correctedJackpot = {
+          ...jackpotData,
+          amount: Math.max(0, jackpotData.amount),
+          baseAmount: Math.max(0, jackpotData.baseAmount),
+        };
+        setJackpot(correctedJackpot);
+        setEnabled(correctedJackpot.enabled);
+        if (correctedJackpot.winnerCardId) {
+          setAwardCardId(correctedJackpot.winnerCardId);
+          setSelectedWinnerCard({
+            id: parseInt(correctedJackpot.winnerCardId),
+            number: parseInt(correctedJackpot.winnerCardId),
+          });
+        } else {
+          setAwardCardId("");
+          setSelectedWinnerCard(null);
+        }
       }
     } catch (err) {
       console.error("[JackpotManager] Fetch error:", err);
@@ -80,13 +84,14 @@ const JackpotManager = () => {
     fetchData();
   }, []);
 
-  // Add amount to current jackpot
+  // Add amount to current jackpot or set initial
   const handleAddAmount = async () => {
     const amountToAdd = parseFloat(addAmount);
     const gameId = addGameId ? parseInt(addGameId) : undefined;
+    const isInitial = !jackpot;
 
     if (!addAmount || isNaN(amountToAdd) || amountToAdd <= 0) {
-      setError("Please enter a valid positive amount to add.");
+      setError("Please enter a valid positive amount.");
       return;
     }
 
@@ -100,22 +105,19 @@ const JackpotManager = () => {
       setError("");
       setSuccess("");
       // Fix: Pass new total (amount + add) to set the accumulated total.
-      const result = await moderatorService.setJackpotAmount(
-        jackpot.amount + amountToAdd,
-        gameId
-      );
+      const newTotal = isInitial ? amountToAdd : jackpot.amount + amountToAdd;
+      const result = await moderatorService.setJackpotAmount(newTotal, gameId);
       console.log("[JackpotManager] Add amount result:", result);
-      setJackpot({
-        ...jackpot,
-        amount: Math.max(0, result.newAmount),
-        baseAmount: jackpot.baseAmount + amountToAdd, // Add to available too (no deduction).
-      });
       setAddAmount("");
       setAddGameId(""); // Clear gameId input
       setSuccess(
-        `Added ${amountToAdd.toLocaleString()} BIRR to jackpot!${
-          gameId !== undefined ? ` (Game #${gameId})` : ""
-        } New total: ${Math.max(0, result.newAmount).toLocaleString()} BIRR`
+        isInitial
+          ? `Initial jackpot set to ${amountToAdd.toLocaleString()} BIRR${
+              gameId !== undefined ? ` (Game #${gameId})` : ""
+            }`
+          : `Added ${amountToAdd.toLocaleString()} BIRR to jackpot!${
+              gameId !== undefined ? ` (Game #${gameId})` : ""
+            } New total: ${Math.max(0, result.newAmount).toLocaleString()} BIRR`
       );
       setTimeout(fetchData, 500); // Refresh history
     } catch (err) {
@@ -544,7 +546,71 @@ const JackpotManager = () => {
           </div>
         )}
 
-        {jackpot && (
+        {!jackpot ? (
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
+            <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center">
+              <span className="mr-2">🚀</span>
+              Initialize Jackpot
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              No jackpot data available. Set the initial amount to start
+              managing the jackpot.
+            </p>
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Initial Amount
+              </label>
+              <div className="space-y-3">
+                <div className="flex space-x-2">
+                  <input
+                    type="number"
+                    value={addAmount}
+                    onChange={(e) => setAddAmount(e.target.value)}
+                    placeholder="Enter initial amount"
+                    className="flex-1 p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 min-w-0"
+                    disabled={updating}
+                    min="0.01"
+                    step="0.01"
+                  />
+                  <input
+                    type="number"
+                    value={addGameId}
+                    onChange={(e) => setAddGameId(e.target.value)}
+                    placeholder="Game number (optional)"
+                    className="w-32 p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    disabled={updating}
+                    min="1"
+                  />
+                </div>
+                <button
+                  onClick={handleAddAmount}
+                  disabled={
+                    updating || !addAmount || parseFloat(addAmount) <= 0
+                  }
+                  className={`w-full px-4 py-3 rounded-lg text-white font-medium transition-all duration-200 ${
+                    updating || !addAmount || parseFloat(addAmount) <= 0
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-green-600 hover:bg-green-700"
+                  }`}
+                >
+                  {updating ? "Setting..." : "Set Initial Amount"}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {addAmount && parseFloat(addAmount) > 0 && (
+                  <span className="text-green-600 dark:text-green-400">
+                    New Total: {parseFloat(addAmount).toLocaleString()} BIRR
+                  </span>
+                )}
+                {addGameId && (
+                  <span className="text-blue-600 dark:text-blue-400">
+                    {`, Game #${addGameId}`}
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+        ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300">
               <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center">
