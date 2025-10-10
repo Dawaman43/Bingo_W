@@ -563,7 +563,6 @@ const CashierReport = () => {
     const previousGamesStatusData = { ...gamesStatusData };
     const targetGame = { ...reportData.games[gameIndex] };
 
-    // Set loading for this game/action
     setControlLoading((prev) => ({ ...prev, [`${gameId}-${action}`]: true }));
 
     try {
@@ -571,91 +570,75 @@ const CashierReport = () => {
       let apiCall;
       let successMessage;
 
-      if (action === "play") {
-        if (targetGame.status === "pending") {
+      switch (action) {
+        case "play":
           newStatus = "active";
           apiCall = () => gameService.startGame(gameId);
-          successMessage = "Game started successfully!";
-        } else if (targetGame.status === "paused") {
-          newStatus = "active";
-          apiCall = () => gameService.startGame(gameId); // Reuse start to resume
-          successMessage = "Game resumed successfully!";
-        }
-      } else if (action === "pause") {
-        newStatus = "paused";
-        apiCall = () => gameService.pauseGame(gameId);
-        successMessage = "Game paused successfully!";
-      } else if (action === "stop") {
-        newStatus = "completed";
-        apiCall = () => gameService.finishGame(gameId);
-        successMessage = "Game stopped and completed successfully!";
+          successMessage =
+            targetGame.status === "paused"
+              ? "Game resumed successfully!"
+              : "Game started successfully!";
+          break;
+        case "pause":
+          newStatus = "paused";
+          apiCall = () => gameService.pauseGame(gameId);
+          successMessage = "Game paused successfully!";
+          break;
+        case "stop":
+          newStatus = "completed";
+          apiCall = () => gameService.finishGame(gameId);
+          successMessage = "Game stopped and completed successfully!";
+          break;
+        default:
+          throw new Error(
+            `Invalid action: ${action} for status: ${targetGame.status}`
+          );
       }
 
-      if (!newStatus || !apiCall) {
-        throw new Error(
-          `Invalid action: ${action} for status: ${targetGame.status}`
-        );
-      }
-
-      // Optimistic update
-      setReportData((prev) => {
-        const updatedGames = prev.games.map((game, idx) =>
-          idx === gameIndex ? { ...game, status: newStatus } : game
-        );
-        const newActiveGames = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        return {
-          ...prev,
-          games: updatedGames,
-          activeGames: newActiveGames,
-        };
-      });
-
+      // Optimistic UI update
+      const updatedGames = reportData.games.map((g, idx) =>
+        idx === gameIndex ? { ...g, status: newStatus } : g
+      );
+      setReportData((prev) => ({
+        ...prev,
+        games: updatedGames,
+        activeGames: updatedGames.filter((g) =>
+          ["active", "pending"].includes(g.status)
+        ).length,
+      }));
       setSummaryStats((prev) => ({
         ...prev,
-        activeGames: reportData.games
-          .map((game, idx) =>
-            idx === gameIndex ? { ...game, status: newStatus } : game
-          )
-          .filter((g) => g.status === "active" || g.status === "pending")
+        activeGames: updatedGames.filter((g) =>
+          ["active", "pending"].includes(g.status)
+        ).length,
+        completedGames: updatedGames.filter((g) => g.status === "completed")
           .length,
-        completedGames: reportData.games
-          .map((game, idx) =>
-            idx === gameIndex ? { ...game, status: newStatus } : game
-          )
-          .filter((g) => g.status === "completed").length,
+      }));
+      setGamesStatusData((prev) => ({
+        ...prev,
+        datasets: [
+          {
+            ...prev.datasets[0],
+            data: [
+              updatedGames.filter((g) =>
+                ["active", "pending"].includes(g.status)
+              ).length,
+              updatedGames.filter((g) => g.status === "completed").length,
+            ],
+          },
+        ],
       }));
 
-      setGamesStatusData((prev) => {
-        const updatedGames = reportData.games.map((game, idx) =>
-          idx === gameIndex ? { ...game, status: newStatus } : game
-        );
-        const newActive = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        const newFinished = updatedGames.filter(
-          (g) => g.status === "completed"
-        ).length;
-        return {
-          ...prev,
-          datasets: [{ ...prev.datasets[0], data: [newActive, newFinished] }],
-        };
-      });
-
       // API call
-      const response = await apiCall();
-      console.log(`[handleGameControl] ${action} response:`, response);
+      const result = await apiCall();
+      console.log(`[handleGameControl] ${action} response:`, result);
 
-      // Handle jackpot on stop (mirror SelectCard finalization)
+      // Handle jackpot after stop
       if (action === "stop" && targetGame.jackpotEnabled) {
         try {
-          const jackpotContribution = parseFloat(targetGame.betAmount) || 0;
-          if (jackpotContribution > 0) {
-            await gameService.addJackpotContribution(
-              gameId,
-              jackpotContribution
-            );
+          const contribution = parseFloat(targetGame.betAmount) || 0;
+          if (contribution > 0) {
+            await gameService.addJackpotContribution(gameId, contribution);
             const updatedJackpot = await gameService.getJackpot(
               getCurrentUser().id
             );
@@ -666,31 +649,32 @@ const CashierReport = () => {
           }
         } catch (jackpotError) {
           console.warn(
-            "[handleGameControl] Jackpot finalization failed:",
-            jackpotError.message
+            `[handleGameControl] Jackpot finalization failed: ${jackpotError.message}`
           );
         }
       }
 
-      // Re-sync charts after success
-      updateCharts(
-        reportData.games.map((game, idx) =>
-          idx === gameIndex ? { ...game, status: newStatus } : game
-        )
-      );
+      // Sync charts
+      updateCharts(updatedGames);
 
-      alert(successMessage); // Or use a toast/alert component
-      console.log(`Game ${action}ed successfully: ${gameId}`);
+      // Show success
+      alert(successMessage);
     } catch (error) {
+      // Use structured error from API if exists
+      const errMessage =
+        error.response?.data?.message || error.message || "Unknown error";
+
       console.error(
         `[handleGameControl] Error ${action}ing game ${gameId}:`,
-        error
+        errMessage
       );
-      // Rollback
+
+      // Rollback UI
       setReportData(previousReportData);
       setSummaryStats(previousSummaryStats);
       setGamesStatusData(previousGamesStatusData);
-      alert(`Failed to ${action} game: ${error.message || "Unknown error"}`);
+
+      alert(`Failed to ${action} game: ${errMessage}`);
     } finally {
       setControlLoading((prev) => {
         const newState = { ...prev };

@@ -341,33 +341,38 @@ const gameService = {
   },
 
   finishGame: async (gameId, moderatorCardId = null) => {
+    if (!gameId) throw new Error("Game ID is required");
+
+    console.log(
+      `gameService.finishGame - Finishing game ${gameId}, moderatorCardId: ${moderatorCardId}`
+    );
+
     try {
-      if (!gameId) throw new Error("Game ID is required");
-      console.log(
-        `gameService.finishGame - Finishing game ${gameId}, moderatorCardId: ${moderatorCardId}`
-      );
       const response = await API.post(`/games/${gameId}/finish`, {
         moderatorCardId,
       });
+
+      // Log full response safely
       console.log(
         "gameService.finishGame full response:",
-        JSON.stringify(response, null, 2)
+        response?.data ? JSON.stringify(response.data, null, 2) : response
       );
-      console.log(
-        "gameService.finishGame response.data.data:",
-        response.data.data
-      );
-      return response.data.data;
+
+      // Return game object directly
+      return response.data?.game || null;
     } catch (error) {
+      // Safely handle errors whether JSON exists or not
+      const errData = error.response?.data || {
+        message: error.message || "Unknown error",
+      };
+
       console.error(
         "gameService.finishGame error:",
-        JSON.stringify(
-          error.response?.data || { message: error.message },
-          null,
-          2
-        )
+        JSON.stringify(errData, null, 2)
       );
-      throw error;
+
+      // Throw a more structured error for the UI
+      throw new Error(errData.message || "Failed to finish game");
     }
   },
 

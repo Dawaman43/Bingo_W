@@ -1010,17 +1010,26 @@ const detectLateCallForCurrentPattern = async (
   }
 };
 // Other functions (finishGame, pauseGame, updateGameStatus) remain unchanged
-export const finishGame = async (req, res, next) => {
-  try {
-    const gameId = req.params.id;
+export const finishGame = async (req, res) => {
+  const gameId = req.params.id;
 
+  // Helper to safely log without breaking main flow
+  const safeLog = async (logData) => {
+    try {
+      await GameLog.create(logData);
+    } catch (err) {
+      console.error("Failed to log game action:", err);
+    }
+  };
+
+  try {
     // ✅ Get cashierId safely
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    // ✅ Validate ID
+    // ✅ Validate gameId format
     if (!mongoose.isValidObjectId(gameId)) {
-      await GameLog.create({
+      await safeLog({
         gameId,
         action: "finishGame",
         status: "failed",
@@ -1032,10 +1041,10 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
-    // ✅ Find game by ID and cashier
+    // ✅ Find game
     const game = await Game.findOne({ _id: gameId, cashierId });
     if (!game) {
-      await GameLog.create({
+      await safeLog({
         gameId,
         action: "finishGame",
         status: "failed",
@@ -1047,9 +1056,9 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
-    // ✅ Check if game can be finished
-    if (game.status !== "active" && game.status !== "paused") {
-      await GameLog.create({
+    // ✅ Check game status
+    if (!["active", "paused"].includes(game.status)) {
+      await safeLog({
         gameId,
         action: "finishGame",
         status: "failed",
@@ -1064,21 +1073,25 @@ export const finishGame = async (req, res, next) => {
     // ✅ Update game status
     game.status = "completed";
 
-    // ✅ Handle jackpot updates safely
+    // ✅ Handle jackpot safely
     if (game.jackpotEnabled && game.winner) {
-      const jackpot = await Jackpot.findOne({ cashierId });
+      try {
+        const jackpot = await Jackpot.findOne({ cashierId });
+        if (jackpot) {
+          jackpot.amount = (jackpot.amount || 0) + (game.potentialJackpot || 0);
+          await jackpot.save();
 
-      if (jackpot) {
-        // Log jackpot contribution correctly with cashierId
-        await JackpotLog.create({
-          cashierId,
-          amount: game.potentialJackpot,
-          reason: "Game contribution",
-          gameId,
-        });
-
-        jackpot.amount += game.potentialJackpot;
-        await jackpot.save();
+          // Log jackpot contribution
+          await JackpotLog.create({
+            cashierId,
+            amount: game.potentialJackpot || 0,
+            reason: "Game contribution",
+            gameId,
+          });
+        }
+      } catch (jackpotErr) {
+        console.error("Jackpot handling failed:", jackpotErr);
+        // Do NOT throw, continue finishing the game
       }
     }
 
@@ -1086,43 +1099,42 @@ export const finishGame = async (req, res, next) => {
     await game.save();
 
     // ✅ Log success
-    await GameLog.create({
+    await safeLog({
       gameId,
       action: "gameCompleted",
       status: "success",
       details: {
         gameNumber: game.gameNumber,
-        winnerCardId: game.winner?.cardId,
-        prize: game.winner?.prize,
-        moderatorWinnerCardId: game.moderatorWinnerCardId,
-        winnerCardNumbers: game.winnerCardNumbers,
-        selectedWinnerNumbers: game.selectedWinnerNumbers,
+        winnerCardId: game.winner?.cardId || null,
+        prize: game.winner?.prize || null,
+        moderatorWinnerCardId: game.moderatorWinnerCardId || null,
+        winnerCardNumbers: game.winnerCardNumbers || [],
+        selectedWinnerNumbers: game.selectedWinnerNumbers || [],
       },
     });
 
-    // ✅ Send response
+    // ✅ Respond with game data
     res.json({
       message: "Game completed successfully",
       game: {
         ...game.toObject(),
-        winnerCardNumbers: game.winnerCardNumbers,
-        selectedWinnerNumbers: game.selectedWinnerNumbers,
+        winnerCardNumbers: game.winnerCardNumbers || [],
+        selectedWinnerNumbers: game.selectedWinnerNumbers || [],
       },
     });
   } catch (error) {
-    console.error("[finishGame] Error in finishGame:", error);
+    console.error("[finishGame] Unexpected error:", error);
 
-    // Log failure
-    await GameLog.create({
-      gameId: req.params.id,
+    await safeLog({
+      gameId,
       action: "finishGame",
       status: "failed",
-      details: { error: error.message || "Internal server error" },
+      details: { error: error.message || "Unknown error" },
     });
 
     res.status(500).json({
       message: "Internal server error",
-      error: error.message,
+      error: error.message || "Unknown error",
     });
   }
 };
