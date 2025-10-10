@@ -459,13 +459,6 @@ const BingoModals = ({
             >
               Close
             </button>
-            <button
-              className="bg-[#e9744c] text-white border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:bg-[#f0854c]"
-              onClick={handleStartNextGame}
-              disabled={isLoading}
-            >
-              {isLoading ? "Starting..." : "Start Next Game"}
-            </button>
           </div>
         </div>
       )}

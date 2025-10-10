@@ -7,6 +7,8 @@ import User from "../models/User.js";
 import FutureWinner from "../models/FutureWinner.js";
 import { validationResult } from "express-validator";
 import mongoose from "mongoose";
+// Add contribution to existing jackpot
+import { Types } from "mongoose";
 
 // Get current jackpot
 export const getJackpot = async (req, res) => {
@@ -155,7 +157,6 @@ export const setJackpotAmount = async (req, res, next) => {
   }
 };
 
-// Add contribution to existing jackpot
 export const addJackpotContribution = async (req, res, next) => {
   try {
     // Get the cashierId from the authenticated user
@@ -169,6 +170,30 @@ export const addJackpotContribution = async (req, res, next) => {
       return res.status(400).json({
         message: "Valid contribution amount required",
       });
+    }
+
+    let gameNumber = null;
+    let gameObjectId = null;
+
+    // Validate and fetch game if gameId provided
+    if (gameId) {
+      if (typeof gameId !== "string" && typeof gameId !== "object") {
+        return res.status(400).json({
+          message: "gameId must be a valid string or ObjectId",
+        });
+      }
+
+      const gameQuery = { _id: new Types.ObjectId(gameId), cashierId };
+      const game = await Game.findOne(gameQuery);
+
+      if (!game) {
+        return res.status(404).json({
+          message: "Game not found for this cashier",
+        });
+      }
+
+      gameNumber = game.gameNumber;
+      gameObjectId = game._id;
     }
 
     // Find existing jackpot for cashier
@@ -195,8 +220,8 @@ export const addJackpotContribution = async (req, res, next) => {
     await JackpotLog.create({
       cashierId,
       amount: contributionAmount,
-      reason: `Game contribution added - Game ${gameId}`,
-      gameId,
+      reason: `Game contribution added - Game ${gameNumber || gameId}`,
+      gameId: gameObjectId,
     });
 
     console.log(
