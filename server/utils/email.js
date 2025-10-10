@@ -1,47 +1,39 @@
-import nodemailer from "nodemailer";
+import fetch from "node-fetch";
 
-export const sendEmail = async (to, subject, text) => {
+export const sendOtpEmail = async (to, otp) => {
+  const text = `Your Joker Bingo OTP code is: ${otp}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; background: #f8f8f8;">
+      <div style="max-width: 600px; margin: auto; background: #fff; padding: 20px; border-radius: 8px;">
+        <h2 style="color: #ff4081; text-align: center;">Joker Bingo OTP</h2>
+        <p style="font-size: 18px;">Your OTP code is: <b>${otp}</b></p>
+        <p style="font-size: 14px; color: #777;">This code expires in 10 minutes.</p>
+      </div>
+    </div>
+  `;
+
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
-      secure: false, // STARTTLS
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": process.env.BREVO_API_KEY,
       },
+      body: JSON.stringify({
+        sender: { name: "Joker Bingo", email: process.env.SENDER_EMAIL },
+        to: [{ email: to }],
+        subject: "Your Joker Bingo OTP Code",
+        textContent: text,
+        htmlContent: html,
+      }),
     });
 
-    // Verify connection
-    await transporter.verify();
-    console.log("✅ SMTP ready");
-
-    // Send email with HTML styling
-    const info = await transporter.sendMail({
-      from: `"Joker Bingo" <${process.env.SENDER_EMAIL}>`, // Cool sender name
-      to,
-      subject,
-      text, // fallback text for email clients that don’t support HTML
-      html: `
-        <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.5; padding: 20px; background-color: #f8f8f8;">
-          <div style="max-width: 600px; margin: auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-            <div style="background-color: #ff4081; color: white; text-align: center; padding: 20px;">
-              <h1 style="margin: 0; font-size: 28px;">Joker Bingo</h1>
-            </div>
-            <div style="padding: 20px;">
-              <p>${text}</p>
-              <p style="margin-top: 20px; color: #777;">Good luck & have fun! 🎉</p>
-            </div>
-            <div style="background-color: #f1f1f1; padding: 10px; text-align: center; font-size: 12px; color: #999;">
-              &copy; ${new Date().getFullYear()} Joker Bingo. All rights reserved.
-            </div>
-          </div>
-        </div>
-      `,
-    });
-
-    console.log("✅ Email sent:", info.response);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Failed to send OTP email");
+    console.log("✅ OTP email sent:", data);
+    return data;
   } catch (err) {
-    console.error("❌ Error sending email:", err);
+    console.error("❌ Error sending OTP email:", err);
+    throw err;
   }
 };
