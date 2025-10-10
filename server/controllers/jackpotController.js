@@ -15,13 +15,32 @@ export const getJackpot = async (req, res) => {
     const cashierId = req.cashierId;
 
     const jackpot = await Jackpot.findOne({ cashierId });
-    if (!jackpot) return res.status(404).json({ message: "Jackpot not found" });
 
     const activeGames = await Game.countDocuments({
       cashierId,
       isActive: true,
     });
 
+    // 🟢 If no jackpot, respond simply
+    if (!jackpot) {
+      return res.json({
+        message: "No jackpot",
+        data: {
+          amount: 0,
+          baseAmount: 0,
+          enabled: false,
+          lastUpdated: new Date(),
+          activeGames,
+          jackpotExists: false,
+          winnerCardId: null,
+          winnerMessage: null,
+          lastAwardedAmount: 0,
+          lastAwardedTimestamp: null,
+        },
+      });
+    }
+
+    // 🟢 If jackpot exists, respond normally
     res.json({
       message: "Jackpot retrieved successfully",
       data: {
