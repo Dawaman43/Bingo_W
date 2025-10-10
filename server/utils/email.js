@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 
-export const sendOtpEmail = async (to, otp) => {
+export const sendEmail = async (to, otp) => {
   const text = `Your Joker Bingo OTP code is: ${otp}`;
   const html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; background: #f8f8f8;">
