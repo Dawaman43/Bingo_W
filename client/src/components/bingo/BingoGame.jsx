@@ -1224,11 +1224,6 @@ const BingoGame = () => {
     }
   };
 
-  const handleStartNextGame = () => {
-    // Removed: just finish the game
-    handleFinish();
-  };
-
   const handleShuffle = () => {
     SoundService.playSound("shuffle");
   };
