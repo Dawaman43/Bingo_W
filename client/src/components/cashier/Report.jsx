@@ -238,8 +238,18 @@ const CashierReport = () => {
       });
       updateSummaryStats(data);
       updateCharts(data.games);
-      const jackpotData = await gameService.getJackpot(cashierId); // Pass cashierId
-      setCurrentJackpot(jackpotData.amount || 0);
+
+      // Handle jackpot fetch separately to avoid failing the entire report
+      try {
+        const jackpotData = await gameService.getJackpot(cashierId);
+        setCurrentJackpot(jackpotData.amount || 0);
+      } catch (jackpotError) {
+        console.warn(
+          "[fetchReportData] No jackpot found, setting to 0 Birr:",
+          jackpotError.message
+        );
+        setCurrentJackpot(0);
+      }
     } catch (error) {
       console.error("[fetchReportData] Error fetching report:", error);
       setError(error.message || "Failed to fetch report data");
