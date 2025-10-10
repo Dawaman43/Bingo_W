@@ -92,6 +92,9 @@ const CashierReport = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentJackpot, setCurrentJackpot] = useState(0);
   const [controlLoading, setControlLoading] = useState({}); // Per-game loading
+  const [showAlert, setShowAlert] = useState(false);
+  const [alertMessage, setAlertMessage] = useState("");
+  const [alertType, setAlertType] = useState("info");
   const [gamesStatusData, setGamesStatusData] = useState({
     labels: ["Active/Pending", "Finished"],
     datasets: [
@@ -197,6 +200,16 @@ const CashierReport = () => {
     totalPotentialJackpot: 0,
     totalPrizesAwarded: 0,
   });
+
+  const showPopup = (message, type = "info") => {
+    setAlertMessage(message);
+    setAlertType(type);
+    setShowAlert(true);
+  };
+
+  const hidePopup = () => {
+    setShowAlert(false);
+  };
 
   useEffect(() => {
     fetchReportData();
@@ -554,7 +567,7 @@ const CashierReport = () => {
   const handleGameControl = async (gameId, action) => {
     const gameIndex = reportData.games.findIndex((g) => g._id === gameId);
     if (gameIndex === -1) {
-      alert("Game not found");
+      showPopup("Game not found", "error");
       return;
     }
 
@@ -658,7 +671,7 @@ const CashierReport = () => {
       updateCharts(updatedGames);
 
       // Show success
-      alert(successMessage);
+      showPopup(successMessage, "success");
     } catch (error) {
       // Use structured error from API if exists
       const errMessage =
@@ -674,7 +687,7 @@ const CashierReport = () => {
       setSummaryStats(previousSummaryStats);
       setGamesStatusData(previousGamesStatusData);
 
-      alert(`Failed to ${action} game: ${errMessage}`);
+      showPopup(`Failed to ${action} game: ${errMessage}`, "error");
     } finally {
       setControlLoading((prev) => {
         const newState = { ...prev };
@@ -1084,6 +1097,38 @@ const CashierReport = () => {
             </div>
           </div>
         </div>
+
+        {/* Popup Modal */}
+        {showAlert && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+              <h3
+                className={`text-lg font-semibold mb-4 ${
+                  alertType === "success"
+                    ? "text-green-600 dark:text-green-400"
+                    : alertType === "error"
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-gray-900 dark:text-gray-100"
+                }`}
+              >
+                {alertType === "success"
+                  ? "Success"
+                  : alertType === "error"
+                  ? "Error"
+                  : "Notification"}
+              </h3>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">
+                {alertMessage}
+              </p>
+              <button
+                onClick={hidePopup}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </ErrorBoundary>
   );
