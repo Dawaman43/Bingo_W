@@ -91,6 +91,7 @@ const CashierReport = () => {
   });
   const [searchTerm, setSearchTerm] = useState("");
   const [currentJackpot, setCurrentJackpot] = useState(0);
+  const [controlLoading, setControlLoading] = useState({}); // Per-game loading
   const [gamesStatusData, setGamesStatusData] = useState({
     labels: ["Active/Pending", "Finished"],
     datasets: [
@@ -541,23 +542,55 @@ const CashierReport = () => {
   };
 
   const handleGameControl = async (gameId, action) => {
+    const gameIndex = reportData.games.findIndex((g) => g._id === gameId);
+    if (gameIndex === -1) {
+      alert("Game not found");
+      return;
+    }
+
     const previousReportData = { ...reportData };
     const previousSummaryStats = { ...summaryStats };
     const previousGamesStatusData = { ...gamesStatusData };
+    const targetGame = { ...reportData.games[gameIndex] };
+
+    // Set loading for this game/action
+    setControlLoading((prev) => ({ ...prev, [`${gameId}-${action}`]: true }));
 
     try {
       let newStatus;
+      let apiCall;
+      let successMessage;
+
       if (action === "play") {
-        newStatus = "active";
+        if (targetGame.status === "pending") {
+          newStatus = "active";
+          apiCall = () => gameService.startGame(gameId);
+          successMessage = "Game started successfully!";
+        } else if (targetGame.status === "paused") {
+          newStatus = "active";
+          apiCall = () => gameService.startGame(gameId); // Reuse start to resume
+          successMessage = "Game resumed successfully!";
+        }
       } else if (action === "pause") {
         newStatus = "paused";
+        apiCall = () => gameService.pauseGame(gameId);
+        successMessage = "Game paused successfully!";
       } else if (action === "stop") {
         newStatus = "completed";
+        apiCall = () => gameService.finishGame(gameId);
+        successMessage = "Game stopped and completed successfully!";
       }
 
+      if (!newStatus || !apiCall) {
+        throw new Error(
+          `Invalid action: ${action} for status: ${targetGame.status}`
+        );
+      }
+
+      // Optimistic update
       setReportData((prev) => {
-        const updatedGames = prev.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
+        const updatedGames = prev.games.map((game, idx) =>
+          idx === gameIndex ? { ...game, status: newStatus } : game
         );
         const newActiveGames = updatedGames.filter(
           (g) => g.status === "active" || g.status === "pending"
@@ -569,26 +602,24 @@ const CashierReport = () => {
         };
       });
 
-      setSummaryStats((prev) => {
-        const updatedGames = reportData.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
-        );
-        const newActive = updatedGames.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length;
-        const newCompleted = updatedGames.filter(
-          (g) => g.status === "completed"
-        ).length;
-        return {
-          ...prev,
-          activeGames: newActive,
-          completedGames: newCompleted,
-        };
-      });
+      setSummaryStats((prev) => ({
+        ...prev,
+        activeGames: reportData.games
+          .map((game, idx) =>
+            idx === gameIndex ? { ...game, status: newStatus } : game
+          )
+          .filter((g) => g.status === "active" || g.status === "pending")
+          .length,
+        completedGames: reportData.games
+          .map((game, idx) =>
+            idx === gameIndex ? { ...game, status: newStatus } : game
+          )
+          .filter((g) => g.status === "completed").length,
+      }));
 
       setGamesStatusData((prev) => {
-        const updatedGames = reportData.games.map((game) =>
-          game._id === gameId ? { ...game, status: newStatus } : game
+        const updatedGames = reportData.games.map((game, idx) =>
+          idx === gameIndex ? { ...game, status: newStatus } : game
         );
         const newActive = updatedGames.filter(
           (g) => g.status === "active" || g.status === "pending"
@@ -602,21 +633,60 @@ const CashierReport = () => {
         };
       });
 
-      if (action === "play") {
-        await gameService.startGame(gameId);
-      } else if (action === "pause") {
-        await gameService.pauseGame(gameId);
-      } else if (action === "stop") {
-        await gameService.finishGame(gameId);
+      // API call
+      const response = await apiCall();
+      console.log(`[handleGameControl] ${action} response:`, response);
+
+      // Handle jackpot on stop (mirror SelectCard finalization)
+      if (action === "stop" && targetGame.jackpotEnabled) {
+        try {
+          const jackpotContribution = parseFloat(targetGame.betAmount) || 0;
+          if (jackpotContribution > 0) {
+            await gameService.addJackpotContribution(
+              gameId,
+              jackpotContribution
+            );
+            const updatedJackpot = await gameService.getJackpot(
+              getCurrentUser().id
+            );
+            setCurrentJackpot(updatedJackpot.amount || currentJackpot);
+            console.log(
+              `[handleGameControl] Jackpot finalized: ${updatedJackpot.amount}`
+            );
+          }
+        } catch (jackpotError) {
+          console.warn(
+            "[handleGameControl] Jackpot finalization failed:",
+            jackpotError.message
+          );
+        }
       }
 
-      console.log(`Game ${action}ed successfully`);
+      // Re-sync charts after success
+      updateCharts(
+        reportData.games.map((game, idx) =>
+          idx === gameIndex ? { ...game, status: newStatus } : game
+        )
+      );
+
+      alert(successMessage); // Or use a toast/alert component
+      console.log(`Game ${action}ed successfully: ${gameId}`);
     } catch (error) {
-      console.error(`Error ${action}ing game:`, error);
+      console.error(
+        `[handleGameControl] Error ${action}ing game ${gameId}:`,
+        error
+      );
+      // Rollback
       setReportData(previousReportData);
       setSummaryStats(previousSummaryStats);
       setGamesStatusData(previousGamesStatusData);
       alert(`Failed to ${action} game: ${error.message || "Unknown error"}`);
+    } finally {
+      setControlLoading((prev) => {
+        const newState = { ...prev };
+        delete newState[`${gameId}-${action}`];
+        return newState;
+      });
     }
   };
 
@@ -626,6 +696,10 @@ const CashierReport = () => {
 
   const renderTableRow = (game, index) => {
     const houseFee = parseFloat(game.houseFee) || 0;
+    const isLoading =
+      controlLoading[`${game._id}-play`] ||
+      controlLoading[`${game._id}-pause`] ||
+      controlLoading[`${game._id}-stop`];
     return (
       <tr
         key={game._id || index}
@@ -672,6 +746,7 @@ const CashierReport = () => {
             <button
               onClick={() => handleViewGame(game._id)}
               className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs transition-colors"
+              disabled={isLoading}
             >
               View
             </button>
@@ -679,32 +754,31 @@ const CashierReport = () => {
               <>
                 <button
                   onClick={() => handleGameControl(game._id, "pause")}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                  disabled={isLoading}
                 >
-                  Pause
+                  {isLoading ? "..." : "Pause"}
                 </button>
                 <button
                   onClick={() => handleGameControl(game._id, "stop")}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                  disabled={isLoading}
                 >
-                  Stop
+                  {isLoading ? "..." : "Stop"}
                 </button>
               </>
             )}
-            {game.status === "pending" && (
+            {(game.status === "pending" || game.status === "paused") && (
               <button
                 onClick={() => handleGameControl(game._id, "play")}
-                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors disabled:opacity-50"
+                disabled={isLoading}
               >
-                Play
-              </button>
-            )}
-            {game.status === "paused" && (
-              <button
-                onClick={() => handleGameControl(game._id, "play")}
-                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs transition-colors"
-              >
-                Resume
+                {isLoading
+                  ? "..."
+                  : game.status === "paused"
+                  ? "Resume"
+                  : "Play"}
               </button>
             )}
           </div>

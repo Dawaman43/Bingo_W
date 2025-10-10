@@ -317,6 +317,28 @@ const gameService = {
       throw error;
     }
   },
+  pauseGame: async (gameId) => {
+    try {
+      if (!gameId) throw new Error("Game ID is required");
+
+      console.log(`gameService.pauseGame - Pausing game ${gameId}`);
+
+      const response = await API.post(`/games/${gameId}/pause`);
+      console.log("gameService.pauseGame response:", response.data);
+
+      return response.data;
+    } catch (error) {
+      console.error(
+        "gameService.pauseGame error:",
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
+      );
+      throw error;
+    }
+  },
 
   finishGame: async (gameId, moderatorCardId = null) => {
     try {

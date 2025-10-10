@@ -14,6 +14,7 @@ import {
 import Game from "../models/Game.js";
 import Result from "../models/Result.js";
 import Jackpot from "../models/Jackpot.js";
+import JackpotLog from "../models/JackpotLog.js";
 import GameLog from "../models/GameLog.js";
 import FutureWinner from "../models/FutureWinner.js";
 
@@ -1013,9 +1014,11 @@ export const finishGame = async (req, res, next) => {
   try {
     const gameId = req.params.id;
 
+    // ✅ Get cashierId safely
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
+    // ✅ Validate ID
     if (!mongoose.isValidObjectId(gameId)) {
       await GameLog.create({
         gameId,
@@ -1029,6 +1032,7 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
+    // ✅ Find game by ID and cashier
     const game = await Game.findOne({ _id: gameId, cashierId });
     if (!game) {
       await GameLog.create({
@@ -1043,6 +1047,7 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
+    // ✅ Check if game can be finished
     if (game.status !== "active" && game.status !== "paused") {
       await GameLog.create({
         gameId,
@@ -1056,22 +1061,31 @@ export const finishGame = async (req, res, next) => {
       });
     }
 
+    // ✅ Update game status
     game.status = "completed";
+
+    // ✅ Handle jackpot updates safely
     if (game.jackpotEnabled && game.winner) {
       const jackpot = await Jackpot.findOne({ cashierId });
+
       if (jackpot) {
-        await logJackpotUpdate(
-          game.potentialJackpot,
-          "Game contribution",
-          gameId
-        );
+        // Log jackpot contribution correctly with cashierId
+        await JackpotLog.create({
+          cashierId,
+          amount: game.potentialJackpot,
+          reason: "Game contribution",
+          gameId,
+        });
+
         jackpot.amount += game.potentialJackpot;
         await jackpot.save();
       }
     }
 
+    // ✅ Save completed game
     await game.save();
 
+    // ✅ Log success
     await GameLog.create({
       gameId,
       action: "gameCompleted",
@@ -1086,8 +1100,9 @@ export const finishGame = async (req, res, next) => {
       },
     });
 
+    // ✅ Send response
     res.json({
-      message: "Game completed",
+      message: "Game completed successfully",
       game: {
         ...game.toObject(),
         winnerCardNumbers: game.winnerCardNumbers,
@@ -1096,19 +1111,25 @@ export const finishGame = async (req, res, next) => {
     });
   } catch (error) {
     console.error("[finishGame] Error in finishGame:", error);
+
+    // Log failure
     await GameLog.create({
       gameId: req.params.id,
       action: "finishGame",
       status: "failed",
       details: { error: error.message || "Internal server error" },
     });
-    next(error);
+
+    res.status(500).json({
+      message: "Internal server error",
+      error: error.message,
+    });
   }
 };
 
 export const pauseGame = async (req, res, next) => {
   try {
-    const { gameId } = req.params;
+    const { id: gameId } = req.params; // ✅ FIXED param name
 
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
@@ -1162,7 +1183,7 @@ export const pauseGame = async (req, res, next) => {
   } catch (error) {
     console.error("[pauseGame] Error pausing game:", error);
     await GameLog.create({
-      gameId: req.params.gameId,
+      gameId: req.params.id,
       action: "pauseGame",
       status: "failed",
       details: { error: error.message || "Internal server error" },
