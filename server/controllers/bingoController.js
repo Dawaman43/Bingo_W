@@ -683,18 +683,149 @@ export const checkBingo = async (req, res, next) => {
         `[checkBingo] 🏆 FINALIZING WIN - Card ${numericCardId} is the winner!`
       );
 
-      if (game.winner?.cardId) {
-        console.warn(
-          `[checkBingo] ⚠️ Game already has winner: ${game.winner.cardId}`
+      // ✅ NEW: Use MongoDB transaction for atomic winner check/assignment to handle concurrency
+      const session = await Game.startSession();
+      let winnerAssigned = false;
+      let txError = null;
+      try {
+        await session.withTransaction(
+          async () => {
+            // Re-fetch game within transaction to get latest state
+            const freshGame = await Game.findById(gameId).session(session);
+            if (!freshGame) throw new Error("Game not found");
+
+            // ✅ Atomic check: If another winner was assigned concurrently, abort
+            if (freshGame.winner?.cardId) {
+              throw new Error("already has a winner");
+            }
+
+            // Assign winner atomically
+            freshGame.winner = {
+              cardId: numericCardId,
+              prize: freshGame.prizePool,
+            };
+            freshGame.selectedWinnerNumbers =
+              freshGame.selectedWinnerNumbers || [];
+            freshGame.winnerCardNumbers = card.numbers;
+            freshGame.status = "completed";
+            await freshGame.save({ session });
+
+            // Create Result within transaction
+            const resultIdentifier =
+              identifier || `${freshGame._id}-${numericCardId}`;
+            await Result.create(
+              [
+                {
+                  gameId: freshGame._id,
+                  winnerCardId: numericCardId,
+                  userId: req.user?._id || null,
+                  identifier: resultIdentifier,
+                  prize: freshGame.winner.prize,
+                  isJackpot: false, // Assuming no jackpot for now; adjust if needed
+                  winningPattern,
+                  lastCalledNumber: lastCalledNumber?.number,
+                  timestamp: new Date(),
+                },
+              ],
+              { session }
+            );
+
+            winnerAssigned = true; // Success flag
+          },
+          {
+            readPreference: "primary",
+            maxTimeMS: 5000, // Timeout for retries
+            retryWrites: true,
+          }
         );
-        response.winner = null;
+      } catch (error) {
+        txError = error;
+        await session.abortTransaction();
+        console.error(
+          `[checkBingo] ❌ Transaction failed for card ${numericCardId}:`,
+          error
+        );
+      } finally {
+        await session.endSession();
+      }
+
+      if (winnerAssigned) {
+        // Transaction succeeded - finalize success
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "success",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            jackpotAwarded: false,
+            winningPattern,
+            validBingoPatterns,
+            identifier: identifier || `${game._id}-${numericCardId}`,
+            completedByLastCall: true,
+            winningLineInfo: winningLineInfo,
+            disqualified: false,
+            checkCount: card.checkCount,
+            timestamp: new Date(),
+          },
+        });
+
+        response.winner = {
+          cardId: numericCardId,
+          prize: game.prizePool,
+          winningPattern,
+          userId: req.user?._id || null,
+          identifier: identifier || `${game._id}-${numericCardId}`,
+          isJackpot: false,
+          completedByLastCall: true,
+        };
+        response.checkCount = card.checkCount;
+
+        console.log(
+          `[checkBingo] ✅ Game completed! Winner: Card ${numericCardId} with pattern "${winningPattern}" on call ${lastCalledNumber?.number}`
+        );
+      } else {
+        // Transaction failed - handle as non-winner (e.g., concurrent winner found)
         response.isBingo = false;
-        response.message = "Game already completed with another winner";
+        response.winningPattern = null;
+        response.winningLineInfo = null;
+        response.winner = null;
+        if (txError.message === "already has a winner") {
+          response.message = "Already winner found";
+          console.warn(
+            `[checkBingo] ⚠️ Concurrent winner detected for card ${numericCardId}`
+          );
+        } else {
+          response.message = "Failed to process win due to system error";
+          console.error(
+            `[checkBingo] ❌ Win processing failed for card ${numericCardId}: ${txError.message}`
+          );
+        }
         response.lateCall = false;
         response.lateCallMessage = null;
         response.wouldHaveWon = null;
         response.checkCount = card.checkCount;
 
+        // Log the failure
+        await GameLog.create({
+          gameId,
+          action: "checkBingo",
+          status: "failed",
+          details: {
+            cardId: numericCardId,
+            callsMade: game.calledNumbers.length,
+            lastCalledNumber: lastCalledNumber?.number,
+            message: response.message,
+            winningPattern,
+            validBingoPatterns,
+            error: txError.message,
+            checkCount: card.checkCount,
+            timestamp: new Date(),
+          },
+        });
+
+        // Optionally, check for late call even if not winner
         if (completedPatterns.length > 0) {
           const lateCallResult = await detectLateCallForCurrentPattern(
             card.numbers,
@@ -706,79 +837,20 @@ export const checkBingo = async (req, res, next) => {
             card.disqualified = true;
             await game.save(); // Persist disqualification status
 
-            lateCallMessage = lateCallResult.message;
             response.lateCall = true;
-            response.lateCallMessage = lateCallMessage;
+            response.lateCallMessage = lateCallResult.message;
             response.wouldHaveWon = lateCallResult.details;
             response.disqualified = true;
+            response.message = `Card disqualified due to late call: ${lateCallResult.message}`;
 
             console.log(
-              `[checkBingo] 🕒 LATE CALL DETECTED (post-winner): ${lateCallMessage}. Card ${numericCardId} disqualified.`
+              `[checkBingo] 🕒 LATE CALL DETECTED (post-concurrent winner): ${lateCallResult.message}. Card ${numericCardId} disqualified.`
             );
           }
         }
+
         return res.json(response);
       }
-
-      game.winner = {
-        cardId: numericCardId,
-        prize: game.prizePool,
-      };
-      game.selectedWinnerNumbers = game.selectedWinnerNumbers || [];
-      game.winnerCardNumbers = card.numbers;
-
-      let jackpotAwarded = false;
-
-      game.status = "completed";
-      await game.save();
-
-      const resultIdentifier = identifier || `${game._id}-${numericCardId}`;
-      await Result.create({
-        gameId: game._id,
-        winnerCardId: numericCardId,
-        userId: req.user?._id || null,
-        identifier: resultIdentifier,
-        prize: game.winner.prize,
-        isJackpot: jackpotAwarded,
-        winningPattern,
-        lastCalledNumber: lastCalledNumber?.number,
-        timestamp: new Date(),
-      });
-
-      await GameLog.create({
-        gameId,
-        action: "checkBingo",
-        status: "success",
-        details: {
-          cardId: numericCardId,
-          callsMade: game.calledNumbers.length,
-          lastCalledNumber: lastCalledNumber?.number,
-          jackpotAwarded,
-          winningPattern,
-          validBingoPatterns,
-          identifier: resultIdentifier,
-          completedByLastCall: true,
-          winningLineInfo: winningLineInfo,
-          disqualified: false,
-          checkCount: card.checkCount,
-          timestamp: new Date(),
-        },
-      });
-
-      response.winner = {
-        cardId: numericCardId,
-        prize: game.winner.prize,
-        winningPattern,
-        userId: req.user?._id || null,
-        identifier: resultIdentifier,
-        isJackpot: jackpotAwarded,
-        completedByLastCall: true,
-      };
-      response.checkCount = card.checkCount;
-
-      console.log(
-        `[checkBingo] ✅ Game completed! Winner: Card ${numericCardId} with pattern "${winningPattern}" on call ${lastCalledNumber?.number}`
-      );
     } else {
       await GameLog.create({
         gameId,
