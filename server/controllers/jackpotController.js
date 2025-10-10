@@ -106,13 +106,11 @@ export const setJackpotAmount = async (req, res, next) => {
       jackpot = new Jackpot({
         cashierId,
         amount,
-        baseAmount: amount,
         enabled: true,
         lastUpdated: new Date(),
       });
     } else {
       jackpot.amount = amount;
-      jackpot.baseAmount = amount;
       jackpot.lastUpdated = new Date();
     }
 
@@ -178,14 +176,12 @@ export const addJackpotContribution = async (req, res, next) => {
       jackpot = new Jackpot({
         cashierId,
         amount: contributionAmount,
-        baseAmount: contributionAmount,
         enabled: true,
         lastUpdated: new Date(),
       });
     } else {
-      // Jackpot exists, increment both amount and baseAmount
+      // Jackpot exists, increment amount
       jackpot.amount += contributionAmount;
-      jackpot.baseAmount += contributionAmount; // <-- update baseAmount too
       jackpot.lastUpdated = new Date();
     }
 
@@ -201,7 +197,7 @@ export const addJackpotContribution = async (req, res, next) => {
     });
 
     console.log(
-      `[addJackpotContribution] Added ${contributionAmount} to jackpot. New total: ${jackpot.amount}, baseAmount: ${jackpot.baseAmount}`
+      `[addJackpotContribution] Added ${contributionAmount} to jackpot. New total: ${jackpot.amount}`
     );
 
     res.json({
@@ -210,7 +206,6 @@ export const addJackpotContribution = async (req, res, next) => {
         contributionAmount,
         previousAmount: jackpot.amount - contributionAmount,
         newTotal: jackpot.amount,
-        newBaseAmount: jackpot.baseAmount,
       },
     });
   } catch (error) {
@@ -329,9 +324,9 @@ export const awardJackpot = async (req, res) => {
         throw new Error("cardId, drawAmount, and message are required");
       }
 
-      if (drawAmount > jackpot.baseAmount) {
+      if (drawAmount > jackpot.amount) {
         throw new Error(
-          `Draw amount cannot exceed total jackpot (${jackpot.baseAmount.toLocaleString()} BIRR)`
+          `Draw amount cannot exceed total jackpot (${jackpot.amount.toLocaleString()} BIRR)`
         );
       }
 
@@ -740,7 +735,6 @@ export const updateJackpot = async (req, res, next) => {
       const changeAmount = amount - currentAmount;
 
       update.amount = amount;
-      update.baseAmount = amount;
 
       logs.push({
         cashierId,
@@ -787,7 +781,6 @@ export const updateJackpot = async (req, res, next) => {
       message: "Jackpot updated successfully",
       data: {
         amount: jackpot.amount,
-        baseAmount: jackpot.baseAmount,
         enabled: jackpot.enabled,
         lastUpdated: jackpot.lastUpdated,
       },

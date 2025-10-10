@@ -87,8 +87,12 @@ const BingoGame = () => {
       const jackpotData = await gameService.getJackpot(user.id);
       console.log("[fetchJackpotAmount] Fetched jackpot data:", jackpotData);
 
-      // Convert amount to integer safely
-      return parseInt(jackpotData.baseAmount, 10) || 0;
+      // Convert amount to integer safely (use data.amount for current jackpot, not baseAmount)
+      const amount = parseInt(jackpotData?.amount, 10) || 0;
+      console.log(
+        `[fetchJackpotAmount] Using amount: ${amount} (baseAmount was ${jackpotData?.data?.baseAmount})`
+      );
+      return amount;
     } catch (error) {
       console.error("[fetchJackpotAmount] Error fetching jackpot:", error);
       return 0;
