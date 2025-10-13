@@ -1405,7 +1405,7 @@ const BingoGame = () => {
       }
       setCallError(userFriendlyMessage);
       setIsErrorModalOpen(true);
-      await SoundService.playSound("you_didnt_win");
+      
     }
   };
 
