@@ -1248,14 +1248,7 @@ const BingoGame = () => {
     if (!isValidCardInGame) {
       setCallError(`Card ${numericCardId} is not playing in this game`);
       setIsErrorModalOpen(true);
-      try {
-        await SoundService.playSound("you_didnt_win");
-      } catch (err) {
-        console.error(
-          "[handleCheckCard] Failed to play you_didnt_win sound:",
-          err
-        );
-      }
+      
       return;
     }
     try {
