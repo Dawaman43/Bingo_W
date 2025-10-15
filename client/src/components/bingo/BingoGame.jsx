@@ -1225,183 +1225,181 @@ const BingoGame = () => {
     SoundService.playSound("shuffle");
   };
 
-  const handleCheckCard = async (cardId) => {
-    if (!gameData?._id) {
-      setCallError("Invalid game ID");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    if (!cardId) {
-      setCallError("No card selected");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    const numericCardId = parseInt(cardId, 10);
-    if (isNaN(numericCardId) || numericCardId < 1) {
-      setCallError("Invalid card ID");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    const isValidCardInGame = gameData.selectedCards?.some(
-      (card) => card.id === numericCardId
-    );
-    if (!isValidCardInGame) {
-      setCallError(`Card ${numericCardId} is not playing in this game`);
-      setIsErrorModalOpen(true);
-      
-      return;
-    }
-    try {
-      const response = await checkBingo(gameData._id, numericCardId);
-      if (response.isBingo && !response.lateCall) {
-        let patternNumbers, winningIndices;
-        if (response.winningLineInfo) {
-          patternNumbers = response.winningLineInfo;
-          winningIndices = patternNumbers.selectedIndices || [];
-        } else {
-          const winningCard = gameData.selectedCards?.find(
-            (card) => card.id === numericCardId
-          );
-          if (!winningCard || !winningCard.numbers) {
-            patternNumbers = {
-              numbers: [],
-              selectedIndices: [],
-              rowIndex: null,
-              colIndex: null,
-              pattern: response.winningPattern,
-            };
-            winningIndices = [];
-          } else {
-            const winningCardNumbers = winningCard.numbers.flat();
-            const patternResult = getNumbersForPattern(
-              winningCardNumbers,
-              response.winningPattern,
-              response.game?.calledNumbers || [],
-              true,
-              [],
-              true,
-              response.lastCalledNumber
-            );
-            patternNumbers = patternResult;
-            winningIndices = patternResult.selectedIndices || [];
-          }
-        }
-        const winningNumbers = patternNumbers.numbers
-          ? patternNumbers.numbers
-              .filter((num) => {
-                if (!num || isNaN(Number(num))) return false;
-                return (response.game?.calledNumbers || []).includes(
-                  Number(num)
-                );
-              })
-              .map(Number)
-          : [];
-        const otherCalledNumbers = (response.game?.calledNumbers || [])
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return !winningNumbers.includes(Number(num));
-          })
-          .map(Number);
-        setBingoStatus({
-          lateCall: false,
-          pattern: response.winningPattern,
-          winningNumbers,
-          winningIndices,
-          otherCalledNumbers,
-          prize:
-            response.winner?.prize?.toFixed(2) ||
-            gameData?.prizePool?.toFixed(2) ||
-            "0.00",
-          winnerCardNumbers:
-            response.game?.winnerCardNumbers || winningCard?.numbers || [],
-          patternInfo: patternNumbers,
-        });
-        setGameData((prev) => ({
-          ...prev,
-          winnerPatternComplete: true,
-          status: "completed",
-          winnerCardNumbers:
-            response.game?.winnerCardNumbers || winningCard?.numbers || [],
-          selectedWinnerNumbers: response.game?.selectedWinnerNumbers || [],
-          lastCalledNumbers: [response.lastCalledNumber],
-        }));
-        await updatePrizePoolDisplay();
-        setIsWinnerModalOpen(true);
-        setIsGameOver(true);
-        setIsPlaying(false);
-        setIsAutoCall(false);
-        await SoundService.playSound("winner");
+const handleCheckCard = async (cardId) => {
+  if (!gameData?._id) {
+    setCallError("Invalid game ID");
+    setIsErrorModalOpen(true);
+    return;
+  }
+  if (!cardId) {
+    setCallError("No card selected");
+    setIsErrorModalOpen(true);
+    return;
+  }
+  const numericCardId = parseInt(cardId, 10);
+  if (isNaN(numericCardId) || numericCardId < 1) {
+    setCallError("Invalid card ID");
+    setIsErrorModalOpen(true);
+    return;
+  }
+  const isValidCardInGame = gameData.selectedCards?.some(
+    (card) => card.id === numericCardId
+  );
+  if (!isValidCardInGame) {
+    setCallError(`Card ${numericCardId} is not playing in this game`);
+    setIsErrorModalOpen(true);
+    
+    return;
+  }
+  try {
+    const response = await checkBingo(gameData._id, numericCardId);
+    if (response.isBingo && !response.lateCall) {
+      let patternNumbers, winningIndices;
+      if (response.winningLineInfo) {
+        patternNumbers = response.winningLineInfo;
+        winningIndices = patternNumbers.selectedIndices || [];
       } else {
-        const card = gameData.selectedCards?.find(
-          (c) => c.id === numericCardId
+        const winningCard = gameData.selectedCards?.find(
+          (card) => card.id === numericCardId
         );
-        if (!card || !card.numbers) {
-          setCallError("Card data not found");
-          setIsErrorModalOpen(true);
-          return;
+        if (!winningCard || !winningCard.numbers) {
+          patternNumbers = {
+            numbers: [],
+            selectedIndices: [],
+            rowIndex: null,
+            colIndex: null,
+            pattern: response.winningPattern,
+          };
+          winningIndices = [];
+        } else {
+          const winningCardNumbers = winningCard.numbers.flat();
+          const patternResult = getNumbersForPattern(
+            winningCardNumbers,
+            response.winningPattern,
+            response.game?.calledNumbers || [],
+            true,
+            [],
+            true,
+            response.lastCalledNumber
+          );
+          patternNumbers = patternResult;
+          winningIndices = patternResult.selectedIndices || [];
         }
-        const cardNumbers = card.numbers.flat();
-        const patternResult = getNumbersForPattern(
-          cardNumbers,
-          response.winningPattern || gameData.pattern,
-          response.game?.calledNumbers || calledNumbers,
-          true,
-          [],
-          true,
-          response.lastCalledNumber
-        );
-        const calledNumbersInPattern = patternResult.numbers
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return (response.game?.calledNumbers || calledNumbers).includes(
-              Number(num)
-            );
-          })
-          .map(Number);
-        const otherCalledNumbers = (
-          response.game?.calledNumbers || calledNumbers
-        )
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return !calledNumbersInPattern.includes(Number(num));
-          })
-          .map(Number);
-        setNonWinnerCardData({
-          cardId: numericCardId,
-          cardNumbers: card.numbers,
-          pattern: response.winningPattern || gameData.pattern,
-          patternInfo: patternResult,
-          calledNumbersInPattern,
-          otherCalledNumbers,
-          lateCall: response.lateCall || false,
-          lateCallMessage:
-            response.lateCallMessage || "This card missed its chance!",
-          wouldHaveWon: response.wouldHaveWon || null,
-        });
-        setIsNonWinnerModalOpen(true);
-        await SoundService.playSound(
-          response.lateCall ? "late_call" : "you_didnt_win"
-        );
       }
-    } catch (error) {
-      let userFriendlyMessage =
-        error.response?.data?.message ||
-        error.message ||
-        "An unexpected error occurred";
-      if (
-        userFriendlyMessage.includes("Card not in game") ||
-        userFriendlyMessage.includes("Card not found")
-      ) {
-        userFriendlyMessage = `Card ${cardId} not found in game #${
-          gameData?.gameNumber || "unknown"
-        }`;
+      const winningNumbers = patternNumbers.numbers
+        ? patternNumbers.numbers
+            .filter((num) => {
+              if (!num || isNaN(Number(num))) return false;
+              return (response.game?.calledNumbers || []).includes(
+                Number(num)
+              );
+            })
+            .map(Number)
+        : [];
+      const otherCalledNumbers = (response.game?.calledNumbers || [])
+        .filter((num) => {
+          if (!num || isNaN(Number(num))) return false;
+          return !winningNumbers.includes(Number(num));
+        })
+        .map(Number);
+      setBingoStatus({
+        lateCall: false,
+        pattern: response.winningPattern,
+        winningNumbers,
+        winningIndices,
+        otherCalledNumbers,
+        prize:
+          response.winner?.prize?.toFixed(2) ||
+          gameData?.prizePool?.toFixed(2) ||
+          "0.00",
+        winnerCardNumbers:
+          response.game?.winnerCardNumbers || winningCard?.numbers || [],
+        patternInfo: patternNumbers,
+      });
+      setGameData((prev) => ({
+        ...prev,
+        winnerPatternComplete: true,
+        status: "completed",
+        winnerCardNumbers:
+          response.game?.winnerCardNumbers || winningCard?.numbers || [],
+        selectedWinnerNumbers: response.game?.selectedWinnerNumbers || [],
+        lastCalledNumbers: [response.lastCalledNumber],
+      }));
+      await updatePrizePoolDisplay();
+      setIsWinnerModalOpen(true);
+      setIsGameOver(true);
+      setIsPlaying(false);
+      setIsAutoCall(false);
+      await SoundService.playSound("winner");
+    } else {
+      const card = gameData.selectedCards?.find(
+        (c) => c.id === numericCardId
+      );
+      if (!card || !card.numbers) {
+        setCallError("Card data not found");
+        setIsErrorModalOpen(true);
+        return;
       }
-      setCallError(userFriendlyMessage);
-      setIsErrorModalOpen(true);
-      
+      const cardNumbers = card.numbers.flat();
+      const patternResult = getNumbersForPattern(
+        cardNumbers,
+        response.winningPattern || gameData.pattern,
+        response.game?.calledNumbers || calledNumbers,
+        true,
+        [],
+        true,
+        response.lastCalledNumber
+      );
+      const calledNumbersInPattern = patternResult.numbers
+        .filter((num) => {
+          if (!num || isNaN(Number(num))) return false;
+          return (response.game?.calledNumbers || calledNumbers).includes(
+            Number(num)
+          );
+        })
+        .map(Number);
+      const otherCalledNumbers = (
+        response.game?.calledNumbers || calledNumbers
+      )
+        .filter((num) => {
+          if (!num || isNaN(Number(num))) return false;
+          return !calledNumbersInPattern.includes(Number(num));
+        })
+        .map(Number);
+      setNonWinnerCardData({
+        cardId: numericCardId,
+        cardNumbers: card.numbers,
+        pattern: response.winningPattern || gameData.pattern,
+        patternInfo: patternResult,
+        calledNumbersInPattern,
+        otherCalledNumbers,
+        lateCall: response.lateCall || false,
+        lateCallMessage:
+          response.lateCallMessage || "This card missed its chance!",
+        wouldHaveWon: response.wouldHaveWon || null,
+      });
+      setIsNonWinnerModalOpen(true);
+      // Updated: Always play "you_didnt_win" for non-winners, including late calls
+      await SoundService.playSound("you_didnt_win");
     }
-  };
-
+  } catch (error) {
+    let userFriendlyMessage =
+      error.response?.data?.message ||
+      error.message ||
+      "An unexpected error occurred";
+    if (
+      userFriendlyMessage.includes("Card not in game") ||
+      userFriendlyMessage.includes("Card not found")
+    ) {
+      userFriendlyMessage = `Card ${cardId} not found in game #${
+        gameData?.gameNumber || "unknown"
+      }`;
+    }
+    setCallError(userFriendlyMessage);
+    setIsErrorModalOpen(true);
+    
+  }
+};
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch((err) => {
