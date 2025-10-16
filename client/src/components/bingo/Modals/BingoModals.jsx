@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect } from "react";
+import SoundService from "../../../services/sound"; // Adjust path as needed
 
 const BingoModals = ({
   isWinnerModalOpen,
@@ -19,7 +20,28 @@ const BingoModals = ({
   callError,
   setCallError,
   navigate,
+  // NEW: Props for invalid card modal
+  isInvalidCardModalOpen,
+  setIsInvalidCardModalOpen,
 }) => {
+  useEffect(() => {
+    if (isWinnerModalOpen) {
+      SoundService.playSound("winner");
+    }
+  }, [isWinnerModalOpen]);
+
+  useEffect(() => {
+    if (isNonWinnerModalOpen) {
+      SoundService.playSound("you_didnt_win");
+    }
+  }, [isNonWinnerModalOpen]);
+
+  useEffect(() => {
+    if (isGameFinishedModalOpen) {
+      SoundService.playSound("game_finish");
+    }
+  }, [isGameFinishedModalOpen]);
+
   return (
     <>
       {isWinnerModalOpen && (
@@ -478,6 +500,25 @@ const BingoModals = ({
               ) {
                 navigate("/create-game");
               }
+            }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+      {/* NEW: Invalid Card Modal */}
+      {isInvalidCardModalOpen && callError && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-950 border-4 border-red-500 p-5 rounded-xl z-50 text-center min-w-[300px] shadow-2xl">
+          <h2 className="text-red-400 mb-4 text-2xl flex items-center justify-center gap-2">
+            <span>🚫</span>
+            <span>Invalid Card</span>
+          </h2>
+          <p className="mb-4 text-lg text-white">{callError}</p>
+          <button
+            className="bg-red-400 text-black px-4 py-2 font-bold rounded text-sm hover:bg-red-300 transition-colors duration-300"
+            onClick={() => {
+              setIsInvalidCardModalOpen(false);
+              setCallError(null);
             }}
           >
             Close

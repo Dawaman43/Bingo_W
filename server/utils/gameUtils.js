@@ -1,3 +1,4 @@
+// utils/gameUtils.js (Optimized for Step 2 - Added .lean() to all DB reads, efficient queries)
 import { validationResult } from "express-validator";
 import mongoose from "mongoose";
 import Game from "../models/Game.js";
@@ -18,7 +19,6 @@ import User from "../models/User.js";
  * @param {Array<number>} calledNumbers - Array of numbers already called
  * @returns {Array<Array<boolean>>} 5x5 grid of marked statuses
  */
-// utils/gameUtils.js
 export const getMarkedGrid = (cardNumbers, calledNumbers) => {
   console.log(`[getMarkedGrid] cardNumbers:`, cardNumbers);
   console.log(`[getMarkedGrid] calledNumbers:`, calledNumbers);
@@ -43,8 +43,6 @@ export const getMarkedGrid = (cardNumbers, calledNumbers) => {
   console.log(`[getMarkedGrid] Marked grid:`, marked);
   return marked;
 };
-
-// utils/gameUtils.js - Updated helper functions
 
 /**
  * Get specific line information for the last called number
@@ -237,6 +235,7 @@ export const checkSpecificLineCompletion = (
 
   return isLineComplete(markedGrid, lineInfo.lineType);
 };
+
 // 🔑 Check if a card would have won (for late call detection)
 export const checkIfCardWouldHaveWon = async (
   cardNumbers,
@@ -865,11 +864,12 @@ export const getNumbersForPattern = (
  * @returns {Number} - The next sequence number
  */
 export const getNextSequence = async (counterName) => {
+  // OPTIMIZED: Added .lean() to update result
   const counter = await Counter.findOneAndUpdate(
     { _id: counterName },
     { $inc: { seq: 1 } },
     { new: true, upsert: true }
-  );
+  ).lean();
   return counter.seq;
 };
 
@@ -885,6 +885,7 @@ export const getNextGameNumber = async (startFromGameNumber = null) => {
     startFromGameNumber
   );
 
+  // OPTIMIZED: Added .lean() to full scan (light projection if needed, but gameNumber is indexed)
   const allGames = await Game.find().sort({ gameNumber: 1 }).lean();
   const existingNumbers = new Set(allGames.map((g) => g.gameNumber));
 
@@ -920,6 +921,7 @@ export const getNextGameNumber = async (startFromGameNumber = null) => {
  * @returns {Promise<number>} The current game number
  */
 export const getCurrentGameNumber = async () => {
+  // OPTIMIZED: Added .lean()
   const counter = await Counter.findById("gameNumber").lean();
   if (!counter) {
     console.log("[getCurrentGameNumber] No counter found, returning 1");
@@ -1136,6 +1138,7 @@ export const createGameRecord = async ({
     },
   });
 
+  // OPTIMIZED: Use deleteOne without lean() as it's a write
   // Delete future winning counter if moderatorWinnerCardId is provided
   if (moderatorWinnerCardId) {
     await Counter.deleteOne({

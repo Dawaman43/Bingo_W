@@ -10,14 +10,17 @@ const gameSchema = new mongoose.Schema({
   betAmount: { type: Number, required: true },
   houseFeePercentage: { type: Number, required: true },
   houseFee: { type: Number, default: 0 },
+  jackpotContribution: { type: Number, default: 0 }, // ✅ Added (from bug fix in logs)
   selectedCards: [
+    // ✅ Light refs only—no numbers!
     {
-      id: { type: Number, required: true },
-      numbers: [[{ type: mongoose.Schema.Types.Mixed }]],
+      id: { type: Number, required: true }, // card_number for UI display
+      cardRef: { type: Number, ref: "Card", required: true }, // ✅ FK to Card.card_number
       disqualified: { type: Boolean, default: false },
       checkCount: { type: Number, default: 0 },
       lastCheckCallCount: { type: Number, default: 0 },
       lastCheckTime: { type: Date, default: null },
+      // ❌ REMOVED: numbers array → use populate('selectedCards.cardRef', 'numbers')
     },
   ],
   pattern: {
@@ -84,5 +87,7 @@ gameSchema.pre("save", function (next) {
 });
 
 gameSchema.index({ cashierId: 1, gameNumber: 1 }, { unique: true });
+
+gameSchema.index({ _id: 1, calledNumbers: 1 });
 
 export default mongoose.model("Game", gameSchema);

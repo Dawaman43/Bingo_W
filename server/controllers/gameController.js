@@ -1,4 +1,4 @@
-// controllers/gameController.js (Full corrected file - with updated generateQuickWinSequence calls)
+// controllers/gameController.js (Fixed: Removed -numbers; Added populate for Step 3 refs)
 import { validationResult } from "express-validator";
 import mongoose from "mongoose";
 import {
@@ -6,7 +6,7 @@ import {
   getNextSequence,
   getCashierIdFromUser,
   getNumbersForPattern,
-  generateQuickWinSequence, // Add this import for 10-14 call sequences
+  generateQuickWinSequence,
 } from "../utils/gameUtils.js";
 import Game from "../models/Game.js";
 import GameLog from "../models/GameLog.js";
@@ -14,7 +14,7 @@ import Counter from "../models/Counter.js";
 import Card from "../models/Card.js";
 import Jackpot from "../models/Jackpot.js";
 import JackpotLog from "../models/JackpotLog.js";
-import FutureWinner from "../models/FutureWinner.js"; // NEW model
+import FutureWinner from "../models/FutureWinner.js";
 
 export const createGame = async (req, res, next) => {
   try {
@@ -25,7 +25,6 @@ export const createGame = async (req, res, next) => {
         .json({ message: "Unauthorized. User ID missing." });
     }
 
-    // Determine cashierId from user role
     let cashierId;
     if (user.role === "moderator") {
       cashierId = user.managedCashier;
@@ -45,11 +44,11 @@ export const createGame = async (req, res, next) => {
       betAmount = 10,
       houseFeePercentage = 15,
       jackpotEnabled = true,
-      selectedCards = [],
+      selectedCards = [], // Expect {id, cardRef} format
       moderatorWinnerCardId = null,
     } = req.body;
 
-    // ... rest of createGame logic remains the same, use `cashierId` from above
+    // ... rest of createGame logic (use createGameRecord with refs)
   } catch (error) {
     console.error("[createGame] Error:", error);
     next(error);
@@ -71,7 +70,10 @@ export const getGameById = async (req, res, next) => {
       });
     }
 
-    const game = await Game.findOne({ _id: id, cashierId }).lean();
+    // FIXED: Removed -selectedCards.numbers (non-existent); Added populate for refs if needed
+    const game = await Game.findOne({ _id: id, cashierId })
+      .populate("selectedCards.cardRef", "numbers") // ✅ Step 3: Load numbers on-demand
+      .lean();
     if (!game) {
       return res.status(404).json({
         message: "Game not found or you are not authorized to access it",
@@ -104,13 +106,16 @@ export const getGameById = async (req, res, next) => {
   }
 };
 
-// Get all games for cashier
+// Get all games for cashier (with pagination)
 export const getGames = async (req, res, next) => {
   try {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
     const { id } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
 
     if (id) {
       if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -119,7 +124,8 @@ export const getGames = async (req, res, next) => {
         });
       }
 
-      const game = await Game.findOne({ _id: id, cashierId });
+      // FIXED: Removed -numbers; No populate for lists (light)
+      const game = await Game.findOne({ _id: id, cashierId }).lean();
       if (!game) {
         return res.status(404).json({
           message: "Game not found or you are not authorized to access it",
@@ -132,11 +138,21 @@ export const getGames = async (req, res, next) => {
       });
     }
 
-    const games = await Game.find({ cashierId }).sort({ createdAt: -1 });
+    // FIXED: Removed -numbers; No populate for lists
+    const games = await Game.find({ cashierId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const total = await Game.countDocuments({ cashierId });
 
     res.json({
       message: "Games retrieved successfully",
       count: games.length,
+      total,
+      pages: Math.ceil(total / limit),
+      page,
       games,
     });
   } catch (error) {
@@ -185,11 +201,12 @@ export const updateGame = async (req, res, next) => {
     if (selectedWinnerRowIndices !== undefined)
       updateData.selectedWinnerRowIndices = selectedWinnerRowIndices;
 
+    // FIXED: No select needed for update (returns full doc)
     const game = await Game.findOneAndUpdate(
       { _id: req.params.id, cashierId },
       updateData,
-      { new: true }
-    );
+      { new: true, runValidators: true }
+    ).lean();
 
     if (!game) {
       return res.status(404).json({
@@ -213,7 +230,10 @@ export const selectWinner = async (req, res, next) => {
     const cashierId = req.cashierId;
     const moderatorId = req.user._id;
 
-    const game = await Game.findOne({ gameNumber, cashierId });
+    // FIXED: Populate for numbers access
+    const game = await Game.findOne({ gameNumber, cashierId })
+      .populate("selectedCards.cardRef", "numbers") // ✅ Load refs
+      .lean();
     if (!game) {
       return res.status(404).json({ message: "Game not found" });
     }
@@ -240,33 +260,37 @@ export const selectWinner = async (req, res, next) => {
     }
 
     const { selectedIndices } = getNumbersForPattern(
-      winnerCard.numbers,
+      winnerCard.cardRef.numbers, // ✅ Use populated
       usePattern,
       [],
       true
     );
-    const flatNumbers = winnerCard.numbers.flat();
+    const flatNumbers = winnerCard.cardRef.numbers.flat();
     const requiredNumbers = selectedIndices.map((idx) => flatNumbers[idx]);
 
-    // ✅ UPDATED: Use quick win sequence with min/max params
     const forcedCallSequence = generateQuickWinSequence(
       requiredNumbers,
       10,
       14
     );
 
-    game.moderatorWinnerCardId = cardId;
-    game.selectedWinnerRowIndices = selectedIndices;
-    game.forcedPattern = forcedPattern;
-    game.forcedCallSequence = forcedCallSequence;
-    game.winnerCardNumbers = winnerCard.numbers; // Store full card
-    game.selectedWinnerNumbers = requiredNumbers; // Store winning numbers
-    game.targetWinCall = forcedCallSequence.length;
-    game.forcedCallIndex = 0;
-    await game.save();
+    const updatedGame = await Game.findOneAndUpdate(
+      { gameNumber, cashierId },
+      {
+        moderatorWinnerCardId: cardId,
+        selectedWinnerRowIndices: selectedIndices,
+        forcedPattern,
+        forcedCallSequence,
+        winnerCardNumbers: winnerCard.cardRef.numbers,
+        selectedWinnerNumbers: requiredNumbers,
+        targetWinCall: forcedCallSequence.length,
+        forcedCallIndex: 0,
+      },
+      { new: true, runValidators: true }
+    ).lean();
 
     await GameLog.create({
-      gameId: game._id,
+      gameId: updatedGame._id,
       action: "selectWinner",
       status: "success",
       details: {
@@ -287,7 +311,7 @@ export const selectWinner = async (req, res, next) => {
       }, Quick Win: ${forcedCallSequence.length} calls`
     );
 
-    res.json({ message: "Winner selected successfully", data: game });
+    res.json({ message: "Winner selected successfully", data: updatedGame });
   } catch (error) {
     console.error("[selectWinner] Error:", error);
     await GameLog.create({
@@ -318,23 +342,18 @@ export const startGame = async (req, res, next) => {
       });
     }
 
-    const game = await Game.findOne({ _id: req.params.id, cashierId });
-    if (!game) {
-      return res.status(404).json({
-        message: "Game not found or you are not authorized to access it",
-        errorCode: "GAME_NOT_FOUND",
-      });
-    }
+    const game = await Game.findOneAndUpdate(
+      { _id: req.params.id, cashierId, status: "pending" },
+      { status: "active" },
+      { new: true, runValidators: true }
+    ).lean();
 
-    if (game.status !== "pending") {
+    if (!game) {
       return res.status(400).json({
-        message: "Game already started or finished",
+        message: "Game not found, not authorized, or already started/finished",
         errorCode: "GAME_NOT_PENDING",
       });
     }
-
-    game.status = "active";
-    await game.save();
 
     res.json({ message: "Game started", data: game });
   } catch (error) {

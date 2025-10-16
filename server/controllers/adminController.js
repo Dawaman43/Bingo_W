@@ -1,3 +1,4 @@
+// controllers/adminController.js (Fixed for Step 3 - Use cardRef refs, no embedded numbers)
 import User from "../models/User.js";
 import Game from "../models/Game.js";
 import GameLog from "../models/GameLog.js";
@@ -52,10 +53,10 @@ export const addUser = async (req, res, next) => {
       return res.status(400).json({ message: "Invalid roles specified" });
     }
 
-    // Check for existing emails
+    // OPTIMIZED: Use lean() for read-only existing checks
     const [existingCashier, existingModerator] = await Promise.all([
-      User.findOne({ email: cashier.email }).session(session),
-      User.findOne({ email: moderator.email }).session(session),
+      User.findOne({ email: cashier.email }).session(session).lean(),
+      User.findOne({ email: moderator.email }).session(session).lean(),
     ]);
 
     if (existingCashier || existingModerator) {
@@ -105,6 +106,7 @@ export const addUser = async (req, res, next) => {
       { session }
     );
 
+    // OPTIMIZED: Use toObject() directly without lean() since it's post-create
     const { password: cPass, ...cashierWithoutPassword } =
       newCashier[0].toObject();
     const { password: mPass, ...moderatorWithoutPassword } =
@@ -132,7 +134,10 @@ export const getUsers = async (req, res, next) => {
     let users;
 
     if (requestingUser.role === "moderator") {
-      const pairedCashier = await User.findById(requestingUser.managedCashier);
+      // OPTIMIZED: Use lean() for single read
+      const pairedCashier = await User.findById(
+        requestingUser.managedCashier
+      ).lean();
 
       if (!pairedCashier) {
         return res.status(404).json({ message: "No paired cashier found" });
@@ -140,10 +145,13 @@ export const getUsers = async (req, res, next) => {
 
       users = [pairedCashier, requestingUser];
     } else {
+      // OPTIMIZED: Added lean() for list fetch
       users = await User.find(
         { role: { $in: ["cashier", "moderator"] } },
         "-password"
-      ).sort({ createdAt: -1 });
+      )
+        .sort({ createdAt: -1 })
+        .lean();
     }
 
     return res.status(200).json({
@@ -163,7 +171,8 @@ export const deleteUser = async (req, res, next) => {
 
   try {
     const { id } = req.params;
-    const user = await User.findById(id).session(session);
+    // OPTIMIZED: Use lean() for initial fetch
+    const user = await User.findById(id).session(session).lean();
 
     if (!user) {
       await session.abortTransaction();
@@ -182,13 +191,18 @@ export const deleteUser = async (req, res, next) => {
 
     if (user.role === "cashier") {
       cashier = user;
-      moderator = await User.findById(user.moderatorId).session(session);
+      // OPTIMIZED: Use lean() for linked fetch
+      moderator = await User.findById(user.moderatorId).session(session).lean();
     } else if (user.role === "moderator") {
       moderator = user;
-      cashier = await User.findById(user.managedCashier).session(session);
+      // OPTIMIZED: Use lean() for linked fetch
+      cashier = await User.findById(user.managedCashier)
+        .session(session)
+        .lean();
     }
 
     if (cashier) {
+      // OPTIMIZED: Use distinct() which is efficient, no lean needed
       const gameIds = await Game.find({ cashierId: cashier._id })
         .distinct("_id")
         .session(session);
@@ -226,7 +240,11 @@ export const deleteUser = async (req, res, next) => {
 
 export const getAllGames = async (req, res, next) => {
   try {
-    const games = await Game.find().sort({ gameNumber: 1 });
+    // OPTIMIZED: Added lean() and select() for lighter response (no cardRef.numbers)
+    const games = await Game.find()
+      .sort({ gameNumber: 1 })
+      .select("-selectedCards.cardRef") // Exclude refs for lists (populate only when needed)
+      .lean();
     console.log("[getAllGames] Retrieved games count:", games.length);
     res.json({ message: "All games retrieved successfully", data: games });
   } catch (error) {
@@ -237,6 +255,7 @@ export const getAllGames = async (req, res, next) => {
 
 export const getNextPendingGame = async (req, res, next) => {
   try {
+    // OPTIMIZED: Already has lean()—add select if needed
     const game = await Game.findOne({ status: "pending" })
       .sort({ gameNumber: 1 })
       .lean();
@@ -252,7 +271,8 @@ export const getNextPendingGame = async (req, res, next) => {
 
 export const getAllCards = async (req, res, next) => {
   try {
-    const cards = await Card.find().sort({ card_number: 1 });
+    // OPTIMIZED: Added lean()
+    const cards = await Card.find().sort({ card_number: 1 }).lean();
     res.json({ message: "All cards retrieved successfully", data: cards });
   } catch (error) {
     console.error("[getAllCards] Error:", error);
@@ -291,15 +311,17 @@ export const createSequentialGames = async (req, res, next) => {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
-    // Fetch cards
-    const cards = await Card.find({ card_number: { $in: cardPool } });
+    // OPTIMIZED: Added lean() to card fetch
+    const cards = await Card.find({ card_number: { $in: cardPool } }).lean();
     if (cards.length !== cardPool.length) {
       return res.status(400).json({ message: "Some cards not found" });
     }
 
+    // ✅ FIXED: Build gameCards with cardRef (no numbers—lean refs!)
     const gameCards = cards.map((c) => ({
       id: c.card_number,
-      numbers: c.numbers,
+      cardRef: c.card_number, // Ref to Card.card_number
+      // No numbers—populate when needed!
     }));
 
     // Calculate financials
@@ -332,18 +354,18 @@ export const createSequentialGames = async (req, res, next) => {
       return res.status(500).json({ message: "Invalid house fee calculation" });
     }
 
-    // Get next available game number
+    // OPTIMIZED: Added lean() to lastGame fetch
     const lastGame = await Game.findOne({ cashierId })
       .sort({ gameNumber: -1 })
       .lean();
     const gameNumber = lastGame ? lastGame.gameNumber + 1 : 1;
 
-    // Load future winner config if exists
+    // OPTIMIZED: Added lean() to futureWinner fetch
     let futureWinner = await FutureWinner.findOne({
       gameNumber,
       cashierId,
       used: false,
-    });
+    }).lean();
 
     let winnerCardId = moderatorWinnerCardId || futureWinner?.cardId || null;
     let winnerCardNumbers = futureWinner?.fullCardNumbers || null;
@@ -358,7 +380,7 @@ export const createSequentialGames = async (req, res, next) => {
       betAmount,
       houseFeePercentage,
       houseFee: parseFloat(houseFee.toFixed(2)),
-      selectedCards: gameCards,
+      selectedCards: gameCards, // Now with cardRef
       pattern,
       prizePool: parseFloat(prizePool.toFixed(2)),
       jackpotEnabled,
@@ -382,7 +404,7 @@ export const createSequentialGames = async (req, res, next) => {
       houseFee: game.houseFee,
       cardPoolLength: game.selectedCards.length,
       prizePool: game.prizePool,
-      jackpotContribution: game.jackpotContribution,
+      jackpotContribution: game.jackpotContribution, // Now saves!
       jackpotWinnerCardId: game.jackpotWinnerCardId,
       jackpotAwardedAmount: game.jackpotAwardedAmount,
     });
@@ -395,7 +417,10 @@ export const createSequentialGames = async (req, res, next) => {
     ) {
       session = await mongoose.startSession();
       await session.withTransaction(async () => {
-        const jackpot = await Jackpot.findOne({ cashierId }).session(session);
+        // OPTIMIZED: Added lean() to jackpot fetch
+        const jackpot = await Jackpot.findOne({ cashierId })
+          .session(session)
+          .lean();
         if (!jackpot || !jackpot.enabled) {
           throw new Error("Jackpot is not enabled for award");
         }
@@ -413,14 +438,19 @@ export const createSequentialGames = async (req, res, next) => {
           futureWinner.jackpotMessage ||
           `Jackpot won by card ${winnerCardIdStr}`;
 
-        // Update jackpot
-        jackpot.winnerCardId = winnerCardIdStr;
-        jackpot.winnerMessage = winnerMessage;
-        jackpot.amount -= actualDrawAmount; // <- draw from actual amount
-        jackpot.lastUpdated = new Date();
-        jackpot.lastAwardedAmount = actualDrawAmount;
-        jackpot.drawTimestamp = new Date();
-        await jackpot.save({ session });
+        // Update jackpot (convert back to doc for save)
+        const updatedJackpot = await Jackpot.findOneAndUpdate(
+          { cashierId },
+          {
+            winnerCardId: winnerCardIdStr,
+            winnerMessage,
+            amount: jackpot.amount - actualDrawAmount,
+            lastUpdated: new Date(),
+            lastAwardedAmount: actualDrawAmount,
+            drawTimestamp: new Date(),
+          },
+          { session, new: true }
+        ).lean();
 
         // Create JackpotLog
         const logData = {
@@ -543,6 +573,7 @@ export const moderatorConfigureNextGameNumber = async (req, res, next) => {
       });
     }
 
+    // OPTIMIZED: Added lean() to lastGame fetch
     const lastGame = await Game.findOne({ cashierId })
       .sort({ gameNumber: -1 })
       .lean();
@@ -563,6 +594,7 @@ export const moderatorConfigureNextGameNumber = async (req, res, next) => {
       });
     }
 
+    // OPTIMIZED: Use findOneAndUpdate with upsert for atomicity
     await Counter.findOneAndUpdate(
       { _id: `gameNumber_${cashierId}` },
       { seq: startNumber, cashierId },
@@ -597,11 +629,13 @@ export const moderatorConfigureNextGameNumber = async (req, res, next) => {
 
 export const getFinishedGames = async (req, res, next) => {
   try {
+    // OPTIMIZED: Added lean() to the select query (no refs for finished lists)
     const finishedGames = await Game.find({ status: "completed" })
       .sort({ gameNumber: 1 })
       .select(
         "_id gameNumber winner moderatorWinnerCardId winnerCardNumbers selectedWinnerNumbers"
-      );
+      )
+      .lean();
 
     const finishedIds = finishedGames.map((g) => g._id);
     res.json({
@@ -619,9 +653,13 @@ export const getGameLogs = async (req, res, next) => {
     await getCashierIdFromUser(req, res, () => {});
     const cashierId = req.cashierId;
 
+    // OPTIMIZED: Use distinct() which is efficient, then lean() on logs
+    const gameIds = await Game.find({ cashierId }).distinct("_id");
     const logs = await GameLog.find({
-      gameId: { $in: await Game.find({ cashierId }).distinct("_id") },
-    }).sort({ timestamp: -1 });
+      gameId: { $in: gameIds },
+    })
+      .sort({ timestamp: -1 })
+      .lean();
 
     res.json({
       message: "Game logs retrieved successfully",
@@ -649,9 +687,10 @@ export const configureFutureWinners = async (req, res) => {
   const moderatorId = req.user.id;
 
   try {
-    const moderator = await User.findById(moderatorId).select(
-      "managedCashier role"
-    );
+    // OPTIMIZED: Added lean() and select() for moderator fetch
+    const moderator = await User.findById(moderatorId)
+      .select("managedCashier role")
+      .lean();
     if (!moderator) throw new Error("Moderator not found");
     if (moderator.role !== "moderator")
       throw new Error("User is not a moderator");
@@ -681,7 +720,8 @@ export const configureFutureWinners = async (req, res) => {
       if (!Number.isInteger(cardId) || cardId < 1)
         throw new Error(`Invalid card ID: ${cardId}`);
 
-      const card = await Card.findOne({ card_number: cardId });
+      // OPTIMIZED: Added lean() to card fetch
+      const card = await Card.findOne({ card_number: cardId }).lean();
       if (!card) throw new Error(`Card not found for ID: ${cardId}`);
       console.log("[configureFutureWinners] Fetched card:", {
         cardId,
@@ -733,6 +773,7 @@ export const configureFutureWinners = async (req, res) => {
         forcedCallSequence
       );
 
+      // OPTIMIZED: Use findOneAndUpdate with {new: true, lean: true} for atomic sync
       const gameDoc = await Game.findOneAndUpdate(
         { gameNumber },
         {
@@ -744,7 +785,7 @@ export const configureFutureWinners = async (req, res) => {
           },
         },
         { new: true }
-      );
+      ).lean();
 
       if (!gameDoc) {
         console.warn(

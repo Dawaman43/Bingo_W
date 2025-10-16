@@ -34,6 +34,7 @@ import {
   callNumber,
   checkBingo,
   finishGame,
+  getCard,
   pauseGame,
   updateGameStatus,
 } from "../controllers/bingoController.js";
@@ -340,10 +341,11 @@ router.get("/:id", verifyToken, (req, res, next) => {
   console.log("Hit /api/games/:id route with id:", req.params.id);
   getGames(req, res, next);
 });
+router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
+router.get("/cards/:id", verifyToken, getCard);
 router.get("/games/:id", verifyToken, validate, getGameById);
 router.post("/:gameId/call-number", verifyToken, validate, callNumber);
 
-router.post("/:id/check-bingo", verifyToken, validate, checkBingo);
 router.post("/:id/select-winner", verifyToken, validate, selectWinner);
 router.post("/:id/finish", verifyToken, validate, finishGame);
 router.post("/:id/start", verifyToken, startGame);
