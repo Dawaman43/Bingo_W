@@ -1319,182 +1319,341 @@ const BingoGame = () => {
     setIsShuffling(true);
     const numbers = [...boardNumbers];
     SoundService.playSound("shuffle");
+    shuffleIntervalRef.current = setInterval(() => {
+      for (let i = numbers.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+      }
+      setDisplayNumbers([...numbers]);
+    }, 100);
+    setTimeout(() => {
+      if (shuffleIntervalRef.current) {
+        clearInterval(shuffleIntervalRef.current);
+        shuffleIntervalRef.current = null;
+      }
+      SoundService.playSound("shuffle", { stop: true });
+      setDisplayNumbers([...boardNumbers]);
+      setCalledNumbers([]);
+      setLastCalledNumbers([]);
+      setCurrentNumber(null);
+      setBingoCards((prev) =>
+        prev.map((card) => ({
+          ...card,
+          markedPositions: {
+            B: [false, false, false, false, false],
+            I: [false, false, false, false, false],
+            N: [false, true, false, false, false],
+            G: [false, false, false, false, false],
+            O: [false, false, false, false, false],
+          },
+          isWinner: false,
+          eligibleForWin: false,
+          eligibleAtNumber: null,
+        }))
+      );
+      setCards((prev) =>
+        prev.map((card) => ({
+          ...card,
+          markedPositions: {
+            B: [false, false, false, false, false],
+            I: [false, false, false, false, false],
+            N: [false, true, false, false, false],
+            G: [false, false, false, false, false],
+            O: [false, false, false, false, false],
+          },
+          isWinner: false,
+          eligibleForWin: false,
+          eligibleAtNumber: null,
+        }))
+      );
+      setIsShuffling(false);
+      setIsGameOver(false);
+    }, 5000);
   };
 
-  const handleCheckCard = async (cardId) => {
-    if (!gameData?._id) {
-      setCallError("Invalid game ID");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    if (!cardId) {
-      setCallError("No card selected");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    const numericCardId = parseInt(cardId, 10);
-    if (isNaN(numericCardId) || numericCardId < 1) {
-      setCallError("Invalid card ID");
-      setIsErrorModalOpen(true);
-      return;
-    }
-    const isValidCardInGame = gameData.selectedCards?.some(
-      (card) => card.id === numericCardId
-    );
-    if (!isValidCardInGame) {
-      setCallError(`Card ${numericCardId} is not playing in this game`);
-      setIsErrorModalOpen(true);
-
-      return;
-    }
+  // FIXED: Full handleCheckCard with selected card validation and modal trigger
+  const handleCheckCard = async (cardIdParam, preferredPattern = undefined) => {
     try {
-      const response = await checkBingo(gameData._id, numericCardId);
-      if (response.isBingo && !response.lateCall) {
-        let patternNumbers, winningIndices;
-        if (response.winningLineInfo) {
-          patternNumbers = response.winningLineInfo;
-          winningIndices = patternNumbers.selectedIndices || [];
-        } else {
-          const winningCard = gameData.selectedCards?.find(
-            (card) => card.id === numericCardId
-          );
-          if (!winningCard || !winningCard.numbers) {
-            patternNumbers = {
-              numbers: [],
-              selectedIndices: [],
-              rowIndex: null,
-              colIndex: null,
-              pattern: response.winningPattern,
-            };
-            winningIndices = [];
-          } else {
-            const winningCardNumbers = winningCard.numbers.flat();
-            const patternResult = getNumbersForPattern(
-              winningCardNumbers,
-              response.winningPattern,
-              response.game?.calledNumbers || [],
-              true,
-              [],
-              true,
-              response.lastCalledNumber
-            );
-            patternNumbers = patternResult;
-            winningIndices = patternResult.selectedIndices || [];
-          }
-        }
-        const winningNumbers = patternNumbers.numbers
-          ? patternNumbers.numbers
-              .filter((num) => {
-                if (!num || isNaN(Number(num))) return false;
-                return (response.game?.calledNumbers || []).includes(
-                  Number(num)
-                );
-              })
-              .map(Number)
-          : [];
-        const otherCalledNumbers = (response.game?.calledNumbers || [])
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return !winningNumbers.includes(Number(num));
-          })
-          .map(Number);
-        setBingoStatus({
-          lateCall: false,
-          pattern: response.winningPattern,
-          winningNumbers,
-          winningIndices,
-          otherCalledNumbers,
-          prize:
-            response.winner?.prize?.toFixed(2) ||
-            gameData?.prizePool?.toFixed(2) ||
-            "0.00",
-          winnerCardNumbers:
-            response.game?.winnerCardNumbers || winningCard?.numbers || [],
-          patternInfo: patternNumbers,
-        });
-        setGameData((prev) => ({
-          ...prev,
-          winnerPatternComplete: true,
-          status: "completed",
-          winnerCardNumbers:
-            response.game?.winnerCardNumbers || winningCard?.numbers || [],
-          selectedWinnerNumbers: response.game?.selectedWinnerNumbers || [],
-          lastCalledNumbers: [response.lastCalledNumber],
-        }));
-        await updatePrizePoolDisplay();
-        setIsWinnerModalOpen(true);
-        setIsGameOver(true);
-        setIsPlaying(false);
-        setIsAutoCall(false);
-        await SoundService.playSound("winner");
-      } else {
-        const card = gameData.selectedCards?.find(
-          (c) => c.id === numericCardId
+      console.log(
+        `[handleCheckCard] Checking card ${cardIdParam} with pattern ${preferredPattern}`
+      );
+
+      // NEW: Validate if card is selected for this game
+      if (
+        !gameData?.selectedCards ||
+        !gameData.selectedCards.some((c) => c.id === parseInt(cardIdParam))
+      ) {
+        console.warn(
+          `[handleCheckCard] Card ${cardIdParam} is not selected for this game`
         );
-        if (!card || !card.numbers) {
-          setCallError("Card data not found");
+        setCallError(
+          `Card ${cardIdParam} is not selected for this game. Please select valid cards.`
+        );
+        setIsInvalidCardModalOpen(true); // NEW: Trigger invalid card modal
+        return; // Early return, no further processing
+      }
+
+      // Ensure card exists in state; if not, fetch full card
+      let cardInState = cards.find((c) => c.id === parseInt(cardIdParam));
+      if (!cardInState) {
+        console.log(
+          `[handleCheckCard] Card ${cardIdParam} missing in state, fetching...`
+        );
+        try {
+          const response = await fetch(`/api/cards/${cardIdParam}`, {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("token")}`,
+            },
+          });
+          if (response.ok) {
+            const fullCard = await response.json();
+            // Add per-game state defaults
+            fullCard.checkCount = 0;
+            fullCard.disqualified = false;
+            fullCard.lastCheckTime = null;
+            fullCard.id = parseInt(cardIdParam); // Ensure id is set
+            // Add to state
+            setCards((prevCards) => [...prevCards, fullCard]);
+            cardInState = fullCard;
+            console.log(
+              `[handleCheckCard] Fetched and added card ${cardIdParam}`
+            );
+          } else {
+            console.error(
+              `[handleCheckCard] Failed to fetch card ${cardIdParam}: ${response.status}`
+            );
+            setCallError(`Failed to fetch card ${cardIdParam}`);
+            setIsErrorModalOpen(true);
+            return; // Bail out
+          }
+        } catch (err) {
+          console.error(
+            `[handleCheckCard] Fetch error for card ${cardIdParam}:`,
+            err
+          );
+          setCallError(`Failed to fetch card ${cardIdParam}: ${err.message}`);
           setIsErrorModalOpen(true);
           return;
         }
-        const cardNumbers = card.numbers.flat();
-        const patternResult = getNumbersForPattern(
-          cardNumbers,
-          response.winningPattern || gameData.pattern,
-          response.game?.calledNumbers || calledNumbers,
-          true,
-          [],
-          true,
-          response.lastCalledNumber
-        );
-        const calledNumbersInPattern = patternResult.numbers
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return (response.game?.calledNumbers || calledNumbers).includes(
-              Number(num)
-            );
-          })
-          .map(Number);
-        const otherCalledNumbers = (
-          response.game?.calledNumbers || calledNumbers
-        )
-          .filter((num) => {
-            if (!num || isNaN(Number(num))) return false;
-            return !calledNumbersInPattern.includes(Number(num));
-          })
-          .map(Number);
-        setNonWinnerCardData({
-          cardId: numericCardId,
-          cardNumbers: card.numbers,
-          pattern: response.winningPattern || gameData.pattern,
-          patternInfo: patternResult,
-          calledNumbersInPattern,
-          otherCalledNumbers,
-          lateCall: response.lateCall || false,
-          lateCallMessage:
-            response.lateCallMessage || "This card missed its chance!",
-          wouldHaveWon: response.wouldHaveWon || null,
+      }
+
+      // FIXED: Use gameService.checkBingo instead of direct fetch
+      const data = await gameService.checkBingo(
+        gameData._id,
+        cardIdParam,
+        preferredPattern
+      );
+
+      console.log(`[handleCheckCard] Backend response:`, data);
+
+      // Update game state
+      setGameData((prevGame) => ({ ...prevGame, ...data.game }));
+
+      // Helper to build 2D grid from card numbers (if needed for modals)
+      const buildGrid = (numbers) => {
+        if (
+          !numbers ||
+          !numbers.B ||
+          !numbers.I ||
+          !numbers.N ||
+          !numbers.G ||
+          !numbers.O
+        ) {
+          return Array(5)
+            .fill()
+            .map(() => Array(5).fill("FREE"));
+        }
+        const grid = [];
+        for (let row = 0; row < 5; row++) {
+          grid[row] = [
+            numbers.B[row],
+            numbers.I[row],
+            numbers.N[row],
+            numbers.G[row],
+            numbers.O[row],
+          ];
+        }
+        return grid;
+      };
+
+      // Handle bingo win
+      if (data.isBingo && data.winner) {
+        console.log(`[handleCheckCard] 🎉 BINGO! Winner:`, data.winner);
+        // Set bingoStatus with API data for winner modal rendering
+        setBingoStatus({
+          pattern: data.pattern || "line",
+          lateCall: false, // Assume not late for true win
+          winnerCardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+          winningIndices: data.winningIndices || [],
+          winningNumbers: data.winningNumbers || [],
+          otherCalledNumbers:
+            data.otherCalledNumbers ||
+            calledNumbers.filter((n) => !data.winningNumbers?.includes(n)),
+          prize: data.prize || gameData?.prizePool || 0,
+          patternInfo: {
+            rowIndex: data.rowIndex || null,
+            colIndex: data.colIndex || null,
+          },
         });
-        setIsNonWinnerModalOpen(true);
-        // Updated: Always play "you_didnt_win" for non-winners, including late calls
-        await SoundService.playSound("you_didnt_win");
+        setShowWinModal(true);
+        setIsWinnerModalOpen(true); // Explicitly set for consistency
+        setWinnerData(data.winner);
+        // Optionally disable other cards
+        setCards((prevCards) =>
+          prevCards.map((c) => ({
+            ...c,
+            disabled: c.id !== parseInt(cardIdParam),
+          }))
+        );
+        // Trigger celebration (e.g., confetti)
+        createConfetti();
+        SoundService.playSound("winner");
+      } else {
+        // Non-bingo/late call handling
+        console.log(`[handleCheckCard] Non-bingo/late:`, {
+          lateCall: data.lateCall,
+          message: data.message || data.lateCallMessage,
+        });
+
+        // FIXED: Safely update card state with response data (no more "missing")
+        if (cardInState) {
+          const updatedCard = {
+            ...cardInState,
+            cardId: cardIdParam,
+            cardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+            patternInfo: {
+              selectedIndices: data.selectedIndices || [],
+              rowIndex: data.rowIndex || null,
+              colIndex: data.colIndex || null,
+              pattern: data.pattern || null,
+            },
+            calledNumbersInPattern: data.calledNumbersInPattern || [],
+            otherCalledNumbers: data.otherCalledNumbers || [],
+            lateCall: data.lateCall || false,
+            lateCallMessage:
+              data.message ||
+              data.lateCallMessage ||
+              "No bingo found. Try again!",
+            wouldHaveWon: data.wouldHaveWon || null, // For late call details
+            checkCount: data.checkCount || cardInState.checkCount || 0,
+            disqualified:
+              data.disqualified || cardInState.disqualified || false,
+            lastCheckTime:
+              data.checkCount > cardInState.checkCount
+                ? new Date()
+                : cardInState.lastCheckTime,
+          };
+
+          // If disqualified or late, add visual cue (e.g., shake animation)
+          if (data.disqualified || data.lateCall) {
+            updatedCard.shake = true; // Trigger CSS animation
+            setTimeout(() => {
+              setCards((prevCards) =>
+                prevCards.map((c) => ({ ...c, shake: false }))
+              );
+            }, 1000);
+            if (data.lateCall) {
+              SoundService.playSound("you_didnt_win"); // Optional sound
+            }
+          }
+
+          // Update cards state
+          setCards((prevCards) =>
+            prevCards.map((c) =>
+              c.id === parseInt(cardIdParam) ? updatedCard : c
+            )
+          );
+
+          console.log(
+            `[handleCheckCard] Updated card ${cardIdParam}:`,
+            updatedCard
+          );
+
+          // Trigger non-winner modal
+          setNonWinnerCardData(updatedCard);
+          setIsNonWinnerModalOpen(true);
+
+          // Optional: Set message for toast (if implemented elsewhere)
+          setShowMessage(updatedCard.lateCallMessage);
+          setMessageType(updatedCard.lateCall ? "warning" : "info");
+        } else {
+          console.warn(
+            `[handleCheckCard] Card ${cardIdParam} still missing after update attempt`
+          );
+          setCallError(`Card ${cardIdParam} not found in state`);
+          setIsErrorModalOpen(true);
+        }
       }
+
+      // Update marked grids for all cards (re-mark based on new called numbers)
+      updateMarkedGrids();
     } catch (error) {
-      let userFriendlyMessage =
-        error.response?.data?.message ||
-        error.message ||
-        "An unexpected error occurred";
-      if (
-        userFriendlyMessage.includes("Card not in game") ||
-        userFriendlyMessage.includes("Card not found")
-      ) {
-        userFriendlyMessage = `Card ${cardId} not found in game #${
-          gameData?.gameNumber || "unknown"
-        }`;
-      }
-      setCallError(userFriendlyMessage);
+      console.error(
+        `[handleCheckCard] Error checking card ${cardIdParam}:`,
+        error
+      );
+      setCallError(error.message || "Check failed. Please try again.");
       setIsErrorModalOpen(true);
+      // Optional: Set generic message
+      setShowMessage("Check failed. Please try again.");
+      setMessageType("error");
     }
   };
+
+  // NEW: Define updateMarkedGrids (was missing)
+  const updateMarkedGrids = () => {
+    setBingoCards((prevCards) =>
+      prevCards.map((card) => {
+        const newCard = { ...card };
+        const letters = ["B", "I", "N", "G", "O"];
+        calledNumbers.forEach((calledNum) => {
+          for (let col = 0; col < 5; col++) {
+            for (let row = 0; row < 5; row++) {
+              const letter = letters[col];
+              const number = card.numbers[letter][row];
+              if (typeof number === "number" && number === calledNum) {
+                newCard.markedPositions[letter][row] = true;
+              }
+            }
+          }
+        });
+        return newCard;
+      })
+    );
+    // Sync to cards state too
+    setCards((prevCards) =>
+      prevCards.map((card) => {
+        const newCard = { ...card };
+        const letters = ["B", "I", "N", "G", "O"];
+        calledNumbers.forEach((calledNum) => {
+          for (let col = 0; col < 5; col++) {
+            for (let row = 0; row < 5; row++) {
+              const letter = letters[col];
+              const number = card.numbers[letter][row];
+              if (typeof number === "number" && number === calledNum) {
+                newCard.markedPositions[letter][row] = true;
+              }
+            }
+          }
+        });
+        return newCard;
+      })
+    );
+  };
+
+  // FIXED: useEffect for loading cards (use gameData instead of this.state.game)
+  useEffect(() => {
+    const loadCards = async () => {
+      if (gameData?.selectedCards) {
+        const cardIds = gameData.selectedCards.map((c) => c.id);
+        // Batch fetch or loop fetch (simplified; fetch if needed via handleCheckCard)
+        console.log(`[loadCards] Pre-loading for IDs:`, cardIds);
+        // Optionally fetch missing ones here
+      }
+    };
+    loadCards();
+  }, [gameData?.selectedCards]);
+
   const handleToggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current.requestFullscreen().catch((err) => {
