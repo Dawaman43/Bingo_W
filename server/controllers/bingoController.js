@@ -1082,7 +1082,6 @@ const detectLateCallForCurrentPattern = async (
 export const finishGame = async (req, res) => {
   const gameId = req.params.id;
 
-  // Helper to log safely without throwing
   const safeLog = async (logData) => {
     try {
       await GameLog.create(logData);
@@ -1092,13 +1091,11 @@ export const finishGame = async (req, res) => {
   };
 
   try {
-    // ✅ Get cashierId directly from token payload
     const cashierId = req.user?.id;
     if (!cashierId) {
       console.warn(`[finishGame] cashierId missing for game ${gameId}`);
     }
 
-    // ✅ Validate gameId
     if (!mongoose.isValidObjectId(gameId)) {
       await safeLog({
         gameId,
@@ -1112,8 +1109,6 @@ export const finishGame = async (req, res) => {
       });
     }
 
-    // FIXED: Include gameNumber in select
-    // OPTIMIZED: Lean for read
     const game = await Game.findOne({ _id: gameId, cashierId })
       .select(
         "gameNumber status winner moderatorWinnerCardId winnerCardNumbers selectedWinnerNumbers"
@@ -1133,7 +1128,6 @@ export const finishGame = async (req, res) => {
       });
     }
 
-    // ✅ Check game status
     if (!["active", "paused"].includes(game.status)) {
       await safeLog({
         gameId,
@@ -1147,53 +1141,21 @@ export const finishGame = async (req, res) => {
       });
     }
 
-    // OPTIMIZED: Atomic update for status
     const updatedGame = await Game.findByIdAndUpdate(
       gameId,
       { status: "completed" },
       { new: true }
     )
-      .select("gameNumber") // ✅ Include
+      .select("gameNumber")
       .lean();
 
-    // ✅ Handle jackpot safely
+    // 🚫 Jackpot logic disabled — intentionally not modifying jackpot or logs
     if (game.jackpotEnabled && game.winner) {
-      try {
-        if (!cashierId) throw new Error("Missing cashierId for jackpot");
-
-        // OPTIMIZED: Lean on Jackpot
-        let jackpot = await Jackpot.findOne({ cashierId }).lean();
-        if (jackpot) {
-          const newAmount =
-            (jackpot.amount ?? 0) + (game.potentialJackpot ?? 0);
-          await Jackpot.findByIdAndUpdate(jackpot._id, { amount: newAmount });
-
-          if (cashierId) {
-            try {
-              await JackpotLog.create({
-                cashierId,
-                amount: game.potentialJackpot ?? 0,
-                reason: "Game contribution",
-                gameId,
-              });
-            } catch (err) {
-              console.error(
-                `[finishGame] JackpotLog creation failed:`,
-                err.message
-              );
-            }
-          }
-        } else {
-          console.warn(
-            `[finishGame] No jackpot found for cashierId ${cashierId}`
-          );
-        }
-      } catch (err) {
-        console.error(`[finishGame] Jackpot processing error:`, err.message);
-      }
+      console.log(
+        `[finishGame] Jackpot processing skipped for game ${gameId} (disabled logic)`
+      );
     }
 
-    // ✅ Log success
     await safeLog({
       gameId,
       action: "gameCompleted",
@@ -1208,7 +1170,6 @@ export const finishGame = async (req, res) => {
       },
     });
 
-    // ✅ Respond
     res.json({
       message: "Game completed successfully",
       game: {
@@ -1227,7 +1188,6 @@ export const finishGame = async (req, res) => {
       details: { error: error?.message ?? "Unknown error" },
     });
 
-    // ✅ Always return JSON, never HTML
     res.status(500).json({
       message: "Internal server error",
       error: error?.message ?? "Unknown error",
