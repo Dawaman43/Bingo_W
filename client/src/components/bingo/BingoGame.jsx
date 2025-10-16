@@ -555,8 +555,13 @@ const BingoGame = () => {
         }));
         // NEW: Set initial playing state based on game status
         setIsPlaying(fetchedGame.status === "active");
+        // UPDATED: Check sessionStorage for game started flag
+        const startedKey = `gameStarted_${gameId}`;
+        const persistedStarted = sessionStorage.getItem(startedKey) === "true";
         setHasStarted(
-          fetchedGame.status === "active" || fetchedGame.status === "completed"
+          persistedStarted ||
+            fetchedGame.status === "active" ||
+            fetchedGame.status === "completed"
         );
       } catch (error) {
         console.error("[BingoGame] loadGame error:", error.message);
@@ -1255,6 +1260,11 @@ const BingoGame = () => {
     // NEW: Set hasStarted to true when starting play (first click to play)
     if (!willPause) {
       setHasStarted(true);
+      // UPDATED: Persist to sessionStorage
+      const gameId = gameData?._id || sessionStorage.getItem("currentGameId");
+      if (gameId) {
+        sessionStorage.setItem(`gameStarted_${gameId}`, "true");
+      }
     }
     setIsPlaying((prev) => !prev);
     setIsAutoCall(false);
@@ -1380,6 +1390,12 @@ const BingoGame = () => {
       );
       setIsShuffling(false);
       setIsGameOver(false);
+      // UPDATED: Reset hasStarted on shuffle to allow shuffle again if needed
+      setHasStarted(false);
+      const gameId = gameData?._id || sessionStorage.getItem("currentGameId");
+      if (gameId) {
+        sessionStorage.removeItem(`gameStarted_${gameId}`);
+      }
     }, 5000);
   };
 
