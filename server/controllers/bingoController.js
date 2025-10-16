@@ -1115,8 +1115,11 @@ export const finishGame = async (req, res) => {
     // FIXED: Include gameNumber in select
     // OPTIMIZED: Lean for read
     const game = await Game.findOne({ _id: gameId, cashierId })
-      .select("gameNumber") // ✅ Light include
+      .select(
+        "gameNumber status winner moderatorWinnerCardId winnerCardNumbers selectedWinnerNumbers"
+      )
       .lean();
+
     if (!game) {
       await safeLog({
         gameId,
@@ -1242,8 +1245,11 @@ export const pauseGame = async (req, res, next) => {
     // FIXED: Include gameNumber in select
     // OPTIMIZED: Lean for read
     const game = await Game.findOne({ _id: gameId, cashierId })
-      .select("gameNumber") // ✅ Light include
+      .select(
+        "gameNumber status winner moderatorWinnerCardId winnerCardNumbers selectedWinnerNumbers"
+      )
       .lean();
+
     if (!game) {
       await GameLog.create({
         gameId,

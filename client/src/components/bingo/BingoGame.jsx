@@ -50,6 +50,9 @@ const BingoGame = () => {
   const [messageType, setMessageType] = useState(null);
   const [cards, setCards] = useState([]); // NEW: Dedicated state for full cards (replaces bingoCards for check logic)
 
+  // NEW: Track if game has started once
+  const [hasStarted, setHasStarted] = useState(false);
+
   // Shuffle animation states
   const [boardNumbers] = useState(Array.from({ length: 75 }, (_, i) => i + 1));
   const [displayNumbers, setDisplayNumbers] = useState(
@@ -57,9 +60,6 @@ const BingoGame = () => {
   );
   const [isShuffling, setIsShuffling] = useState(false);
   const shuffleIntervalRef = useRef(null);
-
-  // NEW: State to track if game has started (to hide shuffle after first play)
-  const [hasStarted, setHasStarted] = useState(false);
 
   // Jackpot state
   const [jackpotAmount, setJackpotAmount] = useState(0);
@@ -542,6 +542,12 @@ const BingoGame = () => {
         setGameData(fetchedGame);
         setCalledNumbers(fetchedGame.calledNumbers || []);
 
+        // Check for started flag
+        const startedFlag = localStorage.getItem(`bingoGameStarted_${gameId}`);
+        if (startedFlag === "true") {
+          setHasStarted(true);
+        }
+
         // FIXED: Pass explicit selectedCards to avoid state lag
         await fetchBingoCards(
           gameId,
@@ -553,16 +559,6 @@ const BingoGame = () => {
           ...prev,
           prizePool: fetchedGame.prizePool || 0,
         }));
-        // NEW: Set initial playing state based on game status
-        setIsPlaying(fetchedGame.status === "active");
-        // UPDATED: Check sessionStorage for game started flag
-        const startedKey = `gameStarted_${gameId}`;
-        const persistedStarted = sessionStorage.getItem(startedKey) === "true";
-        setHasStarted(
-          persistedStarted ||
-            fetchedGame.status === "active" ||
-            fetchedGame.status === "completed"
-        );
       } catch (error) {
         console.error("[BingoGame] loadGame error:", error.message);
         setCallError(error.message || "Failed to load game");
@@ -629,12 +625,29 @@ const BingoGame = () => {
     }
   };
 
-  // Game updates
+  // Game updates - FIXED: Prevent overwriting calledNumbers if backend clears it (e.g., on finish)
   useEffect(() => {
     if (game) {
-      setGameData(game);
+      setGameData((prev) => {
+        const newData = { ...prev, ...game };
+        // Preserve prizePool if the game is completed (backend may reset it to 0)
+        if (
+          game.status === "completed" &&
+          prev.prizePool !== undefined &&
+          prev.prizePool !== null
+        ) {
+          newData.prizePool = prev.prizePool;
+        }
+        return newData;
+      });
       setWinningPattern(game.pattern?.replace("_", " ") || "line");
-      setCalledNumbers(game.calledNumbers || []);
+      // Only update calledNumbers if the new list is longer or current is empty (prevents clearing on finish)
+      if (
+        game.calledNumbers?.length > calledNumbers.length ||
+        calledNumbers.length === 0
+      ) {
+        setCalledNumbers(game.calledNumbers || []);
+      }
       setIsGameOver(game.status === "completed");
     }
   }, [game]);
@@ -739,6 +752,17 @@ const BingoGame = () => {
               grid[row][col] = flatNumbers[index];
             }
           }
+          // FIXED: Transpose flat (row-major) to column-major {B,I,N,G,O}
+          const letters = ["B", "I", "N", "G", "O"];
+          const numbers = {};
+          letters.forEach((letter, col) => {
+            numbers[letter] = [];
+            for (let row = 0; row < 5; row++) {
+              const index = row * 5 + col;
+              const num = flatNumbers[index];
+              numbers[letter][row] = num === "FREE" ? num : Number(num);
+            }
+          });
           const markedPositions = {
             B: new Array(5).fill(false),
             I: new Array(5).fill(false),
@@ -750,7 +774,6 @@ const BingoGame = () => {
             for (let row = 0; row < 5; row++) {
               for (let col = 0; col < 5; col++) {
                 if (grid[row][col] === calledNum) {
-                  const letters = ["B", "I", "N", "G", "O"];
                   const letter = letters[col];
                   markedPositions[letter][row] = true;
                 }
@@ -761,23 +784,7 @@ const BingoGame = () => {
             id: selected.id, // FIXED: Use 'id' for consistency with handleCheckCard
             cardId: selected.id,
             cardNumber: selected.id,
-            numbers: {
-              B: flatNumbers
-                .slice(0, 5)
-                .map((n) => (n === "FREE" ? n : Number(n))),
-              I: flatNumbers
-                .slice(5, 10)
-                .map((n) => (n === "FREE" ? n : Number(n))),
-              N: flatNumbers
-                .slice(10, 15)
-                .map((n) => (n === "FREE" ? n : Number(n))),
-              G: flatNumbers
-                .slice(15, 20)
-                .map((n) => (n === "FREE" ? n : Number(n))),
-              O: flatNumbers
-                .slice(20, 25)
-                .map((n) => (n === "FREE" ? n : Number(n))),
-            },
+            numbers,
             markedPositions,
             isWinner: false,
             checkCount: 0, // NEW: Add defaults for check logic
@@ -1257,16 +1264,17 @@ const BingoGame = () => {
   const handlePlayPause = async () => {
     const willPause = isPlaying;
     SoundService.playSound(willPause ? "game_pause" : "game_start");
-    // NEW: Set hasStarted to true when starting play (first click to play)
-    if (!willPause) {
-      setHasStarted(true);
-      // UPDATED: Persist to sessionStorage
-      const gameId = gameData?._id || sessionStorage.getItem("currentGameId");
-      if (gameId) {
-        sessionStorage.setItem(`gameStarted_${gameId}`, "true");
+    setIsPlaying((prev) => {
+      const newPlaying = !prev;
+      if (newPlaying && !hasStarted) {
+        setHasStarted(true);
+        const gameId = gameData?._id || sessionStorage.getItem("currentGameId");
+        if (gameId) {
+          localStorage.setItem(`bingoGameStarted_${gameId}`, "true");
+        }
       }
-    }
-    setIsPlaying((prev) => !prev);
+      return newPlaying;
+    });
     setIsAutoCall(false);
     if (autoIntervalRef.current) {
       clearInterval(autoIntervalRef.current);
@@ -1305,6 +1313,7 @@ const BingoGame = () => {
     }
   };
 
+  // FIXED: Preserve calledNumbers, marked positions, and prizePool on finish
   const handleFinish = async () => {
     if (!gameData?._id) {
       setCallError("Cannot finish game: Game ID is missing");
@@ -1320,16 +1329,28 @@ const BingoGame = () => {
       setIsGameFinishedModalOpen(true);
       return;
     }
+
+    // Store current prizePool before finishing
+    const currentPrizePool = gameData?.prizePool;
+
     setIsGameOver(true);
     setIsAutoCall(false);
     setIsPlaying(false);
     try {
       const response = await finishGame(gameData._id);
-      setGameData(response.game);
-      await updatePrizePoolDisplay();
+      // Preserve prizePool and merge updates (backend may clear calledNumbers, but local state is preserved via useEffect condition)
+      setGameData((prev) => ({
+        ...prev,
+        ...response.game,
+        prizePool: currentPrizePool, // Preserve current prizePool
+      }));
+      // Do NOT call updatePrizePoolDisplay() to avoid overwriting preserved data
       SoundService.playSound("game_finish");
 
       setIsGameFinishedModalOpen(true);
+
+      // Update jackpot contribution using preserved prizePool
+      await updateJackpotAfterGame(currentPrizePool);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
       setIsErrorModalOpen(true);
@@ -1390,12 +1411,6 @@ const BingoGame = () => {
       );
       setIsShuffling(false);
       setIsGameOver(false);
-      // UPDATED: Reset hasStarted on shuffle to allow shuffle again if needed
-      setHasStarted(false);
-      const gameId = gameData?._id || sessionStorage.getItem("currentGameId");
-      if (gameId) {
-        sessionStorage.removeItem(`gameStarted_${gameId}`);
-      }
     }, 5000);
   };
 
@@ -1435,11 +1450,26 @@ const BingoGame = () => {
           });
           if (response.ok) {
             const fullCard = await response.json();
+            // FIXED: Transpose to column-major like in fetchBingoCards
+            const flatNumbers = fullCard.numbers
+              .flat()
+              .map((num) => (num === "FREE" ? "FREE" : Number(num)));
+            const letters = ["B", "I", "N", "G", "O"];
+            const numbers = {};
+            letters.forEach((letter, col) => {
+              numbers[letter] = [];
+              for (let row = 0; row < 5; row++) {
+                const index = row * 5 + col;
+                const num = flatNumbers[index];
+                numbers[letter][row] = num === "FREE" ? num : Number(num);
+              }
+            });
             // Add per-game state defaults
             fullCard.checkCount = 0;
             fullCard.disqualified = false;
             fullCard.lastCheckTime = null;
             fullCard.id = parseInt(cardIdParam); // Ensure id is set
+            fullCard.numbers = numbers; // Set transposed numbers
             // Add to state
             setCards((prevCards) => [...prevCards, fullCard]);
             cardInState = fullCard;
@@ -1504,6 +1534,20 @@ const BingoGame = () => {
         return grid;
       };
 
+      // Compute called numbers on this card
+      const cardCalledNumbers = [];
+      const letters = ["B", "I", "N", "G", "O"];
+      for (const letter of letters) {
+        for (const num of cardInState.numbers[letter]) {
+          if (typeof num === "number" && calledNumbers.includes(num)) {
+            cardCalledNumbers.push(num);
+          }
+        }
+      }
+      const uniqueCardCalledNumbers = [...new Set(cardCalledNumbers)].sort(
+        (a, b) => a - b
+      );
+
       // Handle bingo win
       if (data.isBingo && data.winner) {
         console.log(`[handleCheckCard] 🎉 BINGO! Winner:`, data.winner);
@@ -1516,7 +1560,9 @@ const BingoGame = () => {
           winningNumbers: data.winningNumbers || [],
           otherCalledNumbers:
             data.otherCalledNumbers ||
-            calledNumbers.filter((n) => !data.winningNumbers?.includes(n)),
+            uniqueCardCalledNumbers.filter(
+              (n) => !data.winningNumbers?.includes(n)
+            ),
           prize: data.prize || gameData?.prizePool || 0,
           patternInfo: {
             rowIndex: data.rowIndex || null,
@@ -1556,7 +1602,12 @@ const BingoGame = () => {
               pattern: data.pattern || null,
             },
             calledNumbersInPattern: data.calledNumbersInPattern || [],
-            otherCalledNumbers: data.otherCalledNumbers || [],
+            otherCalledNumbers:
+              data.otherCalledNumbers ||
+              uniqueCardCalledNumbers.filter(
+                (n) => !data.calledNumbersInPattern?.includes(n)
+              ) ||
+              uniqueCardCalledNumbers,
             lateCall: data.lateCall || false,
             lateCallMessage:
               data.message ||
@@ -1882,7 +1933,6 @@ const BingoGame = () => {
             >
               Finish
             </button>
-            {/* UPDATED: Hide shuffle after first play click */}
             {!isPlaying && !hasStarted && (
               <button
                 className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] disabled:opacity-50"

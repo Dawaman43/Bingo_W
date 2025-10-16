@@ -42,6 +42,33 @@ const BingoModals = ({
     }
   }, [isGameFinishedModalOpen]);
 
+  // Helper to build grid if needed (for robustness, in case data is object)
+  const buildGrid = (numbers) => {
+    if (
+      !numbers ||
+      !numbers.B ||
+      !numbers.I ||
+      !numbers.N ||
+      !numbers.G ||
+      !numbers.O
+    ) {
+      return Array(5)
+        .fill()
+        .map(() => Array(5).fill("FREE"));
+    }
+    const grid = [];
+    for (let row = 0; row < 5; row++) {
+      grid[row] = [
+        numbers.B[row],
+        numbers.I[row],
+        numbers.N[row],
+        numbers.G[row],
+        numbers.O[row],
+      ];
+    }
+    return grid;
+  };
+
   return (
     <>
       {isWinnerModalOpen && (
@@ -162,17 +189,27 @@ const BingoModals = ({
                     )}
                     <div className="grid grid-cols-5 gap-0.5 pt-0.5 relative">
                       {(() => {
-                        const cardData = bingoStatus.winnerCardNumbers || [];
+                        let cardGrid;
+                        if (
+                          Array.isArray(bingoStatus.winnerCardNumbers) &&
+                          Array.isArray(bingoStatus.winnerCardNumbers[0])
+                        ) {
+                          cardGrid = bingoStatus.winnerCardNumbers;
+                        } else if (
+                          bingoStatus.winnerCardNumbers &&
+                          typeof bingoStatus.winnerCardNumbers === "object"
+                        ) {
+                          // If it's {B,I,N,G,O}, build grid
+                          cardGrid = buildGrid(bingoStatus.winnerCardNumbers);
+                        } else {
+                          cardGrid = Array(5)
+                            .fill()
+                            .map(() => Array(5).fill("FREE"));
+                        }
                         const winningIndices = bingoStatus.winningIndices || [];
                         const winningNumbers = bingoStatus.winningNumbers || [];
                         const otherCalledNumbers =
                           bingoStatus.otherCalledNumbers || [];
-                        const cardGrid =
-                          Array.isArray(cardData) && Array.isArray(cardData[0])
-                            ? cardData
-                            : Array(5)
-                                .fill()
-                                .map(() => Array(5).fill("FREE"));
                         return cardGrid.map((row, rowIndex) =>
                           (row || Array(5).fill("FREE")).map(
                             (number, colIndex) => {
@@ -390,7 +427,41 @@ const BingoModals = ({
                 )}
                 <div className="grid grid-cols-5 gap-0.5 pt-0.5 relative">
                   {(() => {
-                    const cardData = nonWinnerCardData.cardNumbers || [];
+                    let cardGrid;
+                    if (
+                      Array.isArray(nonWinnerCardData.cardNumbers) &&
+                      Array.isArray(nonWinnerCardData.cardNumbers[0])
+                    ) {
+                      cardGrid = nonWinnerCardData.cardNumbers;
+                    } else if (
+                      nonWinnerCardData.cardNumbers &&
+                      typeof nonWinnerCardData.cardNumbers === "object"
+                    ) {
+                      // If it's {B,I,N,G,O}, build grid
+                      cardGrid = buildGrid(nonWinnerCardData.cardNumbers);
+                    } else if (
+                      Array.isArray(nonWinnerCardData.cardNumbers) &&
+                      nonWinnerCardData.cardNumbers.length === 25
+                    ) {
+                      // If flat 25 (assuming row-major order), build 2D row-major grid
+                      const flatNumbers = nonWinnerCardData.cardNumbers;
+                      cardGrid = Array(5)
+                        .fill()
+                        .map(() => Array(5).fill(null));
+                      for (let row = 0; row < 5; row++) {
+                        for (let col = 0; col < 5; col++) {
+                          const index = row * 5 + col;
+                          cardGrid[row][col] =
+                            flatNumbers[index] === "FREE"
+                              ? "FREE"
+                              : Number(flatNumbers[index]);
+                        }
+                      }
+                    } else {
+                      cardGrid = Array(5)
+                        .fill()
+                        .map(() => Array(5).fill("FREE"));
+                    }
                     const patternIndices =
                       nonWinnerCardData.patternInfo?.selectedIndices || [];
                     const calledInPattern =
@@ -400,12 +471,6 @@ const BingoModals = ({
                     const allCalled = [...calledInPattern, ...otherCalled].map(
                       Number
                     );
-                    const cardGrid =
-                      Array.isArray(cardData) && Array.isArray(cardData[0])
-                        ? cardData
-                        : Array(5)
-                            .fill()
-                            .map(() => Array(5).fill("FREE"));
                     return cardGrid.map((row, rowIndex) =>
                       (row || Array(5).fill("FREE")).map((number, colIndex) => {
                         const cellIndex = rowIndex * 5 + colIndex;
@@ -454,6 +519,41 @@ const BingoModals = ({
                   })()}
                 </div>
               </div>
+              {(() => {
+                const calledInPattern =
+                  nonWinnerCardData.calledNumbersInPattern || [];
+                const otherCalled = nonWinnerCardData.otherCalledNumbers || [];
+                const allCalled = [...calledInPattern, ...otherCalled].map(
+                  Number
+                );
+                if (allCalled.length > 0) {
+                  return (
+                    <div className="bg-blue-900/30 border border-blue-400 p-2 rounded-lg mt-2">
+                      <h4 className="text-blue-300 font-bold text-xs mb-1 flex items-center gap-1">
+                        <span className="text-sm">📞</span>
+                        Called Numbers on Card ({allCalled.length})
+                      </h4>
+                      <div className="flex flex-wrap gap-1 justify-center">
+                        {allCalled.slice(0, 10).map((n) => (
+                          <div
+                            key={n}
+                            className="bg-blue-500 text-white px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-600 flex items-center gap-0.5 shadow-md"
+                          >
+                            <span className="text-blue-200 text-[8px]">🔵</span>
+                            <span className="text-white">{n}</span>
+                          </div>
+                        ))}
+                        {allCalled.length > 10 && (
+                          <span className="bg-blue-600 text-blue-900 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-400">
+                            +{allCalled.length - 10}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
             <button
               className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
