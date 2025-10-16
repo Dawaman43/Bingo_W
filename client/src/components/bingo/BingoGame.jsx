@@ -1349,8 +1349,8 @@ const BingoGame = () => {
 
       setIsGameFinishedModalOpen(true);
 
-      // Update jackpot contribution using preserved prizePool
-      await updateJackpotAfterGame(currentPrizePool);
+      // CHANGE: Comment out or remove this line to prevent jackpot increment
+      // await updateJackpotAfterGame(currentPrizePool);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
       setIsErrorModalOpen(true);
