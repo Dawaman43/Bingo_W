@@ -1,4 +1,4 @@
-// controllers/adminController.js (Fixed for Step 3 - Use cardRef refs, no embedded numbers)
+// controllers/adminController.js (Fixed for Transaction Management - Use withTransaction)
 import User from "../models/User.js";
 import Game from "../models/Game.js";
 import GameLog from "../models/GameLog.js";
@@ -25,9 +25,7 @@ import {
 } from "../utils/bingoUtils.js";
 
 export const addUser = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  let session = null;
   try {
     const { cashier, moderator } = req.body;
 
@@ -39,8 +37,6 @@ export const addUser = async (req, res, next) => {
       !moderator?.email ||
       !moderator?.password
     ) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         message:
           "Name, email, and password are required for both cashier and moderator",
@@ -48,82 +44,85 @@ export const addUser = async (req, res, next) => {
     }
 
     if (cashier.role !== "cashier" || moderator.role !== "moderator") {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({ message: "Invalid roles specified" });
     }
 
-    // OPTIMIZED: Use lean() for read-only existing checks
-    const [existingCashier, existingModerator] = await Promise.all([
-      User.findOne({ email: cashier.email }).session(session).lean(),
-      User.findOne({ email: moderator.email }).session(session).lean(),
-    ]);
-
-    if (existingCashier || existingModerator) {
-      await session.abortTransaction();
-      session.endSession();
-      return res
-        .status(400)
-        .json({ message: "Email already exists in the database" });
-    }
-
-    // Hash passwords
+    // Hash passwords outside transaction for performance (idempotent)
     const salt = await bcrypt.genSalt(10);
     const hashedCashierPassword = await bcrypt.hash(cashier.password, salt);
     const hashedModeratorPassword = await bcrypt.hash(moderator.password, salt);
 
-    // Create cashier
-    const newCashier = await User.create(
-      [
-        {
-          name: cashier.name,
-          email: cashier.email,
-          password: hashedCashierPassword,
-          role: "cashier",
-        },
-      ],
-      { session }
-    );
+    // Start fresh session for transaction
+    session = await mongoose.startSession();
 
-    // Create moderator linked to cashier
-    const newModerator = await User.create(
-      [
-        {
-          name: moderator.name,
-          email: moderator.email,
-          password: hashedModeratorPassword,
-          role: "moderator",
-          managedCashier: newCashier[0]._id,
-        },
-      ],
-      { session }
-    );
+    const result = await session.withTransaction(async () => {
+      // OPTIMIZED: Use lean() for read-only existing checks
+      const [existingCashier, existingModerator] = await Promise.all([
+        User.findOne({ email: cashier.email }).session(session).lean(),
+        User.findOne({ email: moderator.email }).session(session).lean(),
+      ]);
 
-    // Update cashier with moderatorId
-    await User.findByIdAndUpdate(
-      newCashier[0]._id,
-      { moderatorId: newModerator[0]._id },
-      { session }
-    );
+      if (existingCashier || existingModerator) {
+        throw new Error("Email already exists in the database");
+      }
 
-    // OPTIMIZED: Use toObject() directly without lean() since it's post-create
-    const { password: cPass, ...cashierWithoutPassword } =
-      newCashier[0].toObject();
-    const { password: mPass, ...moderatorWithoutPassword } =
-      newModerator[0].toObject();
+      // Create cashier
+      const newCashier = await User.create(
+        [
+          {
+            name: cashier.name,
+            email: cashier.email,
+            password: hashedCashierPassword,
+            role: "cashier",
+          },
+        ],
+        { session }
+      );
 
-    await session.commitTransaction();
-    session.endSession();
+      // Create moderator linked to cashier
+      const newModerator = await User.create(
+        [
+          {
+            name: moderator.name,
+            email: moderator.email,
+            password: hashedModeratorPassword,
+            role: "moderator",
+            managedCashier: newCashier[0]._id,
+          },
+        ],
+        { session }
+      );
 
-    return res.status(201).json({
-      success: true,
-      message: "Cashier and Moderator registered successfully",
-      users: [cashierWithoutPassword, moderatorWithoutPassword],
+      // Update cashier with moderatorId
+      await User.findByIdAndUpdate(
+        newCashier[0]._id,
+        { moderatorId: newModerator[0]._id },
+        { session }
+      );
+
+      // OPTIMIZED: Use toObject() directly without lean() since it's post-create
+      const { password: cPass, ...cashierWithoutPassword } =
+        newCashier[0].toObject();
+      const { password: mPass, ...moderatorWithoutPassword } =
+        newModerator[0].toObject();
+
+      return {
+        success: true,
+        message: "Cashier and Moderator registered successfully",
+        users: [cashierWithoutPassword, moderatorWithoutPassword],
+      };
     });
+
+    await session.endSession();
+    return res.status(201).json(result);
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    if (session) {
+      await session.endSession();
+    }
     console.error("Error adding users:", error);
+    if (error.message === "Email already exists in the database") {
+      return res.status(400).json({ message: error.message });
+    }
     next(error);
   }
 };
@@ -166,23 +165,17 @@ export const getUsers = async (req, res, next) => {
 };
 
 export const deleteUser = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  let session = null;
   try {
     const { id } = req.params;
-    // OPTIMIZED: Use lean() for initial fetch
-    const user = await User.findById(id).session(session).lean();
+    // OPTIMIZED: Use lean() for initial fetch (outside tx for read)
+    const user = await User.findById(id).lean();
 
     if (!user) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({ message: "User not found" });
     }
 
     if (user.role === "admin") {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(403).json({ message: "Cannot delete an admin" });
     }
 
@@ -191,48 +184,51 @@ export const deleteUser = async (req, res, next) => {
 
     if (user.role === "cashier") {
       cashier = user;
-      // OPTIMIZED: Use lean() for linked fetch
-      moderator = await User.findById(user.moderatorId).session(session).lean();
+      // OPTIMIZED: Use lean() for linked fetch (outside tx)
+      moderator = await User.findById(user.moderatorId).lean();
     } else if (user.role === "moderator") {
       moderator = user;
-      // OPTIMIZED: Use lean() for linked fetch
-      cashier = await User.findById(user.managedCashier)
-        .session(session)
-        .lean();
+      // OPTIMIZED: Use lean() for linked fetch (outside tx)
+      cashier = await User.findById(user.managedCashier).lean();
     }
 
-    if (cashier) {
-      // OPTIMIZED: Use distinct() which is efficient, no lean needed
-      const gameIds = await Game.find({ cashierId: cashier._id })
-        .distinct("_id")
-        .session(session);
+    // Start fresh session for transaction
+    session = await mongoose.startSession();
 
-      if (gameIds.length) {
-        await GameLog.deleteMany({ gameId: { $in: gameIds } }).session(session);
-        await JackpotCandidate.deleteMany({ gameId: { $in: gameIds } }).session(
-          session
-        );
-        await Game.deleteMany({ cashierId: cashier._id }).session(session);
+    const result = await session.withTransaction(async () => {
+      if (cashier) {
+        // OPTIMIZED: Use distinct() which is efficient, no lean needed
+        const gameIds = await Game.find({ cashierId: cashier._id })
+          .distinct("_id")
+          .session(session);
+
+        if (gameIds.length) {
+          await GameLog.deleteMany({ gameId: { $in: gameIds } }).session(session);
+          await JackpotCandidate.deleteMany({ gameId: { $in: gameIds } }).session(
+            session
+          );
+          await Game.deleteMany({ cashierId: cashier._id }).session(session);
+        }
       }
-    }
 
-    if (cashier) {
-      await User.findByIdAndDelete(cashier._id).session(session);
-    }
-    if (moderator) {
-      await User.findByIdAndDelete(moderator._id).session(session);
-    }
+      if (cashier) {
+        await User.findByIdAndDelete(cashier._id).session(session);
+      }
+      if (moderator) {
+        await User.findByIdAndDelete(moderator._id).session(session);
+      }
+    });
 
-    await session.commitTransaction();
-    session.endSession();
+    await session.endSession();
 
     return res.status(200).json({
       success: true,
       message: "User and their linked pair deleted successfully",
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    if (session) {
+      await session.endSession();
+    }
     console.error("Error deleting user:", error);
     next(error);
   }
@@ -415,91 +411,96 @@ export const createSequentialGames = async (req, res, next) => {
       futureWinner.jackpotEnabled &&
       futureWinner.jackpotDrawAmount > 0
     ) {
-      session = await mongoose.startSession();
-      await session.withTransaction(async () => {
-        // OPTIMIZED: Added lean() to jackpot fetch
-        const jackpot = await Jackpot.findOne({ cashierId })
-          .session(session)
-          .lean();
-        if (!jackpot || !jackpot.enabled) {
-          throw new Error("Jackpot is not enabled for award");
-        }
+      // Use a separate session for nested transaction to avoid txn number conflicts
+      const jackpotSession = await mongoose.startSession();
+      try {
+        await jackpotSession.withTransaction(async () => {
+          // OPTIMIZED: Added lean() to jackpot fetch
+          const jackpot = await Jackpot.findOne({ cashierId })
+            .session(jackpotSession)
+            .lean();
+          if (!jackpot || !jackpot.enabled) {
+            throw new Error("Jackpot is not enabled for award");
+          }
 
-        // Use live jackpot amount instead of baseAmount
-        if (futureWinner.jackpotDrawAmount > jackpot.amount) {
-          throw new Error(
-            `Configured jackpot draw amount (${futureWinner.jackpotDrawAmount}) exceeds available jackpot (${jackpot.amount})`
-          );
-        }
+          // Use live jackpot amount instead of baseAmount
+          if (futureWinner.jackpotDrawAmount > jackpot.amount) {
+            throw new Error(
+              `Configured jackpot draw amount (${futureWinner.jackpotDrawAmount}) exceeds available jackpot (${jackpot.amount})`
+            );
+          }
 
-        const actualDrawAmount = futureWinner.jackpotDrawAmount;
-        const winnerCardIdStr = futureWinner.cardId.toString();
-        const winnerMessage =
-          futureWinner.jackpotMessage ||
-          `Jackpot won by card ${winnerCardIdStr}`;
+          const actualDrawAmount = futureWinner.jackpotDrawAmount;
+          const winnerCardIdStr = futureWinner.cardId.toString();
+          const winnerMessage =
+            futureWinner.jackpotMessage ||
+            `Jackpot won by card ${winnerCardIdStr}`;
 
-        // Update jackpot (convert back to doc for save)
-        const updatedJackpot = await Jackpot.findOneAndUpdate(
-          { cashierId },
-          {
-            winnerCardId: winnerCardIdStr,
-            winnerMessage,
-            amount: jackpot.amount - actualDrawAmount,
-            lastUpdated: new Date(),
-            lastAwardedAmount: actualDrawAmount,
-            drawTimestamp: new Date(),
-          },
-          { session, new: true }
-        ).lean();
-
-        // Create JackpotLog
-        const logData = {
-          cashierId,
-          amount: -actualDrawAmount,
-          reason: `Jackpot pre-awarded for game ${gameNumber} to card ${winnerCardIdStr}: ${actualDrawAmount} birr - ${winnerMessage}`,
-          gameId: game._id,
-          isAward: true,
-          winnerCardId: winnerCardIdStr,
-          message: winnerMessage,
-          triggeredByCashier: false,
-          timestamp: new Date(),
-        };
-        await JackpotLog.create([logData], { session });
-
-        // Create Result
-        await Result.create(
-          [
+          // Update jackpot (convert back to doc for save)
+          const updatedJackpot = await Jackpot.findOneAndUpdate(
+            { cashierId },
             {
-              gameId: game._id,
               winnerCardId: winnerCardIdStr,
-              prize: actualDrawAmount,
-              isJackpot: true,
-              message: winnerMessage,
-              identifier: `jackpot_${Date.now()}_${winnerCardIdStr}`,
-              timestamp: new Date(),
+              winnerMessage,
+              amount: jackpot.amount - actualDrawAmount,
+              lastUpdated: new Date(),
+              lastAwardedAmount: actualDrawAmount,
+              drawTimestamp: new Date(),
             },
-          ],
-          { session }
-        );
+            { session: jackpotSession, new: true }
+          ).lean();
 
-        // Update game with jackpot details
-        await Game.findByIdAndUpdate(
-          game._id,
-          {
-            $set: {
-              jackpotWinnerCardId: winnerCardIdStr,
-              jackpotAwardedAmount: actualDrawAmount,
-              jackpotWinnerMessage: winnerMessage,
-              jackpotDrawTimestamp: new Date(),
+          // Create JackpotLog
+          const logData = {
+            cashierId,
+            amount: -actualDrawAmount,
+            reason: `Jackpot pre-awarded for game ${gameNumber} to card ${winnerCardIdStr}: ${actualDrawAmount} birr - ${winnerMessage}`,
+            gameId: game._id,
+            isAward: true,
+            winnerCardId: winnerCardIdStr,
+            message: winnerMessage,
+            triggeredByCashier: false,
+            timestamp: new Date(),
+          };
+          await JackpotLog.create([logData], { session: jackpotSession });
+
+          // Create Result
+          await Result.create(
+            [
+              {
+                gameId: game._id,
+                winnerCardId: winnerCardIdStr,
+                prize: actualDrawAmount,
+                isJackpot: true,
+                message: winnerMessage,
+                identifier: `jackpot_${Date.now()}_${winnerCardIdStr}`,
+                timestamp: new Date(),
+              },
+            ],
+            { session: jackpotSession }
+          );
+
+          // Update game with jackpot details
+          await Game.findByIdAndUpdate(
+            game._id,
+            {
+              $set: {
+                jackpotWinnerCardId: winnerCardIdStr,
+                jackpotAwardedAmount: actualDrawAmount,
+                jackpotWinnerMessage: winnerMessage,
+                jackpotDrawTimestamp: new Date(),
+              },
             },
-          },
-          { session }
-        );
+            { session: jackpotSession }
+          );
 
-        console.log(
-          `[createSequentialGames] 💰 Applied configured jackpot award for game ${gameNumber}: card ${winnerCardIdStr}, amount ${actualDrawAmount}`
-        );
-      });
+          console.log(
+            `[createSequentialGames] 💰 Applied configured jackpot award for game ${gameNumber}: card ${winnerCardIdStr}, amount ${actualDrawAmount}`
+          );
+        });
+      } finally {
+        await jackpotSession.endSession();
+      }
     }
 
     // Mark future winner as used
@@ -537,19 +538,7 @@ export const createSequentialGames = async (req, res, next) => {
     res.json({ message: "Game created successfully", game });
   } catch (err) {
     console.error("[createSequentialGames] Error:", err);
-    if (session) {
-      try {
-        await session.abortTransaction();
-      } catch (abortErr) {
-        console.error("[createSequentialGames] Abort error:", abortErr);
-      }
-      await session.endSession();
-    }
     next(err);
-  } finally {
-    if (session) {
-      await session.endSession();
-    }
   }
 };
 

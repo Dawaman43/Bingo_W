@@ -131,14 +131,16 @@ export const forgotPassword = async (req, res) => {
     user.otpExpiry = Date.now() + 5 * 60 * 1000;
     await user.save();
 
-    // Send email
-    await sendEmail(email, "Password Reset OTP", `Your OTP is: ${otp}`);
+    // ✅ Correct usage
+    await sendEmail(email, otp);
 
     res.json({ message: "OTP sent to email" });
   } catch (err) {
+    console.error("❌ Error in forgotPassword:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 export const resetPassword = async (req, res) => {
   try {

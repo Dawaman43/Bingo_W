@@ -10,6 +10,9 @@ import soundRoutes from "./routes/soundRoutes.js";
 import { initSocket } from "./socket.js";
 import os from "os";
 import { exec } from "child_process";
+import util from "util";
+
+const execAsync = util.promisify(exec);
 
 // Initialize express
 const app = express();
@@ -20,22 +23,21 @@ await connectDB();
 // Middleware
 app.use(
   cors({
-    origin: "https://jokerbingo.xyz", // Frontend origin
-    credentials: true, // Allow credentials
+    origin: "https://jokerbingo.xyz",
+    credentials: true,
   })
 );
-
 app.use(express.json());
-// Disk usage
-const getDiskUsage = () =>
-  new Promise((resolve, reject) => {
-    exec("df -h /", (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
-    });
-  });
 
-// CPU usage
+// === Resource monitoring helpers ===
+
+// Container disk usage (root folder)
+const getContainerDiskUsage = async () => {
+  const { stdout } = await execAsync("du -sh .");
+  return stdout.trim();
+};
+
+// CPU usage per core
 const getCpuUsage = () => {
   const cpus = os.cpus();
   return cpus.map((cpu, index) => {
@@ -53,62 +55,72 @@ const getMemoryUsage = () => {
   const used = total - free;
   return {
     usedMB: (used / 1024 / 1024).toFixed(2),
+    freeMB: (free / 1024 / 1024).toFixed(2),
     totalMB: (total / 1024 / 1024).toFixed(2),
+    usagePercent: ((used / total) * 100).toFixed(2) + "%",
   };
 };
 
 // Bandwidth usage
-const getBandwidthUsage = () =>
-  new Promise((resolve, reject) => {
-    exec("cat /proc/net/dev", (err, stdout) => {
-      if (err) return reject(err);
-      const lines = stdout.split("\n").slice(2);
-      const usage = lines
-        .map((line) => {
-          const parts = line.trim().split(/\s+/);
-          const iface = parts[0].replace(":", "");
-          const rxMB = (parseInt(parts[1], 10) / 1024 / 1024).toFixed(2);
-          const txMB = (parseInt(parts[9], 10) / 1024 / 1024).toFixed(2);
-          return { interface: iface, receivedMB: rxMB, sentMB: txMB };
-        })
-        .filter((i) => i.interface);
-      resolve(usage);
-    });
-  });
+const getBandwidthUsage = async () => {
+  const { stdout } = await execAsync("cat /proc/net/dev");
+  const lines = stdout.split("\n").slice(2);
+  return lines
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const iface = parts[0].replace(":", "");
+      if (!iface) return null;
+      const rxMB = (parseInt(parts[1], 10) / 1024 / 1024).toFixed(2);
+      const txMB = (parseInt(parts[9], 10) / 1024 / 1024).toFixed(2);
+      return { interface: iface, receivedMB: rxMB, sentMB: txMB };
+    })
+    .filter(Boolean);
+};
 
-// Test route
+// Uptime and OS info
+const getSystemInfo = () => ({
+  uptime: `${(os.uptime() / 3600).toFixed(2)} hours`,
+  platform: os.platform(),
+  release: os.release(),
+  arch: os.arch(),
+  hostname: os.hostname(),
+});
+
+// === Routes ===
 app.get("/", (req, res) => res.send("Server is running"));
 
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/games", gameRoutes);
-app.use("/api/sounds", soundRoutes);
+// Full resource monitoring endpoint
 app.get("/resources", async (req, res) => {
   try {
-    const disk = await getDiskUsage();
-    const cpu = getCpuUsage();
-    const memory = getMemoryUsage();
-    const bandwidth = await getBandwidthUsage();
+    const [disk, cpu, memory, bandwidth, system] = await Promise.all([
+      getContainerDiskUsage(),
+      getCpuUsage(),
+      getMemoryUsage(),
+      getBandwidthUsage(),
+      getSystemInfo(),
+    ]);
 
     res.json({
-      diskUsage: disk,
+      system,
+      containerDiskUsage: disk,
       cpuUsage: cpu,
       memoryUsage: memory,
       bandwidthUsage: bandwidth,
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: "Failed to get resources", details: err.message });
+    res.status(500).json({ error: "Failed to get resources", details: err.message });
   }
 });
 
-// Create HTTP server and initialize Socket.io
+// API routes
+app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/games", gameRoutes);
+app.use("/api/sounds", soundRoutes);
+
+// === HTTP server + Socket.io ===
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
-
-// Initialize Socket.io with the HTTP server
 initSocket(server);
 
 // Start server
