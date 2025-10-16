@@ -58,6 +58,9 @@ const BingoGame = () => {
   const [isShuffling, setIsShuffling] = useState(false);
   const shuffleIntervalRef = useRef(null);
 
+  // NEW: State to track if game has started (to hide shuffle after first play)
+  const [hasStarted, setHasStarted] = useState(false);
+
   // Jackpot state
   const [jackpotAmount, setJackpotAmount] = useState(0);
   const [jackpotWinnerData, setJackpotWinnerData] = useState(null);
@@ -550,6 +553,11 @@ const BingoGame = () => {
           ...prev,
           prizePool: fetchedGame.prizePool || 0,
         }));
+        // NEW: Set initial playing state based on game status
+        setIsPlaying(fetchedGame.status === "active");
+        setHasStarted(
+          fetchedGame.status === "active" || fetchedGame.status === "completed"
+        );
       } catch (error) {
         console.error("[BingoGame] loadGame error:", error.message);
         setCallError(error.message || "Failed to load game");
@@ -1244,6 +1252,10 @@ const BingoGame = () => {
   const handlePlayPause = async () => {
     const willPause = isPlaying;
     SoundService.playSound(willPause ? "game_pause" : "game_start");
+    // NEW: Set hasStarted to true when starting play (first click to play)
+    if (!willPause) {
+      setHasStarted(true);
+    }
     setIsPlaying((prev) => !prev);
     setIsAutoCall(false);
     if (autoIntervalRef.current) {
@@ -1854,7 +1866,8 @@ const BingoGame = () => {
             >
               Finish
             </button>
-            {!isPlaying && (
+            {/* UPDATED: Hide shuffle after first play click */}
+            {!isPlaying && !hasStarted && (
               <button
                 className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] disabled:opacity-50"
                 onClick={handleShuffle}
