@@ -1519,158 +1519,354 @@ const BingoGame = () => {
     }, 5000);
   };
 
+  // FIXED: Full handleCheckCard with selected card validation and modal trigger
   const handleCheckCard = async (cardIdParam, preferredPattern = undefined) => {
     try {
-      const cardId = parseInt(cardIdParam);
       console.log(
-        `[handleCheckCard] Checking card ${cardId} with pattern ${preferredPattern}`
+        `[handleCheckCard] Checking card ${cardIdParam} with pattern ${preferredPattern}`
       );
 
-      // Validate card is selected
-      if (!gameData?.selectedCards?.some((c) => c.id === cardId)) {
-        setCallError(`Card ${cardId} is not selected for this game.`);
-        setIsInvalidCardModalOpen(true);
-        return;
+      // NEW: Validate if card is selected for this game
+      if (
+        !gameData?.selectedCards ||
+        !gameData.selectedCards.some((c) => c.id === parseInt(cardIdParam))
+      ) {
+        console.warn(
+          `[handleCheckCard] Card ${cardIdParam} is not selected for this game`
+        );
+        setCallError(
+          `Card ${cardIdParam} is not selected for this game. Please select valid cards.`
+        );
+        setIsInvalidCardModalOpen(true); // NEW: Trigger invalid card modal
+        return; // Early return, no further processing
       }
 
-      // Ensure card exists in state
-      let cardInState = cards.find((c) => c.id === cardId);
+      // Ensure card exists in state; if not, fetch full card
+      let cardInState = cards.find((c) => c.id === parseInt(cardIdParam));
       if (!cardInState) {
         console.log(
-          `[handleCheckCard] Card ${cardId} missing in state, fetching...`
+          `[handleCheckCard] Card ${cardIdParam} missing in state, fetching...`
         );
-        const response = await fetch(`/api/cards/${cardId}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        });
-        if (!response.ok) {
-          setCallError(`Failed to fetch card ${cardId}`);
+        try {
+          const response = await fetch(`/api/cards/${cardIdParam}`, {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("token")}`,
+            },
+          });
+          if (response.ok) {
+            const fullCard = await response.json();
+            // FIXED: Transpose to column-major like in fetchBingoCards
+            const flatNumbers = fullCard.numbers
+              .flat()
+              .map((num) => (num === "FREE" ? "FREE" : Number(num)));
+            const letters = ["B", "I", "N", "G", "O"];
+            const numbers = {};
+            letters.forEach((letter, col) => {
+              numbers[letter] = [];
+              for (let row = 0; row < 5; row++) {
+                const index = row * 5 + col;
+                const num = flatNumbers[index];
+                numbers[letter][row] = num === "FREE" ? num : Number(num);
+              }
+            });
+            // Add per-game state defaults
+            fullCard.checkCount = 0;
+            fullCard.disqualified = false;
+            fullCard.lastCheckTime = null;
+            fullCard.id = parseInt(cardIdParam); // Ensure id is set
+            fullCard.numbers = numbers; // Set transposed numbers
+            fullCard.markedPositions = {
+              B: new Array(5).fill(false),
+              I: new Array(5).fill(false),
+              N: new Array(5)
+                .fill(false)
+                .map((_, i) => (i === 2 ? true : false)),
+              G: new Array(5).fill(false),
+              O: new Array(5).fill(false),
+            };
+            fullCard.winningPositions = {
+              B: new Array(5).fill(false),
+              I: new Array(5).fill(false),
+              N: new Array(5).fill(false),
+              G: new Array(5).fill(false),
+              O: new Array(5).fill(false),
+            };
+            // Add to state
+            setCards((prevCards) => [...prevCards, fullCard]);
+            cardInState = fullCard;
+            console.log(
+              `[handleCheckCard] Fetched and added card ${cardIdParam}`
+            );
+          } else {
+            console.error(
+              `[handleCheckCard] Failed to fetch card ${cardIdParam}: ${response.status}`
+            );
+            setCallError(`Failed to fetch card ${cardIdParam}`);
+            setIsErrorModalOpen(true);
+            return; // Bail out
+          }
+        } catch (err) {
+          console.error(
+            `[handleCheckCard] Fetch error for card ${cardIdParam}:`,
+            err
+          );
+          setCallError(`Failed to fetch card ${cardIdParam}: ${err.message}`);
           setIsErrorModalOpen(true);
           return;
         }
-        const fullCard = await response.json();
-
-        // Transpose numbers to column-major (B-I-N-G-O)
-        const flatNumbers = fullCard.numbers
-          .flat()
-          .map((num) => (num === "FREE" ? "FREE" : Number(num)));
-        const letters = ["B", "I", "N", "G", "O"];
-        const numbers = {};
-        letters.forEach((letter, col) => {
-          numbers[letter] = [];
-          for (let row = 0; row < 5; row++) {
-            const index = row * 5 + col;
-            numbers[letter][row] = flatNumbers[index];
-          }
-        });
-
-        cardInState = {
-          ...fullCard,
-          id: cardId,
-          numbers,
-          checkCount: 0,
-          disqualified: false,
-          lastCheckTime: null,
-          markedPositions: {
-            B: Array(5).fill(false),
-            I: Array(5).fill(false),
-            N: Array(5).fill(false),
-            G: Array(5).fill(false),
-            O: Array(5).fill(false),
-          },
-          winningPositions: {
-            B: Array(5).fill(false),
-            I: Array(5).fill(false),
-            N: Array(5).fill(false),
-            G: Array(5).fill(false),
-            O: Array(5).fill(false),
-          },
-        };
-
-        setCards((prev) => [...prev, cardInState]);
       }
 
-      // Call backend to check bingo
+      // FIXED: Use gameService.checkBingo instead of direct fetch
       const data = await gameService.checkBingo(
         gameData._id,
-        cardId,
+        cardIdParam,
         preferredPattern
       );
+
       console.log(`[handleCheckCard] Backend response:`, data);
 
-      // Extract winner and late-call info
-      const winner = data.winners?.find((w) => w.cardId === cardId);
-      const lateCallInfo = data.lateCallCards?.find((c) => c.cardId === cardId);
-      const isWinner = !!winner;
-      const isLateCall = !!lateCallInfo;
+      // Update game state
+      setGameData((prevGame) => ({ ...prevGame, ...data.game }));
 
-      // Helper to build 2D grid
+      // Helper to build 2D grid from card numbers (if needed for modals)
       const buildGrid = (numbers) => {
-        if (!numbers)
+        if (
+          !numbers ||
+          !numbers.B ||
+          !numbers.I ||
+          !numbers.N ||
+          !numbers.G ||
+          !numbers.O
+        ) {
           return Array(5)
             .fill()
             .map(() => Array(5).fill("FREE"));
+        }
         const grid = [];
-        const letters = ["B", "I", "N", "G", "O"];
         for (let row = 0; row < 5; row++) {
-          grid[row] = letters.map((l) => numbers[l][row]);
+          grid[row] = [
+            numbers.B[row],
+            numbers.I[row],
+            numbers.N[row],
+            numbers.G[row],
+            numbers.O[row],
+          ];
         }
         return grid;
       };
 
-      const updatedCard = { ...cardInState };
-      updatedCard.lastCheckTime = new Date();
-
-      // Handle winner
-      if (isWinner) {
-        updatedCard.isWinner = true;
-        const winningResult = getNumbersForPatternBackendStyle(
-          winner.numbers,
-          winner.winningPattern,
-          [],
-          true
-        );
-        updatedCard.winningPositions = winningResult.selectedIndicesGrid;
-        updatedCard.markedPositions = markCalledNumbers(
-          cardInState.numbers,
-          calledNumbers
-        );
-        SoundService.playSound("winner");
-        setShowWinModal(true);
-        setBingoStatus({
-          winnerCardNumbers: buildGrid(cardInState.numbers),
-          winningIndices: winningResult.selectedIndices,
-          winningNumbers: winningResult.selectedNumbers,
-          pattern: winner.winningPattern,
-          lateCall: false,
-          prize: data.prize || gameData?.prizePool || 0,
-        });
+      // Compute called numbers on this card
+      const cardCalledNumbers = [];
+      const letters = ["B", "I", "N", "G", "O"];
+      for (const letter of letters) {
+        for (const num of cardInState.numbers[letter]) {
+          if (typeof num === "number" && calledNumbers.includes(num)) {
+            cardCalledNumbers.push(num);
+          }
+        }
       }
-
-      // Handle late-call cards
-      if (isLateCall) {
-        updatedCard.lateCall = true;
-        updatedCard.lateCallMessage =
-          lateCallInfo.lateCallMessage || "Missed opportunity";
-        updatedCard.disqualified = true;
-        updatedCard.shake = true; // trigger animation
-        SoundService.playSound("you_didnt_win");
-        setTimeout(() => {
-          setCards((prev) => prev.map((c) => ({ ...c, shake: false })));
-        }, 1000);
-        setNonWinnerCardData(updatedCard);
-        setIsNonWinnerModalOpen(true);
-      }
-
-      // Update card state in both arrays
-      setCards((prev) => prev.map((c) => (c.id === cardId ? updatedCard : c)));
-      setBingoCards((prev) =>
-        prev.map((c) => (c.id === cardId ? updatedCard : c))
+      const uniqueCardCalledNumbers = [...new Set(cardCalledNumbers)].sort(
+        (a, b) => a - b
       );
 
-      // Update game state
-      setGameData((prev) => ({ ...prev, ...data.game }));
+      // FIXED: Trigger win if isBingo true (even if winner null, e.g., completed game)
+      if (data.isBingo) {
+        console.log(
+          `[handleCheckCard] 🎉 BINGO! (Previous winner if completed)`
+        );
+        // NEW: Compute winning numbers and indices using backend-style logic
+        let winningNumbers = [];
+        let winningIndices = [];
+        let effectivePattern = data.winningPattern;
+        if (data.winners && data.winners.length > 0) {
+          const winner = data.winners[0];
+          const cardNumbers = winner.numbers; // 5x5 grid from backend
+          const pattern = winner.winningPattern;
+          try {
+            const result = getNumbersForPatternBackendStyle(
+              cardNumbers,
+              pattern,
+              [],
+              true
+            ); // isWinner=true for fixed pattern
+            winningNumbers = result.selectedNumbers;
+            winningIndices = result.selectedIndices;
+          } catch (err) {
+            console.error(
+              "[handleCheckCard] Error computing winning pattern:",
+              err
+            );
+          }
+        }
+        // NEW: Log winner card winning numbers
+        console.log(
+          `[DEBUG] Winner Card ${cardIdParam} Winning Numbers:`,
+          winningNumbers
+        );
+        console.log(
+          `[DEBUG] Winner Card ${cardIdParam} Winning Indices:`,
+          winningIndices
+        );
+        console.log(
+          `[DEBUG] Winner Card Full Grid:`,
+          buildGrid(cardInState.numbers)
+        );
+        console.log(
+          `[DEBUG] All Called on Winner Card:`,
+          uniqueCardCalledNumbers
+        );
+        console.log(
+          `[DEBUG] Other Called on Winner Card:`,
+          uniqueCardCalledNumbers.filter((n) => !winningNumbers?.includes(n))
+        );
+        console.log(`[DEBUG] Effective Pattern:`, effectivePattern);
+        console.log(`[DEBUG] Completed Patterns:`, data.completedPatterns);
+        // Set bingoStatus with API data for winner modal rendering
+        setBingoStatus({
+          pattern: effectivePattern || data.winningPattern || "line",
+          lateCall: data.lateCall || false, // Use backend lateCall
+          winnerCardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+          winningIndices,
+          winningNumbers,
+          otherCalledNumbers:
+            data.otherCalledNumbers ||
+            uniqueCardCalledNumbers.filter((n) => !winningNumbers?.includes(n)),
+          prize:
+            data.prize ||
+            data.previousWinner?.prize ||
+            gameData?.prizePool ||
+            0,
+          patternInfo: {
+            rowIndex: data.rowIndex || null,
+            colIndex: data.colIndex || null,
+          },
+        });
+        setShowWinModal(true);
+        setIsWinnerModalOpen(true); // Explicitly set for consistency
+        setWinnerData(data.winner || data.previousWinner); // Fallback to previousWinner
+        // NEW: Update card state with winning positions for orange marking
+        const updatedCard = { ...cardInState, isWinner: true };
+        const tempGrid = buildGrid(cardInState.numbers);
+        winningIndices.forEach((idx) => {
+          if (idx !== 12) {
+            // Skip free space
+            const row = Math.floor(idx / 5);
+            const col = idx % 5;
+            const letter = letters[col];
+            updatedCard.winningPositions[letter][row] = true;
+            // Also ensure marked if called
+            if (
+              typeof tempGrid[row][col] === "number" &&
+              calledNumbers.includes(tempGrid[row][col])
+            ) {
+              updatedCard.markedPositions[letter][row] = true;
+            }
+          }
+        });
+        // Update both states
+        setCards((prevCards) =>
+          prevCards.map((c) =>
+            c.id === parseInt(cardIdParam) ? updatedCard : c
+          )
+        );
+        setBingoCards((prevCards) =>
+          prevCards.map((c) =>
+            c.id === parseInt(cardIdParam) ? updatedCard : c
+          )
+        );
+        // Optionally disable other cards
+        setCards((prevCards) =>
+          prevCards.map((c) => ({
+            ...c,
+            disabled: c.id !== parseInt(cardIdParam),
+          }))
+        );
+        // Trigger celebration (e.g., confetti)
+        createConfetti();
+        SoundService.playSound("winner");
+      } else {
+        // Non-bingo/late call handling
+        console.log(`[handleCheckCard] Non-bingo/late:`, {
+          lateCall: data.lateCall,
+          message: data.message || data.lateCallMessage,
+        });
 
-      // Update marked grids for all cards
+        // FIXED: Safely update card state with response data (no more "missing")
+        if (cardInState) {
+          const updatedCard = {
+            ...cardInState,
+            cardId: cardIdParam,
+            cardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+            patternInfo: {
+              selectedIndices: data.selectedIndices || [],
+              rowIndex: data.rowIndex || null,
+              colIndex: data.colIndex || null,
+              pattern: data.pattern || null,
+            },
+            calledNumbersInPattern: data.calledNumbersInPattern || [],
+            otherCalledNumbers:
+              data.otherCalledNumbers ||
+              uniqueCardCalledNumbers.filter(
+                (n) => !data.calledNumbersInPattern?.includes(n)
+              ) ||
+              uniqueCardCalledNumbers,
+            lateCall: data.lateCall || false,
+            lateCallMessage:
+              data.message ||
+              data.lateCallMessage ||
+              "No bingo found. Try again!",
+            wouldHaveWon: data.wouldHaveWon || null, // For late call details
+            checkCount: data.checkCount || cardInState.checkCount || 0,
+            disqualified:
+              data.disqualified || cardInState.disqualified || false,
+            lastCheckTime:
+              data.checkCount > cardInState.checkCount
+                ? new Date()
+                : cardInState.lastCheckTime,
+          };
+
+          // If disqualified or late, add visual cue (e.g., shake animation)
+          if (data.disqualified || data.lateCall) {
+            updatedCard.shake = true; // Trigger CSS animation
+            setTimeout(() => {
+              setCards((prevCards) =>
+                prevCards.map((c) => ({ ...c, shake: false }))
+              );
+            }, 1000);
+            if (data.lateCall) {
+              SoundService.playSound("you_didnt_win"); // Optional sound
+            }
+          }
+
+          // Update cards state
+          setCards((prevCards) =>
+            prevCards.map((c) =>
+              c.id === parseInt(cardIdParam) ? updatedCard : c
+            )
+          );
+
+          console.log(
+            `[handleCheckCard] Updated card ${cardIdParam}:`,
+            updatedCard
+          );
+
+          // Trigger non-winner modal
+          setNonWinnerCardData(updatedCard);
+          setIsNonWinnerModalOpen(true);
+
+          // Optional: Set message for toast (if implemented elsewhere)
+          setShowMessage(updatedCard.lateCallMessage);
+          setMessageType(updatedCard.lateCall ? "warning" : "info");
+        } else {
+          console.warn(
+            `[handleCheckCard] Card ${cardIdParam} still missing after update attempt`
+          );
+          setCallError(`Card ${cardIdParam} not found in state`);
+          setIsErrorModalOpen(true);
+        }
+      }
+
+      // Update marked grids for all cards (re-mark based on new called numbers)
       updateMarkedGrids();
     } catch (error) {
       console.error(
@@ -1679,6 +1875,7 @@ const BingoGame = () => {
       );
       setCallError(error.message || "Check failed. Please try again.");
       setIsErrorModalOpen(true);
+      // Optional: Set generic message
       setShowMessage("Check failed. Please try again.");
       setMessageType("error");
     }
