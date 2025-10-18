@@ -399,122 +399,159 @@ export const checkBingo = async (req, res, next) => {
 
 // ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
 // ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
-const detectLateCallForCurrentPattern = async (
+function getNumbersForPattern(
   cardNumbers,
-  currentPattern,
-  calledNumbers,
-  gameId,
-  lineInfo = null
-) => {
-  try {
-    console.log(
-      `[detectLateCallForCurrentPattern] 🔍 Pattern "${currentPattern}", lineInfo: ${JSON.stringify(
-        lineInfo
-      )}`
+  pattern,
+  calledNumbers = [],
+  selectSpecificLine = false,
+  targetIndices = [],
+  includeMarked = false,
+  lastCalledNumber = null
+) {
+  if (pattern === "all") {
+    console.error(
+      `[getNumbersForPattern] CRITICAL: "all" pattern passed directly. Convert to real pattern first.`
     );
-
-    const targetIndices =
-      lineInfo && lineInfo.lineIndex ? [lineInfo.lineIndex] : [];
-    const { numbers: patternNumbers } = getNumbersForPattern(
-      cardNumbers, // 2D
-      currentPattern,
-      calledNumbers, // ✅ FIX: Pass actual calledNumbers (not [])
-      true, // Use specific line
-      targetIndices,
-      true // ✅ FIX: includeMarked=true to get full required non-FREE numbers
-    );
-
-    const requiredNumbers = patternNumbers
-      .filter((num) => num !== "FREE" && !isNaN(parseInt(num)))
-      .map((num) => parseInt(num));
-
-    console.log(
-      `[detectLateCallForCurrentPattern] 📝 Required: [${requiredNumbers.join(
-        ", "
-      )}]`
-    );
-
-    if (requiredNumbers.length === 0) {
-      console.log(`[detectLateCallForCurrentPattern] ⚠️ No required numbers`);
-      return {
-        hasMissedOpportunity: false,
-        completingNumber: null,
-        message: null,
-      };
-    }
-
-    const callHistory = [];
-    requiredNumbers.forEach((reqNum) => {
-      const callIndex = calledNumbers.findIndex((num) => num === reqNum);
-      if (callIndex !== -1) {
-        callHistory.push({ number: reqNum, callIndex: callIndex + 1 });
-      }
-    });
-
-    if (callHistory.length < requiredNumbers.length) {
-      console.log(`[detectLateCallForCurrentPattern] ⚠️ Not fully called`);
-      return {
-        hasMissedOpportunity: false,
-        completingNumber: null,
-        message: null,
-      };
-    }
-
-    callHistory.sort((a, b) => a.callIndex - b.callIndex);
-    const completionCallIndex = Math.max(
-      ...callHistory.map((c) => c.callIndex)
-    );
-    const currentCallIndex = calledNumbers.length;
-    const wasCompleteEarlier = completionCallIndex < currentCallIndex;
-
-    console.log(
-      `[detectLateCallForCurrentPattern] 📊 Completion call #${completionCallIndex}, current #${currentCallIndex}, earlier? ${wasCompleteEarlier}`
-    );
-
-    const completingEntry = callHistory.find(
-      (c) => c.callIndex === completionCallIndex
-    );
-    const completingNumber = completingEntry ? completingEntry.number : null;
-
-    if (wasCompleteEarlier) {
-      const message = `You won before with ${currentPattern.replace(
-        "_",
-        " "
-      )} pattern on call #${completionCallIndex} (number ${completingNumber})`;
-      console.log(`[detectLateCallForCurrentPattern] 🚨 LATE CALL: ${message}`);
-      return {
-        hasMissedOpportunity: true,
-        message,
-        completingNumber,
-        details: {
-          pattern: currentPattern,
-          completingNumber,
-          callIndex: completionCallIndex,
-          validPatterns: [currentPattern],
-          numbersCalledBefore: callHistory.slice(0, -1).map((c) => c.number),
-          totalRequired: requiredNumbers.length,
-        },
-        earliestCallIndex: completionCallIndex,
-      };
-    }
-
-    console.log(
-      `[detectLateCallForCurrentPattern] ✅ Completed on current call with number ${completingNumber}`
-    );
-    return {
-      hasMissedOpportunity: false,
-      message: null,
-      completingNumber,
-    };
-  } catch (error) {
-    console.error("[detectLateCallForCurrentPattern] ❌ Error:", error);
-    return {
-      hasMissedOpportunity: false,
-      completingNumber: null,
-      message: null,
-    };
+    throw new Error(`"all" pattern is forbidden here. Use a real pattern.`);
   }
-};
+
+  console.log(
+    `[getNumbersForPattern] START — Pattern: "${pattern}", Called: [${calledNumbers.join(
+      ", "
+    )}], includeMarked: ${includeMarked}, lastCalledNumber: ${lastCalledNumber}`
+  );
+
+  if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
+    console.warn("[getNumbersForPattern] Invalid or empty cardNumbers");
+    return { numbers: [], selectedIndices: [] };
+  }
+
+  // Convert all to strings for safe comparison
+  const grid = cardNumbers.map((row) =>
+    Array.isArray(row) ? row.map((num) => String(num)) : []
+  );
+
+  const numbers = [];
+  const selectedIndices = [];
+
+  // Filter logic now depends on includeMarked
+  const filterFn = includeMarked
+    ? (n) => n !== "FREE" // Return all non-FREE numbers in pattern
+    : (n) => n !== "FREE" && !calledNumbers.includes(Number(n)); // Only unmarked
+
+  console.log(`[getNumbersForPattern] Grid prepared:`, grid);
+
+  // Helper function to find line containing lastCalledNumber
+  const findLineContainingNumber = (lastCalledNumber, grid) => {
+    if (!lastCalledNumber) return null;
+
+    const lastCalledStr = String(lastCalledNumber);
+
+    // Check rows first (horizontal lines)
+    for (let row = 0; row < grid.length; row++) {
+      for (let col = 0; col < grid[row].length; col++) {
+        if (grid[row][col] === lastCalledStr) {
+          return { type: "row", index: row, col: col };
+        }
+      }
+    }
+
+    // Check columns (vertical lines)
+    for (let col = 0; col < grid[0].length; col++) {
+      for (let row = 0; row < grid.length; row++) {
+        if (grid[row][col] === lastCalledStr) {
+          return { type: "col", index: col, row: row };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  // Helper function to check if a line is complete (all numbers called)
+  const isLineComplete = (lineNumbers, calledNumbers) => {
+    return lineNumbers.every(
+      (num) => num === "FREE" || calledNumbers.includes(Number(num))
+    );
+  };
+
+  let selectedRow = null;
+
+  // STEP 1: If we have lastCalledNumber, find the exact row that contains it
+  if (lastCalledNumber) {
+    const lineInfo = findLineContainingNumber(lastCalledNumber, grid);
+    if (lineInfo && lineInfo.type === "row") {
+      selectedRow = lineInfo.index;
+      console.log(
+        `[getNumbersForPattern] Found lastCalledNumber ${lastCalledNumber} in row ${selectedRow}`
+      );
+    }
+  }
+
+  // STEP 2: If no specific row found, check for complete lines
+  if (!selectedRow) {
+    // Check each row for completion
+    for (let row = 0; row < 5; row++) {
+      const rowNumbers = grid[row];
+      const complete = isLineComplete(rowNumbers, calledNumbers);
+      console.log(
+        `[DEBUG] Row ${row} complete? ${complete} (nums: [${rowNumbers.join(
+          ", "
+        )}])`
+      );
+      if (complete) {
+        selectedRow = row;
+        console.log(
+          `[getNumbersForPattern] Found complete row ${row}: [${rowNumbers.join(
+            ", "
+          )}]`
+        );
+        break; // Take first complete row
+      }
+    }
+  }
+
+  // STEP 3: If still no row found, use specified target or first row as fallback
+  if (!selectedRow && selectSpecificLine && targetIndices.length > 0) {
+    selectedRow = targetIndices[0];
+    console.log(`[getNumbersForPattern] Using specified row ${selectedRow}`);
+  }
+
+  if (!selectedRow && grid.length > 0) {
+    selectedRow = 0; // Default to first row
+    console.log(
+      `[getNumbersForPattern] No complete/specific row found, using default row 0`
+    );
+  }
+
+  // STEP 4: Process the selected row
+  if (selectedRow !== null && selectedRow >= 0 && selectedRow < grid.length) {
+    const rowNumbers = grid[selectedRow].filter(filterFn);
+    numbers.push(...rowNumbers);
+    for (let j = 0; j < 5; j++) {
+      if (filterFn(grid[selectedRow][j])) {
+        selectedIndices.push(selectedRow * 5 + j);
+      }
+    }
+    console.log(
+      `[getNumbersForPattern] Pattern "horizontal_line" (row ${selectedRow}) → Numbers: [${numbers.join(
+        ", "
+      )}], Indices: [${selectedIndices.join(", ")}]`
+    );
+  } else {
+    console.warn(
+      "[getNumbersForPattern] No valid row found for horizontal_line"
+    );
+  }
+
+  const result = {
+    numbers: numbers.map(String),
+    selectedIndices,
+  };
+
+  console.log(`[getNumbersForPattern] END — Returning:`, result);
+  return result;
+}
 // Other functions (finishGame, pauseGame, updateGameStatus) – OPTIMIZED with lean/select where possible
 export const finishGame = async (req, res) => {
   const gameId = req.params.id;
