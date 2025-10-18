@@ -241,14 +241,10 @@ const BingoModals = ({
                                   " bg-orange-500 text-white border-orange-600 shadow-orange-500/50 relative";
                                 textColor =
                                   "text-white font-bold drop-shadow-sm";
-                              } else if (isOtherCalledNumber) {
+                              } else if (isCalled) {
                                 cellStyle +=
                                   " bg-blue-500 text-white border-blue-300 shadow-blue-300/30";
                                 textColor = "text-white font-medium";
-                              } else if (isWinningCell && !isCalled) {
-                                cellStyle +=
-                                  " bg-yellow-400 text-black border-yellow-600 shadow-yellow-300/30 relative";
-                                textColor = "text-black font-semibold";
                               } else {
                                 cellStyle +=
                                   " bg-white text-black border-gray-300 hover:bg-gray-50";
@@ -259,9 +255,6 @@ const BingoModals = ({
                                   key={`${rowIndex}-${colIndex}`}
                                   className={cellStyle}
                                 >
-                                  {isOtherCalledNumber && (
-                                    <div className="absolute -top-1 -left-1 w-2 h-2 bg-blue-400 rounded-full"></div>
-                                  )}
                                   <span
                                     className={`relative z-10 text-center ${textColor}`}
                                   >
@@ -475,41 +468,32 @@ const BingoModals = ({
                       (row || Array(5).fill("FREE")).map((number, colIndex) => {
                         const cellIndex = rowIndex * 5 + colIndex;
                         const isFree = number === "FREE";
-                        const isPatternCell =
-                          patternIndices.includes(cellIndex);
                         const num = Number(number);
-                        const isCalledInPattern = calledInPattern.includes(num);
-                        const isOtherCalled =
-                          otherCalled.includes(num) && !isCalledInPattern;
+                        const isCalled = allCalled.includes(num);
                         const displayNum = isFree ? "FREE" : num;
                         let cellStyle =
                           "w-10 h-10 flex items-center justify-center text-xs font-bold rounded border transition-all duration-300 shadow-sm relative overflow-hidden";
+                        let textColor = "text-black";
                         if (isFree) {
                           cellStyle +=
                             " bg-blue-600 text-white border-blue-400";
-                        } else if (isCalledInPattern) {
+                          textColor = "text-white";
+                        } else if (isCalled) {
                           cellStyle +=
-                            " bg-green-600 text-white border-green-400 shadow-green-400/30 scale-[1.02]";
-                        } else if (isOtherCalled) {
-                          cellStyle +=
-                            " bg-yellow-600 text-white border-yellow-400 shadow-yellow-400/30";
+                            " bg-blue-500 text-white border-blue-300 shadow-blue-300/30";
+                          textColor = "text-white font-medium";
                         } else {
                           cellStyle += " bg-white text-black border-gray-300";
+                          textColor = "text-black";
                         }
                         return (
                           <div
                             key={`${rowIndex}-${colIndex}`}
                             className={cellStyle}
                           >
-                            {isCalledInPattern && (
-                              <>
-                                <div className="absolute inset-0 rounded opacity-20 bg-green-400 animate-pulse"></div>
-                                <div className="absolute -top-[2px] -right-[2px] w-2 h-2 bg-yellow-400 rounded-full text-[6px] flex items-center justify-center font-bold text-black">
-                                  *
-                                </div>
-                              </>
-                            )}
-                            <span className="relative z-10 text-center">
+                            <span
+                              className={`relative z-10 text-center ${textColor}`}
+                            >
                               {displayNum}
                             </span>
                           </div>
