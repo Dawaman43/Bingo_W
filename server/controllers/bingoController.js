@@ -141,6 +141,7 @@ export const callNumber = async (req, res, next) => {
 };
 
 // controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
+// controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
 export const checkBingo = async (req, res, next) => {
   try {
     const { cardId, preferredPattern } = req.body;
@@ -195,32 +196,15 @@ export const checkBingo = async (req, res, next) => {
       return res.status(404).json({ message: "Full card data not found" });
     }
 
-    // Fetch future winners for this game
-    const futureWinners = await FutureWinner.find({
-      gameNumber: game.gameNumber,
-    })
-      .select("cardId pattern jackpotEnabled")
-      .lean();
-    const futureWinnerMap = {};
-    futureWinners.forEach((fw) => {
-      futureWinnerMap[fw.cardId] = {
-        pattern: fw.pattern,
-        jackpotEnabled: fw.jackpotEnabled,
-      };
-    });
+    // 🚨 FIXED: Removed FutureWinner check — now allows any selected card to bingo
+    // If needed, add back as optional: const requireScheduled = req.query.requireScheduled === 'true';
+    // Then fetch/validate only if true, else log warning and proceed.
 
-    const fw = futureWinnerMap[parseInt(cardId)];
-    if (!fw) {
-      // Not a future winner, no bingo
-      return res.json({
-        isBingo: false,
-        message: "Card is not a scheduled winner",
-        winners: [],
-        game,
-      });
-    }
+    // Use preferredPattern or fallback to game pattern
+    const expectedPattern = preferredPattern || game.pattern || "all";
 
-    const expectedPattern = fw.pattern;
+    // Log if no future winner scheduled (for auditing)
+    // await GameLog.create({ gameId, action: "checkBingo", status: "unscheduled_check", details: { cardId: parseInt(cardId), pattern: expectedPattern } });
 
     // Check card state
     let checkCount = selectedCard.checkCount || 0;
@@ -241,17 +225,19 @@ export const checkBingo = async (req, res, next) => {
 
     // Update the specific card
     const currentTime = new Date();
+    const index = game.selectedCards.findIndex(
+      (sc) => sc.id === parseInt(cardId)
+    ); // Safer index lookup
+    if (index === -1) {
+      return res
+        .status(404)
+        .json({ message: "Card index not found in selectedCards" });
+    }
     await Game.findByIdAndUpdate(gameId, {
       $set: {
-        [`selectedCards.${game.selectedCards.indexOf(
-          selectedCard
-        )}.checkCount`]: checkCount,
-        [`selectedCards.${game.selectedCards.indexOf(
-          selectedCard
-        )}.lastCheckTime`]: currentTime,
-        [`selectedCards.${game.selectedCards.indexOf(
-          selectedCard
-        )}.disqualified`]: disqualified,
+        [`selectedCards.${index}.checkCount`]: checkCount,
+        [`selectedCards.${index}.lastCheckTime`]: currentTime,
+        [`selectedCards.${index}.disqualified`]: disqualified,
       },
     });
 
@@ -265,11 +251,15 @@ export const checkBingo = async (req, res, next) => {
     }
 
     // Check if pattern is complete with all called numbers
-    const [isComplete] = checkCardBingo(
+    const [isComplete, detectedPattern] = checkCardBingo(
       fullCard.numbers,
       game.calledNumbers,
-      expectedPattern
+      expectedPattern,
+      lastCalledNumber?.number
     );
+
+    const actualPattern =
+      expectedPattern === "all" ? detectedPattern : expectedPattern;
 
     if (!isComplete) {
       return res.json({
@@ -283,7 +273,7 @@ export const checkBingo = async (req, res, next) => {
     // Late call check: determine if completed by last number or earlier
     const lateCallResult = await detectLateCallForCurrentPattern(
       fullCard.numbers,
-      expectedPattern,
+      actualPattern,
       game.calledNumbers,
       gameId
     );
@@ -296,9 +286,7 @@ export const checkBingo = async (req, res, next) => {
       disqualified = true;
       await Game.findByIdAndUpdate(gameId, {
         $set: {
-          [`selectedCards.${game.selectedCards.indexOf(
-            selectedCard
-          )}.disqualified`]: true,
+          [`selectedCards.${index}.disqualified`]: true,
         },
       });
 
@@ -308,7 +296,7 @@ export const checkBingo = async (req, res, next) => {
         status: "late_call",
         details: {
           cardId: parseInt(cardId),
-          pattern: expectedPattern,
+          pattern: actualPattern,
           completingNumber,
           lateCallMessage: lateCallResult.message,
           timestamp: new Date(),
@@ -322,12 +310,12 @@ export const checkBingo = async (req, res, next) => {
           {
             cardId: parseInt(cardId),
             numbers: fullCard.numbers,
-            winningPattern: expectedPattern,
+            winningPattern: actualPattern,
             disqualified: true,
             completingNumber,
             lateCall: true,
             lateCallMessage: lateCallResult.message,
-            jackpotEnabled: fw.jackpotEnabled,
+            jackpotEnabled: false, // Default since no fw
           },
         ],
         gameStatus: game.status,
@@ -338,12 +326,12 @@ export const checkBingo = async (req, res, next) => {
     const winningCard = {
       cardId: parseInt(cardId),
       numbers: fullCard.numbers,
-      winningPattern: expectedPattern,
+      winningPattern: actualPattern,
       disqualified: false,
       completingNumber,
       lateCall: false,
       lateCallMessage: null,
-      jackpotEnabled: fw.jackpotEnabled,
+      jackpotEnabled: false, // Default since no fw
     };
 
     // Save winner to Game & Result
@@ -353,6 +341,7 @@ export const checkBingo = async (req, res, next) => {
         const freshGame = await Game.findById(gameId).session(session);
         freshGame.status = "completed";
         freshGame.winnerCards = [
+          // Assuming winnerCards as per earlier note; adjust to winner if standardized
           {
             cardId: winningCard.cardId,
             winningPattern: winningCard.winningPattern,
@@ -389,7 +378,7 @@ export const checkBingo = async (req, res, next) => {
       status: "success",
       details: {
         cardId: parseInt(cardId),
-        pattern: expectedPattern,
+        pattern: actualPattern,
         completingNumber,
         timestamp: new Date(),
       },
