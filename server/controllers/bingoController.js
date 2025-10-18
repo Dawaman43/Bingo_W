@@ -140,14 +140,19 @@ export const callNumber = async (req, res, next) => {
   }
 };
 
+// controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
 export const checkBingo = async (req, res, next) => {
   try {
-    const { identifier, preferredPattern } = req.body;
+    const { cardId, preferredPattern } = req.body;
     const gameId = req.params.id;
+
+    if (!cardId) {
+      return res.status(400).json({ message: "Card identifier is required" });
+    }
 
     const game = await Game.findById(gameId)
       .select(
-        "gameNumber status calledNumbers calledNumbersLog selectedCards forcedPattern pattern winnerCards prizePool"
+        "gameNumber status calledNumbers calledNumbersLog selectedCards forced* pattern winner prizePool"
       )
       .lean();
 
@@ -163,192 +168,237 @@ export const checkBingo = async (req, res, next) => {
 
     const lastCalledNumber =
       game.calledNumbersLog?.[game.calledNumbersLog.length - 1] || null;
-
     if (!lastCalledNumber) {
       return res.json({
         isBingo: false,
-        winners: [],
-        lateCallCards: [],
-        gameStatus: game.status,
         message: "No numbers called yet",
+        winners: [],
+        game,
       });
     }
 
-    const validPatterns = [
-      "four_corners_center",
-      "main_diagonal",
-      "other_diagonal",
-      "horizontal_line",
-      "vertical_line",
-      "inner_corners",
-      "all",
-    ];
+    // Find the specific card in selectedCards
+    const selectedCard = game.selectedCards.find(
+      (sc) => sc.id === parseInt(cardId)
+    );
+    if (!selectedCard) {
+      return res
+        .status(404)
+        .json({ message: "Card not found in selected cards" });
+    }
 
-    const patternsToCheck =
-      game.pattern === "all" && !game.forcedPattern
-        ? validPatterns.filter((p) => p !== "all")
-        : [game.forcedPattern || game.pattern];
-
-    // Fetch all selected cards in one query
-    const selectedCardIds = game.selectedCards.map((c) => c.id);
-    const allCards = await Card.find({ card_number: { $in: selectedCardIds } })
-      .select("card_number numbers")
+    // Fetch full card
+    const fullCard = await Card.findOne({ card_number: parseInt(cardId) })
+      .select("numbers")
       .lean();
+    if (!fullCard?.numbers) {
+      return res.status(404).json({ message: "Full card data not found" });
+    }
 
-    const cardMap = {};
-    allCards.forEach((card) => (cardMap[card.card_number] = card.numbers));
+    // Fetch future winners for this game
+    const futureWinners = await FutureWinner.find({
+      gameNumber: game.gameNumber,
+    })
+      .select("cardId pattern jackpotEnabled")
+      .lean();
+    const futureWinnerMap = {};
+    futureWinners.forEach((fw) => {
+      futureWinnerMap[fw.cardId] = {
+        pattern: fw.pattern,
+        jackpotEnabled: fw.jackpotEnabled,
+      };
+    });
 
-    const winningCards = [];
-    const lateCallCards = [];
-    const bulkUpdateOps = [];
+    const fw = futureWinnerMap[parseInt(cardId)];
+    if (!fw) {
+      // Not a future winner, no bingo
+      return res.json({
+        isBingo: false,
+        message: "Card is not a scheduled winner",
+        winners: [],
+        game,
+      });
+    }
 
-    for (const c of game.selectedCards) {
-      const fullCardNumbers = cardMap[c.id];
-      if (!fullCardNumbers) continue;
+    const expectedPattern = fw.pattern;
 
-      const currentCheckTime = new Date();
-      let disqualified = c.disqualified || false;
-      let lateCall = false;
-      let winningPattern = null;
+    // Check card state
+    let checkCount = selectedCard.checkCount || 0;
+    let disqualified = selectedCard.disqualified || false;
+    const lastCheckTime = selectedCard.lastCheckTime || null;
 
-      // Skip if already checked for this number
-      if (
-        c.lastCheckTime &&
-        new Date(c.lastCheckTime) >= new Date(lastCalledNumber.calledAt)
-      )
-        continue;
+    // Reset checkCount if checking after last call
+    if (
+      lastCheckTime &&
+      lastCalledNumber.calledAt &&
+      new Date(lastCheckTime) < new Date(lastCalledNumber.calledAt)
+    ) {
+      checkCount += 1;
+    } else {
+      checkCount = 1;
+      disqualified = false;
+    }
 
-      let tempWinningPattern = null; // tentative winning pattern for non-late cards
+    // Update the specific card
+    const currentTime = new Date();
+    await Game.findByIdAndUpdate(gameId, {
+      $set: {
+        [`selectedCards.${game.selectedCards.indexOf(
+          selectedCard
+        )}.checkCount`]: checkCount,
+        [`selectedCards.${game.selectedCards.indexOf(
+          selectedCard
+        )}.lastCheckTime`]: currentTime,
+        [`selectedCards.${game.selectedCards.indexOf(
+          selectedCard
+        )}.disqualified`]: disqualified,
+      },
+    });
 
-      // Check all patterns
-      for (const pattern of patternsToCheck) {
-        if (!validPatterns.includes(pattern)) continue;
+    if (disqualified || checkCount > 1) {
+      return res.json({
+        isBingo: false,
+        message: "Card disqualified or multiple checks",
+        winners: [],
+        game,
+      });
+    }
 
-        const [isComplete] = checkCardBingo(
-          fullCardNumbers,
-          game.calledNumbers,
-          pattern
-        );
+    // Check if pattern is complete with all called numbers
+    const [isComplete] = checkCardBingo(
+      fullCard.numbers,
+      game.calledNumbers,
+      expectedPattern
+    );
 
-        if (isComplete) {
-          // Detect late call
-          const lateCallResult = await detectLateCallForCurrentPattern(
-            fullCardNumbers,
-            pattern,
-            game.calledNumbers,
-            gameId
-          );
+    if (!isComplete) {
+      return res.json({
+        isBingo: false,
+        message: "Pattern not complete",
+        winners: [],
+        game,
+      });
+    }
 
-          if (lateCallResult?.hasMissedOpportunity) {
-            disqualified = true;
-            lateCall = true;
-            lateCallCards.push({
-              cardId: c.id,
-              numbers: fullCardNumbers,
-              winningPattern: pattern,
-              lateCall: true,
-              lateCallMessage: lateCallResult.message || "Missed opportunity",
-            });
-          } else {
-            if (!tempWinningPattern || pattern === preferredPattern) {
-              tempWinningPattern = pattern;
-            }
-          }
-        }
-      }
+    // Late call check: determine if completed by last number or earlier
+    const lateCallResult = await detectLateCallForCurrentPattern(
+      fullCard.numbers,
+      expectedPattern,
+      game.calledNumbers,
+      gameId
+    );
 
-      winningPattern = tempWinningPattern;
+    const completingNumber =
+      lateCallResult?.completingNumber || lastCalledNumber.number;
 
-      if (winningPattern && !disqualified) {
-        winningCards.push({
-          cardId: c.id,
-          numbers: fullCardNumbers,
-          winningPattern,
-          disqualified,
-          lateCall: false,
-          lateCallMessage: null,
-        });
-      }
-
-      // Always update lastCheckTime and disqualified
-      bulkUpdateOps.push({
-        updateOne: {
-          filter: { _id: gameId, "selectedCards.id": c.id },
-          update: {
-            $set: {
-              "selectedCards.$.lastCheckTime": currentCheckTime,
-              "selectedCards.$.disqualified": disqualified,
-            },
-          },
+    if (lateCallResult?.hasMissedOpportunity) {
+      // Mark as late call
+      disqualified = true;
+      await Game.findByIdAndUpdate(gameId, {
+        $set: {
+          [`selectedCards.${game.selectedCards.indexOf(
+            selectedCard
+          )}.disqualified`]: true,
         },
       });
+
+      await GameLog.create({
+        gameId,
+        action: "checkBingo",
+        status: "late_call",
+        details: {
+          cardId: parseInt(cardId),
+          pattern: expectedPattern,
+          completingNumber,
+          lateCallMessage: lateCallResult.message,
+          timestamp: new Date(),
+        },
+      });
+
+      return res.json({
+        isBingo: false,
+        message: "Late call detected",
+        winners: [
+          {
+            cardId: parseInt(cardId),
+            numbers: fullCard.numbers,
+            winningPattern: expectedPattern,
+            disqualified: true,
+            completingNumber,
+            lateCall: true,
+            lateCallMessage: lateCallResult.message,
+            jackpotEnabled: fw.jackpotEnabled,
+          },
+        ],
+        gameStatus: game.status,
+      });
     }
 
-    // Apply all updates in bulk
-    if (bulkUpdateOps.length > 0) {
-      await Game.bulkWrite(bulkUpdateOps);
-    }
+    // It's a valid bingo, completed by last number
+    const winningCard = {
+      cardId: parseInt(cardId),
+      numbers: fullCard.numbers,
+      winningPattern: expectedPattern,
+      disqualified: false,
+      completingNumber,
+      lateCall: false,
+      lateCallMessage: null,
+      jackpotEnabled: fw.jackpotEnabled,
+    };
 
-    // Save winners and results
-    if (winningCards.length > 0) {
-      const session = await Game.startSession();
-      try {
-        await session.withTransaction(async () => {
-          const freshGame = await Game.findById(gameId).session(session);
+    // Save winner to Game & Result
+    const session = await Game.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const freshGame = await Game.findById(gameId).session(session);
+        freshGame.status = "completed";
+        freshGame.winnerCards = [
+          {
+            cardId: winningCard.cardId,
+            winningPattern: winningCard.winningPattern,
+            numbers: winningCard.numbers,
+            jackpotEnabled: winningCard.jackpotEnabled,
+          },
+        ];
+        await freshGame.save({ session });
 
-          freshGame.winnerCards = [
-            ...(freshGame.winnerCards || []),
-            ...winningCards.map((w) => ({
-              cardId: w.cardId,
-              winningPattern: w.winningPattern,
-              numbers: w.numbers,
-            })),
-          ];
-
-          await freshGame.save({ session });
-
-          for (const winner of winningCards) {
-            await Result.create(
-              [
-                {
-                  gameId: freshGame._id,
-                  winnerCardId: winner.cardId,
-                  userId: req.user?._id || null,
-                  identifier:
-                    identifier || `${freshGame._id}-${winner.cardId}`,
-                  prize: freshGame.prizePool,
-                  isJackpot: false,
-                  winningPattern: winner.winningPattern,
-                  lastCalledNumber: lastCalledNumber.number,
-                  timestamp: new Date(),
-                },
-              ],
-              { session }
-            );
-          }
-        });
-      } finally {
-        await session.endSession();
-      }
+        await Result.create(
+          [
+            {
+              gameId: freshGame._id,
+              winnerCardId: winningCard.cardId,
+              userId: req.user?._id || null,
+              identifier: cardId || `${freshGame._id}-${winningCard.cardId}`,
+              prize: freshGame.prizePool,
+              isJackpot: winningCard.jackpotEnabled,
+              winningPattern: winningCard.winningPattern,
+              lastCalledNumber: winningCard.completingNumber,
+              timestamp: new Date(),
+            },
+          ],
+          { session }
+        );
+      });
+    } finally {
+      await session.endSession();
     }
 
     await GameLog.create({
       gameId,
       action: "checkBingo",
-      status: winningCards.length > 0 ? "success" : "checked",
+      status: "success",
       details: {
-        lastCalledNumber: lastCalledNumber.number,
-        winners: winningCards,
-        lateCallCards,
+        cardId: parseInt(cardId),
+        pattern: expectedPattern,
+        completingNumber,
         timestamp: new Date(),
       },
     });
 
     return res.json({
-      isBingo: winningCards.length > 0,
-      winners: winningCards,
-      lateCallCards,
-      gameStatus: game.status,
+      isBingo: true,
+      winners: [winningCard],
+      gameStatus: "completed",
     });
   } catch (err) {
     console.error("[checkBingo] ❌ ERROR:", err);
@@ -358,7 +408,7 @@ export const checkBingo = async (req, res, next) => {
   }
 };
 
-// ✅ NEW FUNCTION: Pattern-specific late call detection
+// ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
 const detectLateCallForCurrentPattern = async (
   cardNumbers,
   currentPattern,
@@ -396,7 +446,11 @@ const detectLateCallForCurrentPattern = async (
 
     if (requiredNumbers.length === 0) {
       console.log(`[detectLateCallForCurrentPattern] ⚠️ No required numbers`);
-      return null;
+      return {
+        hasMissedOpportunity: false,
+        completingNumber: null,
+        message: null,
+      };
     }
 
     const callHistory = [];
@@ -409,7 +463,11 @@ const detectLateCallForCurrentPattern = async (
 
     if (callHistory.length < requiredNumbers.length) {
       console.log(`[detectLateCallForCurrentPattern] ⚠️ Not fully called`);
-      return null;
+      return {
+        hasMissedOpportunity: false,
+        completingNumber: null,
+        message: null,
+      };
     }
 
     callHistory.sort((a, b) => a.callIndex - b.callIndex);
@@ -423,10 +481,12 @@ const detectLateCallForCurrentPattern = async (
       `[detectLateCallForCurrentPattern] 📊 Completion call #${completionCallIndex}, current #${currentCallIndex}, earlier? ${wasCompleteEarlier}`
     );
 
+    const completingEntry = callHistory.find(
+      (c) => c.callIndex === completionCallIndex
+    );
+    const completingNumber = completingEntry ? completingEntry.number : null;
+
     if (wasCompleteEarlier) {
-      const completingNumber = callHistory.find(
-        (c) => c.callIndex === completionCallIndex
-      )?.number;
       const message = `You won before with ${currentPattern.replace(
         "_",
         " "
@@ -435,6 +495,7 @@ const detectLateCallForCurrentPattern = async (
       return {
         hasMissedOpportunity: true,
         message,
+        completingNumber,
         details: {
           pattern: currentPattern,
           completingNumber,
@@ -448,12 +509,20 @@ const detectLateCallForCurrentPattern = async (
     }
 
     console.log(
-      `[detectLateCallForCurrentPattern] ✅ Completed on current call`
+      `[detectLateCallForCurrentPattern] ✅ Completed on current call with number ${completingNumber}`
     );
-    return null;
+    return {
+      hasMissedOpportunity: false,
+      message: null,
+      completingNumber,
+    };
   } catch (error) {
     console.error("[detectLateCallForCurrentPattern] ❌ Error:", error);
-    return null;
+    return {
+      hasMissedOpportunity: false,
+      completingNumber: null,
+      message: null,
+    };
   }
 };
 
@@ -689,7 +758,7 @@ export const updateGameStatus = async (req, res, next) => {
     // FIXED: Include gameNumber in select
     // OPTIMIZED: Lean for read
     const game = await Game.findOne({ _id: gameId, cashierId })
-      .select("gameNumber") // ✅ Light include
+      .select("gameNumber status") // ✅ Include status to check
       .lean();
     if (!game) {
       await GameLog.create({
@@ -739,7 +808,7 @@ export const updateGameStatus = async (req, res, next) => {
       { status },
       { new: true }
     )
-      .select("gameNumber") // ✅ Include
+      .select("gameNumber")
       .lean();
 
     await GameLog.create({
@@ -749,8 +818,6 @@ export const updateGameStatus = async (req, res, next) => {
       details: {
         gameNumber: game.gameNumber,
         newStatus: status,
-        winnerCardNumbers: game.winnerCardNumbers,
-        selectedWinnerNumbers: game.selectedWinnerNumbers,
         timestamp: new Date(),
       },
     });
@@ -760,14 +827,12 @@ export const updateGameStatus = async (req, res, next) => {
       game: {
         ...updatedGame,
         status,
-        winnerCardNumbers: game.winnerCardNumbers,
-        selectedWinnerNumbers: game.selectedWinnerNumbers,
       },
     });
   } catch (error) {
     console.error("[updateGameStatus] Error updating game status:", error);
     await GameLog.create({
-      gameId: req.params.gameId,
+      gameId: req.params.gameId || gameId,
       action: "updateGameStatus",
       status: "failed",
       details: { error: error.message || "Internal server error" },
