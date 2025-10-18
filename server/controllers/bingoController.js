@@ -203,20 +203,19 @@ export const checkBingo = async (req, res, next) => {
     const bulkUpdateOps = [];
 
     for (const c of game.selectedCards) {
-      if (c.disqualified) continue;
-
       const fullCardNumbers = cardMap[c.id];
       if (!fullCardNumbers) continue;
 
-      // Skip if already checked for this called number
-      if (
-        c.lastCheckTime &&
-        new Date(c.lastCheckTime) >= new Date(lastCalledNumber.calledAt)
-      )
-        continue;
-
-      // Check bingo patterns
+      const currentCheckTime = new Date();
+      let disqualified = c.disqualified || false;
+      let lateCall = false;
       let winningPattern = null;
+
+      // Check if already checked for this number
+      const alreadyChecked =
+        c.lastCheckTime && new Date(c.lastCheckTime) >= new Date(lastCalledNumber.calledAt);
+
+      // Check all patterns for bingo
       for (const pattern of patternsToCheck) {
         if (!validPatterns.includes(pattern)) continue;
 
@@ -230,54 +229,43 @@ export const checkBingo = async (req, res, next) => {
           if (!winningPattern || pattern === preferredPattern) {
             winningPattern = pattern;
           }
+
+          // Detect late call (card could have won earlier)
+          const lateCallResult = await detectLateCallForCurrentPattern(
+            fullCardNumbers,
+            pattern,
+            game.calledNumbers,
+            gameId
+          );
+
+          if (lateCallResult?.hasMissedOpportunity) {
+            disqualified = true;
+            lateCall = true;
+          }
         }
       }
 
-      if (!winningPattern) {
-        // No bingo, just update lastCheckTime
-        bulkUpdateOps.push({
-          updateOne: {
-            filter: { _id: gameId, "selectedCards.id": c.id },
-            update: { $set: { "selectedCards.$.lastCheckTime": new Date() } },
-          },
+      if (winningPattern) {
+        winningCards.push({
+          cardId: c.id,
+          numbers: fullCardNumbers,
+          winningPattern,
+          disqualified,
+          lateCall,
+          lateCallMessage: lateCall ? "Missed opportunity detected" : null,
         });
-        continue;
       }
 
-      // Check for late call
-      const lateCallResult = await detectLateCallForCurrentPattern(
-        fullCardNumbers,
-        winningPattern,
-        game.calledNumbers,
-        gameId
-      );
-
-      if (lateCallResult?.hasMissedOpportunity) {
-        bulkUpdateOps.push({
-          updateOne: {
-            filter: { _id: gameId, "selectedCards.id": c.id },
-            update: {
-              $set: {
-                "selectedCards.$.lastCheckTime": new Date(),
-                "selectedCards.$.disqualified": true,
-              },
-            },
-          },
-        });
-        continue;
-      }
-
-      // Valid winner
-      winningCards.push({
-        cardId: c.id,
-        numbers: fullCardNumbers,
-        winningPattern,
-      });
-
+      // Always update lastCheckTime and disqualified in bulk
       bulkUpdateOps.push({
         updateOne: {
           filter: { _id: gameId, "selectedCards.id": c.id },
-          update: { $set: { "selectedCards.$.lastCheckTime": new Date() } },
+          update: {
+            $set: {
+              "selectedCards.$.lastCheckTime": currentCheckTime,
+              "selectedCards.$.disqualified": disqualified,
+            },
+          },
         },
       });
     }
@@ -306,6 +294,7 @@ export const checkBingo = async (req, res, next) => {
 
           await freshGame.save({ session });
 
+          // Save results
           for (const winner of winningCards) {
             await Result.create(
               [
@@ -354,7 +343,6 @@ export const checkBingo = async (req, res, next) => {
       .json({ message: "Internal server error", error: err.message });
   }
 };
-
 
 // ✅ NEW FUNCTION: Pattern-specific late call detection
 const detectLateCallForCurrentPattern = async (
