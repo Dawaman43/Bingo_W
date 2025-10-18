@@ -53,8 +53,10 @@ export default function ModeratorDashboard() {
     }
   };
 
-  const fetchGames = async () => {
-    setLoading(true);
+  const fetchGames = async (background = false) => {
+    if (!background) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const cashierId = await fetchCashierInfo();
@@ -137,7 +139,9 @@ export default function ModeratorDashboard() {
           : null,
       });
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   };
 
@@ -153,10 +157,10 @@ export default function ModeratorDashboard() {
   };
 
   useEffect(() => {
-    fetchGames();
+    fetchGames(false);
     fetchAllCards();
     const intervalId = setInterval(() => {
-      fetchGames();
+      fetchGames(true);
     }, 5000);
     return () => clearInterval(intervalId);
   }, []);
@@ -1144,6 +1148,7 @@ export default function ModeratorDashboard() {
                           <option value="four_corners_center">
                             Four Corners + Center
                           </option>
+                          <option value="inner_corners">inner corners</option>
                         </select>
                       </div>
                       <div>
@@ -1291,6 +1296,7 @@ export default function ModeratorDashboard() {
                     <option value="vertical_line">Vertical Line</option>
                     <option value="main_diagonal">Main Diagonal</option>
                     <option value="other_diagonal">Other Diagonal</option>
+                    <option value="inner_corners">inner corners</option>
                     <option value="four_corners_center">
                       Four Corners + Center
                     </option>

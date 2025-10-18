@@ -31,23 +31,25 @@ export function getNumbersForPattern(
     throw new Error("Pattern must be specified");
   }
 
-  // Define pattern indices (0-24 for 5x5 grid, row-major order)
+  // Define pattern indices
   const patterns = {
-    four_corners_center: [0, 4, 20, 24, 12], // Top-left, top-right, bottom-left, bottom-right, center
-    cross: [2, 7, 12, 17, 22, 10, 11, 13, 14], // Middle column and middle row
-    main_diagonal: [0, 6, 12, 18, 24], // Top-left to bottom-right
-    other_diagonal: [4, 8, 12, 16, 20], // Top-right to bottom-left
-    horizontal_line: [0, 1, 2, 3, 4], // First row (configurable if isWinner is false)
-    vertical_line: [0, 5, 10, 15, 20], // First column (configurable if isWinner is false)
-    all: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12), // All non-free space indices
-    full_card: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12), // Alias for "all"
+    four_corners_center: [0, 4, 20, 24, 12],
+    cross: [2, 7, 12, 17, 22, 10, 11, 13, 14],
+    main_diagonal: [0, 6, 12, 18, 24],
+    other_diagonal: [4, 8, 12, 16, 20],
+    horizontal_line: [0, 1, 2, 3, 4],
+    vertical_line: [0, 5, 10, 15, 20],
+    all: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12),
+    full_card: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12),
+    inner_corners: [6, 8, 16, 18], // Added inner corners
   };
 
   let selectedIndices = [];
 
   if (patterns[pattern]) {
     selectedIndices = patterns[pattern];
-    // For non-winner cards, randomly select a row or column for flexible patterns
+
+    // For flexible patterns in non-winning cards
     if (!isWinner && pattern === "horizontal_line") {
       const row = Math.floor(Math.random() * 5);
       selectedIndices = [
@@ -70,7 +72,7 @@ export function getNumbersForPattern(
     (idx) => !excludeIndices.includes(idx) && idx !== 12
   );
 
-  // Map indices to actual numbers, excluding "FREE"
+  // Map indices to actual numbers
   const flatNumbers = numbers.flat();
   const selectedNumbers = selectedIndices
     .map((idx) => flatNumbers[idx])
@@ -80,6 +82,7 @@ export function getNumbersForPattern(
     selectedIndices,
     selectedNumbers,
   });
+
   return { selectedIndices, selectedNumbers };
 }
 

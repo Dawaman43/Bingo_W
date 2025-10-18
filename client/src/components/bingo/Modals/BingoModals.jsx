@@ -221,11 +221,13 @@ const BingoModals = ({
                               const isWinningNumber =
                                 winningNumbers.includes(numberValue);
                               const isOtherCalledNumber =
-                                otherCalledNumbers.includes(numberValue);
-                              const isCalled =
-                                isFreeSpace ||
-                                isWinningNumber ||
-                                isOtherCalledNumber;
+                                otherCalledNumbers.includes(numberValue) &&
+                                !isWinningNumber;
+                              let isCalled = false;
+                              if (!isFreeSpace) {
+                                isCalled =
+                                  isWinningNumber || isOtherCalledNumber;
+                              }
                               const displayNumber = isFreeSpace
                                 ? "FREE"
                                 : numberValue;
@@ -236,7 +238,7 @@ const BingoModals = ({
                                 cellStyle +=
                                   " bg-blue-600 text-white border-blue-400";
                                 textColor = "text-white";
-                              } else if (isWinningCell && isWinningNumber) {
+                              } else if (isWinningCell || isWinningNumber) {
                                 cellStyle +=
                                   " bg-orange-500 text-white border-orange-600 shadow-orange-500/50 relative";
                                 textColor =
@@ -310,7 +312,7 @@ const BingoModals = ({
                 </div>
               </div>
               <button
-                className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
+                className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-3 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
                 onClick={() => {
                   setIsWinnerModalOpen(false);
                   setBingoStatus(null);
@@ -540,7 +542,7 @@ const BingoModals = ({
               })()}
             </div>
             <button
-              className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-2 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
+              className="bg-gradient-to-r from-[#e9744c] to-[#f0854c] text-white border px-6 py-3 font-bold rounded cursor-pointer text-sm transition-all duration-300 hover:from-[#f0854c] hover:to-[#e9744c] hover:shadow-lg w-full flex items-center justify-center gap-1 shadow-md"
               onClick={() => {
                 setIsNonWinnerModalOpen(false);
                 setNonWinnerCardData(null);

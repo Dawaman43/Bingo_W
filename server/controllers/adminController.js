@@ -203,10 +203,12 @@ export const deleteUser = async (req, res, next) => {
           .session(session);
 
         if (gameIds.length) {
-          await GameLog.deleteMany({ gameId: { $in: gameIds } }).session(session);
-          await JackpotCandidate.deleteMany({ gameId: { $in: gameIds } }).session(
+          await GameLog.deleteMany({ gameId: { $in: gameIds } }).session(
             session
           );
+          await JackpotCandidate.deleteMany({
+            gameId: { $in: gameIds },
+          }).session(session);
           await Game.deleteMany({ cashierId: cashier._id }).session(session);
         }
       }
@@ -725,6 +727,7 @@ export const configureFutureWinners = async (req, res) => {
           "main_diagonal",
           "other_diagonal",
           "four_corners_center",
+          "inner_corners",
         ];
         chosenPattern =
           easyPatterns[Math.floor(Math.random() * easyPatterns.length)];
