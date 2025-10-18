@@ -643,14 +643,23 @@ const gameService = {
     }
   },
 
-  getCashierReport: async (cashierId) => {
+  getCashierReport: async (cashierId, filters = {}) => {
     try {
       if (!cashierId) throw new Error("Cashier ID is required");
       console.log(
         "gameService.getCashierReport - Fetching cashier report for cashierId:",
-        cashierId
+        cashierId,
+        "with filters:",
+        filters
       );
-      const response = await API.get(`/games/report?cashierId=${cashierId}`);
+      // Build query params including filters
+      const params = new URLSearchParams({ cashierId });
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) {
+          params.append(key, value);
+        }
+      });
+      const response = await API.get(`/games/report?${params.toString()}`);
       console.log("gameService.getCashierReport response:", response.data);
       return response.data;
     } catch (error) {
