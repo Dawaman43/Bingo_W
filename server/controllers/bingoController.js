@@ -211,11 +211,16 @@ export const checkBingo = async (req, res, next) => {
       let lateCall = false;
       let winningPattern = null;
 
-      // Check if already checked for this number
-      const alreadyChecked =
-        c.lastCheckTime && new Date(c.lastCheckTime) >= new Date(lastCalledNumber.calledAt);
+      // Skip if already checked for this number
+      if (
+        c.lastCheckTime &&
+        new Date(c.lastCheckTime) >= new Date(lastCalledNumber.calledAt)
+      )
+        continue;
 
-      // Check all patterns for bingo
+      let tempWinningPattern = null; // tentative winning pattern for non-late cards
+
+      // Check all patterns
       for (const pattern of patternsToCheck) {
         if (!validPatterns.includes(pattern)) continue;
 
@@ -226,11 +231,7 @@ export const checkBingo = async (req, res, next) => {
         );
 
         if (isComplete) {
-          if (!winningPattern || pattern === preferredPattern) {
-            winningPattern = pattern;
-          }
-
-          // Detect late call (card could have won earlier)
+          // Detect late call
           const lateCallResult = await detectLateCallForCurrentPattern(
             fullCardNumbers,
             pattern,
@@ -241,11 +242,19 @@ export const checkBingo = async (req, res, next) => {
           if (lateCallResult?.hasMissedOpportunity) {
             disqualified = true;
             lateCall = true;
+          } else {
+            // Only assign winning pattern if not late
+            if (!tempWinningPattern || pattern === preferredPattern) {
+              tempWinningPattern = pattern;
+            }
           }
         }
       }
 
-      if (winningPattern) {
+      winningPattern = tempWinningPattern;
+
+      // Only push truly valid winners (not disqualified)
+      if (winningPattern && !disqualified) {
         winningCards.push({
           cardId: c.id,
           numbers: fullCardNumbers,
@@ -256,7 +265,7 @@ export const checkBingo = async (req, res, next) => {
         });
       }
 
-      // Always update lastCheckTime and disqualified in bulk
+      // Always update lastCheckTime and disqualified
       bulkUpdateOps.push({
         updateOne: {
           filter: { _id: gameId, "selectedCards.id": c.id },
@@ -343,6 +352,7 @@ export const checkBingo = async (req, res, next) => {
       .json({ message: "Internal server error", error: err.message });
   }
 };
+
 
 // ✅ NEW FUNCTION: Pattern-specific late call detection
 const detectLateCallForCurrentPattern = async (
