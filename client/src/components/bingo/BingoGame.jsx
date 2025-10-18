@@ -811,20 +811,25 @@ const BingoGame = () => {
   };
 
   // NEW: Helper function to get numbers for pattern (mirroring backend logic)
+  // In BingoGame.jsx — Replace the function with this (adds scanning logic)
   const getNumbersForPatternBackendStyle = (
-    numbers,
+    numbers, // 2D 5x5 grid
     pattern,
     excludeIndices = [],
-    isWinner = false
+    isWinner = false,
+    calledNumbers = [], // NEW: Pass from caller (e.g., calledNumbers state)
+    includeMarked = true // NEW: For winners, include all in pattern
   ) => {
     console.log(
       "[getNumbersForPatternBackendStyle] Processing pattern:",
       pattern,
       "with numbers:",
-      numbers
+      numbers,
+      "calledNumbers:",
+      calledNumbers
     );
 
-    // Validate input
+    // Validate input (unchanged)
     if (
       !Array.isArray(numbers) ||
       numbers.length !== 5 ||
@@ -836,14 +841,13 @@ const BingoGame = () => {
       throw new Error("Pattern must be specified");
     }
 
-    // Define pattern indices (matching backend)
+    // Define fixed patterns (unchanged, but we'll override for lines)
     const patterns = {
       four_corners_center: [0, 4, 20, 24, 12],
       cross: [2, 7, 12, 17, 22, 10, 11, 13, 14],
       main_diagonal: [0, 6, 12, 18, 24],
       other_diagonal: [4, 8, 12, 16, 20],
-      horizontal_line: [0, 1, 2, 3, 4],
-      vertical_line: [0, 5, 10, 15, 20],
+      // REMOVED: horizontal_line & vertical_line hardcodes — handle dynamically below
       all: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12),
       full_card: Array.from({ length: 25 }, (_, i) => i).filter(
         (i) => i !== 12
@@ -855,31 +859,64 @@ const BingoGame = () => {
 
     if (patterns[pattern]) {
       selectedIndices = patterns[pattern];
+    } else if (pattern === "horizontal_line" || pattern === "vertical_line") {
+      // NEW: Dynamic scan for actual complete line (mirror backend)
+      const safeCalled = Array.isArray(calledNumbers) ? calledNumbers : [];
+      const isLineComplete = (line) =>
+        line.every(
+          (cell) => cell === "FREE" || safeCalled.includes(Number(cell))
+        );
 
-      // For flexible patterns in non-winning cards
-      if (!isWinner && pattern === "horizontal_line") {
-        const row = Math.floor(Math.random() * 5);
-        selectedIndices = [
-          row * 5,
-          row * 5 + 1,
-          row * 5 + 2,
-          row * 5 + 3,
-          row * 5 + 4,
-        ];
-      } else if (!isWinner && pattern === "vertical_line") {
-        const col = Math.floor(Math.random() * 5);
-        selectedIndices = [col, col + 5, col + 10, col + 15, col + 20];
+      if (pattern === "horizontal_line") {
+        let winningRow = -1;
+        if (includeMarked) {
+          // For winners: Find first complete row
+          for (let row = 0; row < 5; row++) {
+            if (isLineComplete(numbers[row])) {
+              winningRow = row;
+              break;
+            }
+          }
+        } else if (!isWinner) {
+          // For non-winners: Random row (unchanged)
+          winningRow = Math.floor(Math.random() * 5);
+        }
+        if (winningRow >= 0) {
+          selectedIndices = Array.from(
+            { length: 5 },
+            (_, col) => winningRow * 5 + col
+          );
+        }
+      } else if (pattern === "vertical_line") {
+        let winningCol = -1;
+        if (includeMarked) {
+          for (let col = 0; col < 5; col++) {
+            const colLine = numbers.map((row) => row[col]);
+            if (isLineComplete(colLine)) {
+              winningCol = col;
+              break;
+            }
+          }
+        } else if (!isWinner) {
+          winningCol = Math.floor(Math.random() * 5);
+        }
+        if (winningCol >= 0) {
+          selectedIndices = Array.from(
+            { length: 5 },
+            (_, row) => row * 5 + winningCol
+          );
+        }
       }
     } else {
       throw new Error(`Invalid pattern: ${pattern}`);
     }
 
-    // Filter out excluded indices and free space (index 12)
+    // Filter exclusions & free (unchanged)
     selectedIndices = selectedIndices.filter(
       (idx) => !excludeIndices.includes(idx) && idx !== 12
     );
 
-    // Map indices to actual numbers
+    // Map to numbers (unchanged)
     const flatNumbers = numbers.flat();
     const selectedNumbers = selectedIndices
       .map((idx) => flatNumbers[idx])
@@ -1684,11 +1721,13 @@ const BingoGame = () => {
           const pattern = winner.winningPattern;
           try {
             const result = getNumbersForPatternBackendStyle(
-              cardNumbers,
+              cardNumbers, // 2D grid
               pattern,
-              [],
-              true
-            ); // isWinner=true for fixed pattern
+              [], // exclude
+              true, // isWinner
+              calledNumbers, // NEW: Pass state
+              true // NEW: includeMarked
+            );
             winningNumbers = result.selectedNumbers;
             winningIndices = result.selectedIndices;
           } catch (err) {

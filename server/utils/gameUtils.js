@@ -236,7 +236,182 @@ export const checkSpecificLineCompletion = (
   return isLineComplete(markedGrid, lineInfo.lineType);
 };
 
-// 🔑 Check if a card would have won (for late call detection)
+// 🔑 Internal helper to check a single pattern without recursion
+const checkSinglePattern = (
+  markedGrid,
+  pattern,
+  specificLineInfo,
+  lastCalledNumber
+) => {
+  switch (pattern) {
+    case "four_corners_center":
+      const cornersComplete = [
+        markedGrid[0][0],
+        markedGrid[0][4],
+        markedGrid[4][0],
+        markedGrid[4][4],
+        markedGrid[2][2],
+      ].every((cell) => cell === true || cell === null);
+      return cornersComplete;
+
+    case "inner_corners":
+      const innerCornersComplete = [
+        markedGrid[1][1],
+        markedGrid[1][3],
+        markedGrid[3][1],
+        markedGrid[3][3],
+      ].every((cell) => cell === true);
+      return innerCornersComplete;
+
+    case "main_diagonal":
+      const mainDiagonalComplete = [0, 1, 2, 3, 4]
+        .map((i) => markedGrid[i][i])
+        .every((cell) => cell === true || cell === null);
+      return mainDiagonalComplete;
+
+    case "other_diagonal":
+      const otherDiagonalComplete = [0, 1, 2, 3, 4]
+        .map((i) => markedGrid[i][4 - i])
+        .every((cell) => cell === true || cell === null);
+      return otherDiagonalComplete;
+
+    case "horizontal_line":
+      let horizontalBingo = false;
+
+      // If we have lastCalledNumber, check ONLY the specific row containing it
+      if (
+        lastCalledNumber &&
+        specificLineInfo &&
+        specificLineInfo.lineType === "row"
+      ) {
+        const specificRowComplete = markedGrid[
+          specificLineInfo.lineIndex
+        ].every((cell) => cell === true || cell === null);
+        horizontalBingo = specificRowComplete;
+      } else {
+        // If no specific line, check if ANY row is complete (for previous state checks)
+        for (let row = 0; row < 5; row++) {
+          if (markedGrid[row].every((cell) => cell === true || cell === null)) {
+            horizontalBingo = true;
+            break;
+          }
+        }
+      }
+
+      return horizontalBingo;
+
+    case "vertical_line":
+      let verticalBingo = false;
+
+      // If we have lastCalledNumber, check ONLY the specific column containing it
+      if (
+        lastCalledNumber &&
+        specificLineInfo &&
+        specificLineInfo.lineType === "column"
+      ) {
+        const specificColComplete = [0, 1, 2, 3, 4].every(
+          (rowIndex) =>
+            markedGrid[rowIndex][specificLineInfo.lineIndex] === true ||
+            markedGrid[rowIndex][specificLineInfo.lineIndex] === null
+        );
+        verticalBingo = specificColComplete;
+      } else {
+        // If no specific line, check if ANY column is complete (for previous state checks)
+        for (let col = 0; col < 5; col++) {
+          if (
+            [0, 1, 2, 3, 4].every(
+              (rowIndex) =>
+                markedGrid[rowIndex][col] === true ||
+                markedGrid[rowIndex][col] === null
+            )
+          ) {
+            verticalBingo = true;
+            break;
+          }
+        }
+      }
+
+      return verticalBingo;
+
+    default:
+      return false;
+  }
+};
+
+/**
+ * Check bingo for a specific pattern or "all" (any supported pattern)
+ */
+export const checkCardBingo = (
+  cardNumbers,
+  calledNumbers,
+  pattern,
+  lastCalledNumber = null
+) => {
+  console.log(
+    `[checkCardBingo] Checking pattern: ${pattern}, lastCalledNumber: ${lastCalledNumber}`
+  );
+
+  const markedGrid = getMarkedGrid(cardNumbers, calledNumbers);
+
+  // For line patterns, get the specific line info if lastCalledNumber provided
+  const specificLineInfo = lastCalledNumber
+    ? getSpecificLineInfo(cardNumbers, pattern, lastCalledNumber)
+    : null;
+
+  if (pattern === "all") {
+    const supportedPatterns = [
+      "four_corners_center",
+      "inner_corners",
+      "main_diagonal",
+      "other_diagonal",
+      "horizontal_line",
+      "vertical_line",
+    ];
+    let anyComplete = false;
+    let winningPattern = null;
+
+    for (const pat of supportedPatterns) {
+      // Compute specificLineInfo for each pattern if lastCalledNumber provided
+      const patSpecificLineInfo = lastCalledNumber
+        ? getSpecificLineInfo(cardNumbers, pat, lastCalledNumber)
+        : null;
+
+      const isComplete = checkSinglePattern(
+        markedGrid,
+        pat,
+        patSpecificLineInfo,
+        lastCalledNumber
+      );
+
+      if (isComplete) {
+        anyComplete = true;
+        winningPattern = pat;
+        console.log(`[checkCardBingo] "all" detected win in pattern: ${pat}`);
+        break; // Stop at first for efficiency
+      }
+    }
+
+    console.log(
+      `[checkCardBingo] "all" check: isBingo=${anyComplete}, winningPattern=${winningPattern}`
+    );
+    return [anyComplete, winningPattern || pattern];
+  }
+
+  // Single pattern check
+  const isComplete = checkSinglePattern(
+    markedGrid,
+    pattern,
+    specificLineInfo,
+    lastCalledNumber
+  );
+
+  console.log(`[checkCardBingo] ${pattern} check: isBingo=${isComplete}`);
+  return [isComplete, pattern];
+};
+
+/**
+ * Check if a card would have won (for late call detection)
+ */
 export const checkIfCardWouldHaveWon = async (
   cardNumbers,
   calledNumbers,
@@ -402,154 +577,6 @@ const findCompleteRow = (cardNumbers, calledNumbers) => {
     if (isRowComplete) return row;
   }
   return 0;
-};
-export const checkCardBingo = (
-  cardNumbers,
-  calledNumbers,
-  pattern,
-  lastCalledNumber = null
-) => {
-  console.log(
-    `[checkCardBingo] Checking pattern: ${pattern}, lastCalledNumber: ${lastCalledNumber}`
-  );
-
-  const markedGrid = getMarkedGrid(cardNumbers, calledNumbers);
-
-  // 🔑 For line patterns, get the specific line info if lastCalledNumber provided
-  const specificLineInfo = lastCalledNumber
-    ? getSpecificLineInfo(cardNumbers, pattern, lastCalledNumber)
-    : null;
-
-  switch (pattern) {
-    case "four_corners_center":
-      const cornersComplete = [
-        markedGrid[0][0],
-        markedGrid[0][4],
-        markedGrid[4][0],
-        markedGrid[4][4],
-        markedGrid[2][2],
-      ].every((cell) => cell === true || cell === null);
-
-      console.log(
-        `[checkCardBingo] Four corners check: isBingo=${cornersComplete}`
-      );
-      return [cornersComplete, pattern];
-
-    case "inner_corners":
-      const innerCornersComplete = [
-        markedGrid[1][1],
-        markedGrid[1][3],
-        markedGrid[3][1],
-        markedGrid[3][3],
-      ].every((cell) => cell === true);
-
-      console.log(
-        `[checkCardBingo] Inner corners check: isBingo=${innerCornersComplete}`
-      );
-      return [innerCornersComplete, pattern];
-
-    case "main_diagonal":
-      const mainDiagonalComplete = [0, 1, 2, 3, 4]
-        .map((i) => markedGrid[i][i])
-        .every((cell) => cell === true || cell === null);
-
-      console.log(
-        `[checkCardBingo] Main diagonal check: isBingo=${mainDiagonalComplete}`
-      );
-      return [mainDiagonalComplete, pattern];
-
-    case "other_diagonal":
-      const otherDiagonalComplete = [0, 1, 2, 3, 4]
-        .map((i) => markedGrid[i][4 - i])
-        .every((cell) => cell === true || cell === null);
-
-      console.log(
-        `[checkCardBingo] Other diagonal check: isBingo=${otherDiagonalComplete}`
-      );
-      return [otherDiagonalComplete, pattern];
-
-    case "horizontal_line":
-      let horizontalBingo = false;
-
-      // 🔑 If we have lastCalledNumber, check ONLY the specific row containing it
-      if (
-        lastCalledNumber &&
-        specificLineInfo &&
-        specificLineInfo.lineType === "row"
-      ) {
-        const specificRowComplete = markedGrid[
-          specificLineInfo.lineIndex
-        ].every((cell) => cell === true || cell === null);
-        horizontalBingo = specificRowComplete;
-        console.log(
-          `[checkCardBingo] Horizontal line check (specific row ${specificLineInfo.lineIndex}): isBingo=${horizontalBingo}`
-        );
-        return [horizontalBingo, pattern];
-      }
-
-      // If no specific line, check if ANY row is complete (for previous state checks)
-      for (let row = 0; row < 5; row++) {
-        if (markedGrid[row].every((cell) => cell === true || cell === null)) {
-          horizontalBingo = true;
-          console.log(
-            `[checkCardBingo] Horizontal line check (any row ${row}): isBingo=${horizontalBingo}`
-          );
-          break;
-        }
-      }
-
-      console.log(
-        `[checkCardBingo] Horizontal line result: isBingo=${horizontalBingo}`
-      );
-      return [horizontalBingo, pattern];
-
-    case "vertical_line":
-      let verticalBingo = false;
-
-      // 🔑 If we have lastCalledNumber, check ONLY the specific column containing it
-      if (
-        lastCalledNumber &&
-        specificLineInfo &&
-        specificLineInfo.lineType === "column"
-      ) {
-        const specificColComplete = [0, 1, 2, 3, 4].every(
-          (rowIndex) =>
-            markedGrid[rowIndex][specificLineInfo.lineIndex] === true ||
-            markedGrid[rowIndex][specificLineInfo.lineIndex] === null
-        );
-        verticalBingo = specificColComplete;
-        console.log(
-          `[checkCardBingo] Vertical line check (specific col ${specificLineInfo.lineIndex}): isBingo=${verticalBingo}`
-        );
-        return [verticalBingo, pattern];
-      }
-
-      // If no specific line, check if ANY column is complete (for previous state checks)
-      for (let col = 0; col < 5; col++) {
-        if (
-          [0, 1, 2, 3, 4].every(
-            (rowIndex) =>
-              markedGrid[rowIndex][col] === true ||
-              markedGrid[rowIndex][col] === null
-          )
-        ) {
-          verticalBingo = true;
-          console.log(
-            `[checkCardBingo] Vertical line check (any col ${col}): isBingo=${verticalBingo}`
-          );
-          break;
-        }
-      }
-
-      console.log(
-        `[checkCardBingo] Vertical line result: isBingo=${verticalBingo}`
-      );
-      return [verticalBingo, pattern];
-
-    default:
-      console.warn(`[checkCardBingo] Unknown pattern: ${pattern}`);
-      return [false, pattern];
-  }
 };
 
 /**
@@ -991,7 +1018,7 @@ export const checkBingoForGame = (game, cardId) => {
   const card = game.selectedCards.find((c) => c.id === numericCardId);
   if (!card) return { hasBingo: false, winnerCards: [], winnerPattern: null };
 
-  const { isBingo } = checkCardBingo(
+  const [isBingo] = checkCardBingo(
     card.numbers,
     game.calledNumbers,
     game.pattern
@@ -1049,7 +1076,7 @@ export const createGameRecord = async ({
 
   const validPatterns = [
     "four_corners_center",
-    "cross",
+    "inner_corners",
     "main_diagonal",
     "other_diagonal",
     "horizontal_line",
