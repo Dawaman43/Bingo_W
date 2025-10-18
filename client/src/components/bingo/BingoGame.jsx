@@ -1786,22 +1786,55 @@ const BingoGame = () => {
         SoundService.playSound("winner");
       } else {
         // Non-bingo/late call handling
+        const winnerInfo = data.winners?.[0];
+        const isLateCall = winnerInfo?.lateCall || false;
+        const lateCallMessage =
+          winnerInfo?.lateCallMessage ||
+          data.message ||
+          "No bingo found. Try again!";
+        const wouldHaveWon = winnerInfo?.wouldHaveWon || {
+          pattern: winnerInfo?.winningPattern || data.pattern,
+          callIndex: winnerInfo?.callIndex,
+          completingNumber: winnerInfo?.completingNumber,
+        };
+
         console.log(`[handleCheckCard] Non-bingo/late:`, {
-          lateCall: data.lateCall,
-          message: data.message || data.lateCallMessage,
+          isLateCall,
+          lateCallMessage,
+          wouldHaveWon,
         });
 
         // FIXED: Safely update card state with response data (no more "missing")
         if (cardInState) {
+          const cardGrid = buildGrid(cardInState.numbers);
+          let selectedIndices = data.selectedIndices || [];
+          if (isLateCall && wouldHaveWon.pattern) {
+            try {
+              const { selectedIndices: lateIndices } =
+                getNumbersForPatternBackendStyle(
+                  cardGrid,
+                  wouldHaveWon.pattern,
+                  [],
+                  true
+                );
+              selectedIndices = lateIndices;
+            } catch (err) {
+              console.error(
+                "[handleCheckCard] Error computing late pattern indices:",
+                err
+              );
+            }
+          }
+
           const updatedCard = {
             ...cardInState,
             cardId: cardIdParam,
-            cardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+            cardNumbers: cardGrid, // 2D grid for modal
             patternInfo: {
-              selectedIndices: data.selectedIndices || [],
+              selectedIndices,
               rowIndex: data.rowIndex || null,
               colIndex: data.colIndex || null,
-              pattern: data.pattern || null,
+              pattern: isLateCall ? wouldHaveWon.pattern : data.pattern || null,
             },
             calledNumbersInPattern: data.calledNumbersInPattern || [],
             otherCalledNumbers:
@@ -1810,12 +1843,9 @@ const BingoGame = () => {
                 (n) => !data.calledNumbersInPattern?.includes(n)
               ) ||
               uniqueCardCalledNumbers,
-            lateCall: data.lateCall || false,
-            lateCallMessage:
-              data.message ||
-              data.lateCallMessage ||
-              "No bingo found. Try again!",
-            wouldHaveWon: data.wouldHaveWon || null, // For late call details
+            lateCall: isLateCall,
+            lateCallMessage,
+            wouldHaveWon,
             checkCount: data.checkCount || cardInState.checkCount || 0,
             disqualified:
               data.disqualified || cardInState.disqualified || false,
@@ -1826,14 +1856,14 @@ const BingoGame = () => {
           };
 
           // If disqualified or late, add visual cue (e.g., shake animation)
-          if (data.disqualified || data.lateCall) {
+          if (data.disqualified || isLateCall) {
             updatedCard.shake = true; // Trigger CSS animation
             setTimeout(() => {
               setCards((prevCards) =>
                 prevCards.map((c) => ({ ...c, shake: false }))
               );
             }, 1000);
-            if (data.lateCall) {
+            if (isLateCall) {
               SoundService.playSound("you_didnt_win"); // Optional sound
             }
           }
