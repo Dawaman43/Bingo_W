@@ -140,7 +140,6 @@ export const callNumber = async (req, res, next) => {
   }
 };
 
-// controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
 export const checkBingo = async (req, res, next) => {
   try {
     const { identifier, preferredPattern } = req.body;
@@ -168,9 +167,10 @@ export const checkBingo = async (req, res, next) => {
     if (!lastCalledNumber) {
       return res.json({
         isBingo: false,
-        message: "No numbers called yet",
         winners: [],
-        game,
+        lateCallCards: [],
+        gameStatus: game.status,
+        message: "No numbers called yet",
       });
     }
 
@@ -195,11 +195,11 @@ export const checkBingo = async (req, res, next) => {
       .select("card_number numbers")
       .lean();
 
-    // Map cards by card_number for O(1) lookup
     const cardMap = {};
     allCards.forEach((card) => (cardMap[card.card_number] = card.numbers));
 
     const winningCards = [];
+    const lateCallCards = [];
     const bulkUpdateOps = [];
 
     for (const c of game.selectedCards) {
@@ -242,8 +242,14 @@ export const checkBingo = async (req, res, next) => {
           if (lateCallResult?.hasMissedOpportunity) {
             disqualified = true;
             lateCall = true;
+            lateCallCards.push({
+              cardId: c.id,
+              numbers: fullCardNumbers,
+              winningPattern: pattern,
+              lateCall: true,
+              lateCallMessage: lateCallResult.message || "Missed opportunity",
+            });
           } else {
-            // Only assign winning pattern if not late
             if (!tempWinningPattern || pattern === preferredPattern) {
               tempWinningPattern = pattern;
             }
@@ -253,15 +259,14 @@ export const checkBingo = async (req, res, next) => {
 
       winningPattern = tempWinningPattern;
 
-      // Only push truly valid winners (not disqualified)
       if (winningPattern && !disqualified) {
         winningCards.push({
           cardId: c.id,
           numbers: fullCardNumbers,
           winningPattern,
           disqualified,
-          lateCall,
-          lateCallMessage: lateCall ? "Missed opportunity detected" : null,
+          lateCall: false,
+          lateCallMessage: null,
         });
       }
 
@@ -291,7 +296,6 @@ export const checkBingo = async (req, res, next) => {
         await session.withTransaction(async () => {
           const freshGame = await Game.findById(gameId).session(session);
 
-          // Merge new winners with existing winnerCards
           freshGame.winnerCards = [
             ...(freshGame.winnerCards || []),
             ...winningCards.map((w) => ({
@@ -303,7 +307,6 @@ export const checkBingo = async (req, res, next) => {
 
           await freshGame.save({ session });
 
-          // Save results
           for (const winner of winningCards) {
             await Result.create(
               [
@@ -336,6 +339,7 @@ export const checkBingo = async (req, res, next) => {
       details: {
         lastCalledNumber: lastCalledNumber.number,
         winners: winningCards,
+        lateCallCards,
         timestamp: new Date(),
       },
     });
@@ -343,6 +347,7 @@ export const checkBingo = async (req, res, next) => {
     return res.json({
       isBingo: winningCards.length > 0,
       winners: winningCards,
+      lateCallCards,
       gameStatus: game.status,
     });
   } catch (err) {
@@ -352,7 +357,6 @@ export const checkBingo = async (req, res, next) => {
       .json({ message: "Internal server error", error: err.message });
   }
 };
-
 
 // ✅ NEW FUNCTION: Pattern-specific late call detection
 const detectLateCallForCurrentPattern = async (
