@@ -86,6 +86,7 @@ export const getReportData = async (req, res, next) => {
 };
 
 // Get cashier report
+// Get cashier report with filters
 export const getCashierReport = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -131,27 +132,38 @@ export const getCashierReport = async (req, res, next) => {
       });
     }
 
+    // Extract filters from query params
+    const { status, pattern, startDate, endDate } = req.query;
+
+    let gamesQuery = { cashierId };
+    if (role === "admin" && !req.query.cashierId) {
+      delete gamesQuery.cashierId; // Admin sees all
+    }
+
+    // Apply filters
+    if (status && status !== "") {
+      gamesQuery.status = status === "finished" ? "completed" : status;
+    }
+    if (pattern && pattern !== "") {
+      gamesQuery.pattern = pattern;
+    }
+    if (startDate || endDate) {
+      gamesQuery.createdAt = {};
+      if (startDate) {
+        gamesQuery.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        gamesQuery.createdAt.$lte = new Date(endDate);
+      }
+    }
+
     let games, counters, results;
 
-    if (role === "admin" && !req.query.cashierId) {
-      games = await Game.find({}).sort({ gameNumber: 1 });
-      counters = await Counter.find({});
-      results = await Result.find({});
-    } else {
-      const cashier = await User.findById(cashierId);
-      if (!cashier || cashier.role !== "cashier") {
-        return res.status(404).json({
-          message: "Cashier not found",
-          errorCode: "CASHIER_NOT_FOUND",
-        });
-      }
-
-      games = await Game.find({ cashierId }).sort({ gameNumber: 1 });
-      counters = await Counter.find({ cashierId });
-      results = await Result.find({
-        gameId: { $in: games.map((g) => g._id) },
-      });
-    }
+    games = await Game.find(gamesQuery).sort({ gameNumber: 1 });
+    counters = await Counter.find({ cashierId });
+    results = await Result.find({
+      gameId: { $in: games.map((g) => g._id) },
+    });
 
     const totalGames = games.length;
     const totalPrizePool = games.reduce(
