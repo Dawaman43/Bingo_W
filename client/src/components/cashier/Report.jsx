@@ -203,18 +203,18 @@ const CashierReport = () => {
 
   // Compute filtered data reactively
   const filteredData = useMemo(() => {
-    const filteredGames = reportData.games.filter(
-      (game) =>
+    const filteredGames = reportData.games.filter((game) => {
+      const gameDateStr = new Date(game.createdAt).toISOString().split("T")[0];
+      return (
         (game.gameNumber?.toString().includes(searchTerm) ||
           game.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
           game.pattern.toLowerCase().includes(searchTerm.toLowerCase())) &&
         (!filters.status || game.status === filters.status) &&
         (!filters.pattern || game.pattern === filters.pattern) &&
-        (!filters.startDate ||
-          new Date(game.createdAt) >= new Date(filters.startDate)) &&
-        (!filters.endDate ||
-          new Date(game.createdAt) <= new Date(filters.endDate))
-    );
+        (!filters.startDate || gameDateStr >= filters.startDate) &&
+        (!filters.endDate || gameDateStr <= filters.endDate)
+      );
+    });
     return {
       games: filteredGames,
       counters: reportData.counters, // Counters don't filter by date, so keep full
