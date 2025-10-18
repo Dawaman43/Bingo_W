@@ -398,6 +398,7 @@ export const checkBingo = async (req, res, next) => {
 };
 
 // ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
+// ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
 const detectLateCallForCurrentPattern = async (
   cardNumbers,
   currentPattern,
@@ -417,10 +418,10 @@ const detectLateCallForCurrentPattern = async (
     const { numbers: patternNumbers } = getNumbersForPattern(
       cardNumbers, // 2D
       currentPattern,
-      [], // Full required
+      calledNumbers, // ✅ FIX: Pass actual calledNumbers (not [])
       true, // Use specific line
       targetIndices,
-      false // Unmarked for required
+      true // ✅ FIX: includeMarked=true to get full required non-FREE numbers
     );
 
     const requiredNumbers = patternNumbers
@@ -514,7 +515,6 @@ const detectLateCallForCurrentPattern = async (
     };
   }
 };
-
 // Other functions (finishGame, pauseGame, updateGameStatus) – OPTIMIZED with lean/select where possible
 export const finishGame = async (req, res) => {
   const gameId = req.params.id;
