@@ -238,7 +238,7 @@ const BingoModals = ({
                                 textColor = "text-white";
                               } else if (isWinningCell && isWinningNumber) {
                                 cellStyle +=
-                                  " bg-green-500 text-white border-green-600 shadow-green-500/50 relative";
+                                  " bg-orange-500 text-white border-orange-600 shadow-orange-500/50 relative";
                                 textColor =
                                   "text-white font-bold drop-shadow-sm";
                               } else if (isOtherCalledNumber) {
