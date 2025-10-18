@@ -201,9 +201,18 @@ const CashierReport = () => {
     totalPrizesAwarded: 0,
   });
 
+  // Helper to get local YYYY-MM-DD string
+  const getLocalDateStr = (date) => {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
   // Compute filtered data reactively
   const filteredData = useMemo(() => {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = getLocalDateStr(new Date());
     let filteredGames;
     if (
       filters.startDate > todayStr ||
@@ -212,9 +221,7 @@ const CashierReport = () => {
       filteredGames = [];
     } else {
       filteredGames = reportData.games.filter((game) => {
-        const gameDateStr = new Date(game.createdAt)
-          .toISOString()
-          .split("T")[0];
+        const gameDateStr = getLocalDateStr(game.createdAt);
         return (
           (game.gameNumber?.toString().includes(searchTerm) ||
             game.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -609,16 +616,22 @@ const CashierReport = () => {
       filters.startDate || filters.endDate
         ? Math.ceil((trendEndDate - trendStartDate) / (1000 * 60 * 60 * 24)) + 1
         : 7;
-    const lastDays = Array.from({ length: numDays }, (_, i) => {
-      const d = new Date(trendEndDate);
-      d.setDate(d.getDate() - i);
-      return d.toISOString().split("T")[0];
-    }).reverse();
+    const lastDays = [];
+    const tempDate = new Date(trendEndDate);
+    for (let i = numDays - 1; i >= 0; i--) {
+      const year = tempDate.getFullYear();
+      const month = String(tempDate.getMonth() + 1).padStart(2, "0");
+      const day = String(tempDate.getDate()).padStart(2, "0");
+      lastDays.push(`${year}-${month}-${day}`);
+      tempDate.setDate(tempDate.getDate() - 1);
+    }
+    lastDays.reverse();
     const revenueData = lastDays.map((date) => {
       return games
-        .filter(
-          (g) => new Date(g.createdAt).toISOString().split("T")[0] === date
-        )
+        .filter((g) => {
+          const gDateStr = getLocalDateStr(g.createdAt);
+          return gDateStr === date;
+        })
         .reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0);
     });
     setRevenueTrendData({
@@ -653,10 +666,9 @@ const CashierReport = () => {
 
     // Filter games within date range first
     const filteredForTrend = games.filter((g) => {
-      const gDate = new Date(g.createdAt);
-      if (filters.startDate && gDate < new Date(filters.startDate))
-        return false;
-      if (filters.endDate && gDate > new Date(filters.endDate)) return false;
+      const gDateStr = getLocalDateStr(g.createdAt);
+      if (filters.startDate && gDateStr < filters.startDate) return false;
+      if (filters.endDate && gDateStr > filters.endDate) return false;
       return true;
     });
 
