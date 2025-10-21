@@ -1759,13 +1759,24 @@ const BingoGame = () => {
         `[handleCheckCard] Checking card ${cardIdParam} with pattern ${preferredPattern}`
       );
 
-      // NEW: Validate if card is selected for this game
-      if (
-        !gameData?.selectedCards ||
-        !gameData.selectedCards.some((c) => c.id === parseInt(cardIdParam))
-      ) {
+      // NEW: Validate if card is selected for this game (robust to type/field variations)
+      const idNum = Number(String(cardIdParam).trim());
+      const selected = Array.isArray(gameData?.selectedCards)
+        ? gameData.selectedCards.some((c) => {
+            const candidates = [
+              c?.id,
+              c?.cardRef,
+              c?.card_number,
+              c?.cardNumber,
+            ];
+            return candidates.some((v) => Number(v) === idNum);
+          })
+        : false;
+      if (!selected) {
         console.warn(
-          `[handleCheckCard] Card ${cardIdParam} is not selected for this game`
+          `[handleCheckCard] Card ${cardIdParam} is not selected for this game (selectedCards length: ${
+            gameData?.selectedCards?.length || 0
+          })`
         );
         setCallError(
           `Card ${cardIdParam} is not selected for this game. Please select valid cards.`
