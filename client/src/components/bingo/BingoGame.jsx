@@ -31,6 +31,42 @@ const BingoGame = () => {
   const [speed, setSpeed] = useState(
     () => parseInt(localStorage.getItem("bingoAutoCallSpeed")) || 8
   );
+  // Internal lead time (computed): initiate auto-call earlier to mask latency
+  // Goal: for 8s interval, start around the 6th–7th second (lead ≈ 1.6–2.0s)
+  const computeLeadMs = (s) => {
+    const interval = Math.max(1, s) * 1000;
+    // Base as 20% of interval
+    let base = Math.round(interval * 0.2); // e.g., 8s -> 1600ms lead
+    // For longer intervals, ensure a minimum absolute lead window
+    if (interval >= 6000) base = Math.max(base, 1200);
+    if (interval >= 8000) base = Math.max(base, 1600); // 8s+: at least 1.6s early
+    if (interval >= 10000) base = Math.max(base, 2000); // 10s+: at least 2s early
+
+    const safetyMargin = 100; // keep at least 100ms before the exact target
+    const maxLead = Math.max(0, interval - safetyMargin);
+    // Clamp to [150ms, interval - safety]
+    const clamped = Math.min(Math.max(base, 150), maxLead);
+    return clamped;
+  };
+  const getLeadMs = (s) => {
+    try {
+      const interval = Math.max(1, s) * 1000;
+      const safetyMargin = 100;
+      // adaptiveLeadMsRef may not exist in older code paths; guard access
+      const adaptive =
+        typeof adaptiveLeadMsRef !== "undefined" &&
+        Number.isFinite(adaptiveLeadMsRef?.current)
+          ? adaptiveLeadMsRef.current
+          : null;
+      const baseLead = computeLeadMs(s);
+      // Never go below the base lead; allow adaptive to increase if needed
+      const candidate = Math.max(baseLead, adaptive ?? 0);
+      const lead = Math.min(candidate, Math.max(0, interval - safetyMargin));
+      return Math.max(0, lead);
+    } catch (e) {
+      return computeLeadMs(s);
+    }
+  };
   const [isPlaying, setIsPlaying] = useState(false);
   const [cardId, setCardId] = useState("");
   const [manualNumber, setManualNumber] = useState("");
@@ -92,7 +128,10 @@ const BingoGame = () => {
     timerId: null,
     nextAt: null,
     running: false,
+    pending: false,
   });
+  // Adaptive network/audio lead time (ms) based on measured RTT
+  const adaptiveLeadMsRef = useRef(null);
   const autoModeRef = useRef(false);
   const lastPrizePoolUpdateRef = useRef(0);
   const containerRef = useRef(null);
@@ -101,6 +140,12 @@ const BingoGame = () => {
 
   useEffect(() => {
     localStorage.setItem("bingoAutoCallSpeed", speed);
+  }, [speed]);
+  // Reset adaptive lead when speed changes
+  useEffect(() => {
+    if (typeof adaptiveLeadMsRef !== "undefined") {
+      adaptiveLeadMsRef.current = null;
+    }
   }, [speed]);
 
   // Real jackpot fetch using service
@@ -666,19 +711,22 @@ const BingoGame = () => {
     updateJackpotWinnerDisplay();
   }, [user?.id]); // Depend on user.id for refetch
 
-  // Auto-call scheduler (drift-corrected and sequential)
+  // Auto-call scheduler (drift-corrected and sequential, schedules before work)
   useEffect(() => {
+    const nowMs = () =>
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+
     const canAutoCall =
       isAutoCall &&
       !isGameOver &&
       !!gameData?._id &&
       isPlaying &&
-      calledNumbers.length < 75 &&
       gameData?.status === "active";
 
     const stopScheduler = () => {
       autoModeRef.current = false;
       autoSchedulerRef.current.running = false;
+      autoSchedulerRef.current.pending = false;
       if (autoSchedulerRef.current.timerId) {
         clearTimeout(autoSchedulerRef.current.timerId);
         autoSchedulerRef.current.timerId = null;
@@ -689,37 +737,41 @@ const BingoGame = () => {
       }
     };
 
-    const scheduleNext = (nextAt) => {
-      autoSchedulerRef.current.nextAt = nextAt;
-      const delay = Math.max(0, nextAt - Date.now());
+    const scheduleNext = (baseNextAt) => {
+      autoSchedulerRef.current.nextAt = baseNextAt;
+      const lead = getLeadMs ? getLeadMs(speed) : computeLeadMs(speed);
+      const delay = Math.max(0, baseNextAt - lead - nowMs());
       autoSchedulerRef.current.timerId = setTimeout(async () => {
-        // Guard checks before calling
+        // Pre-checks: if any fail, stop
         if (
           !autoModeRef.current ||
           isGameOver ||
           !gameData?._id ||
           !isPlaying ||
-          calledNumbers.length >= 75 ||
           gameData?.status !== "active"
         ) {
           stopScheduler();
           return;
         }
+
+        // Schedule the following tick BEFORE doing the work, to keep cadence
+        const intervalMs = speed * 1000;
+        let nextTarget =
+          (autoSchedulerRef.current.nextAt || nowMs()) + intervalMs;
+        const now = nowMs();
+        if (nextTarget < now - intervalMs) {
+          // If we fell way behind (tab throttling, etc), reset schedule
+          nextTarget = now + intervalMs;
+        }
+        if (autoModeRef.current) {
+          scheduleNext(nextTarget);
+        }
+
+        // Now perform the call (non-blocking for the schedule)
         try {
           await handleCallNumber(null, { isAuto: true });
-        } finally {
-          // Compute next tick, drift-corrected
-          const intervalMs = speed * 1000;
-          let target =
-            (autoSchedulerRef.current.nextAt || Date.now()) + intervalMs;
-          const now = Date.now();
-          // If we fell behind too far (e.g., network lag), reset from now
-          if (target < now - intervalMs) {
-            target = now + intervalMs;
-          }
-          if (autoModeRef.current) {
-            scheduleNext(target);
-          }
+        } catch (e) {
+          // Swallow here; handleCallNumber manages its own errors
         }
       }, delay);
     };
@@ -728,7 +780,7 @@ const BingoGame = () => {
       autoModeRef.current = true;
       autoSchedulerRef.current.running = true;
       // Start from now + interval for predictable cadence
-      scheduleNext(Date.now() + speed * 1000);
+      scheduleNext(nowMs() + speed * 1000);
     } else {
       stopScheduler();
     }
@@ -743,7 +795,6 @@ const BingoGame = () => {
     isPlaying,
     gameData?._id,
     gameData?.status,
-    calledNumbers.length,
   ]);
 
   // Fullscreen handling
@@ -1244,11 +1295,13 @@ const BingoGame = () => {
     }
   };
 
+  // Removed optimistic auto-call to keep server authoritative and avoid state mismatches
+
   const handleCallNumber = async (manualNum = null, options = {}) => {
     const isAuto = options?.isAuto === true;
+    // Guard conditions; avoid turning off auto-call if we're simply busy
     if (
       isGameOver ||
-      isCallingNumber ||
       !isPlaying ||
       calledNumbers.length >= 75 ||
       gameData?.status !== "active"
@@ -1259,15 +1312,27 @@ const BingoGame = () => {
         await handleFinish();
         return;
       }
-      setCallError(
-        gameData?.status !== "active"
-          ? "Cannot call number: Game is paused or finished"
-          : "Cannot call number: Game is over, paused, or already calling"
-      );
-      setIsErrorModalOpen(true);
-      setIsAutoCall(false);
+      if (!isAuto) {
+        setCallError(
+          gameData?.status !== "active"
+            ? "Cannot call number: Game is paused or finished"
+            : "Cannot call number: Game is over or paused"
+        );
+        setIsErrorModalOpen(true);
+      }
       return;
     }
+    if (isCallingNumber) {
+      // If auto mode, queue one pending auto-call to be flushed after current call ends
+      if (isAuto) {
+        autoSchedulerRef.current.pending = true;
+        return;
+      }
+      setCallError("Cannot call number: A call is already in progress");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    // Server-authoritative path only (no optimistic UI) to avoid mismatches
     if (!gameData?._id) {
       setCallError("Game ID is missing");
       setIsErrorModalOpen(true);
@@ -1319,8 +1384,27 @@ const BingoGame = () => {
           availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
       }
       console.log(`[handleCallNumber] Calling number: ${numberToCall}`);
+      const t0 =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
       const response = await callNumber(gameData._id, { number: numberToCall });
       console.log(`[handleCallNumber] Response from callNumber:`, response);
+      if (isAuto) {
+        const t1 =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        const rtt = Math.max(0, t1 - t0);
+        const interval = Math.max(1, speed) * 1000;
+        const targetLead = Math.min(interval - 80, Math.max(100, rtt + 60));
+        const prev =
+          typeof adaptiveLeadMsRef !== "undefined" &&
+          adaptiveLeadMsRef?.current != null
+            ? adaptiveLeadMsRef.current
+            : computeLeadMs(speed);
+        const alpha = 0.3;
+        const smoothed = prev * (1 - alpha) + targetLead * alpha;
+        if (typeof adaptiveLeadMsRef !== "undefined") {
+          adaptiveLeadMsRef.current = smoothed;
+        }
+      }
       const calledNumber =
         response?.calledNumber ||
         numberToCall ||
@@ -1438,6 +1522,20 @@ const BingoGame = () => {
       }
     } finally {
       setIsCallingNumber(false);
+      // If an auto tick arrived while busy, fire a pending call immediately
+      if (
+        autoSchedulerRef.current.pending &&
+        isAutoCall &&
+        !isGameOver &&
+        isPlaying &&
+        gameData?.status === "active" &&
+        calledNumbers.length < 75 &&
+        !isCallingNumber
+      ) {
+        autoSchedulerRef.current.pending = false;
+        // Fire and forget; cadence remains controlled by scheduler
+        handleCallNumber(null, { isAuto: true });
+      }
     }
   };
 
@@ -2251,9 +2349,11 @@ const BingoGame = () => {
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
-              className={`bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
-                isAutoCall ? "bg-[#4caf50]" : ""
-              }`}
+              className={`${
+                isAutoCall
+                  ? "bg-[#4caf50] hover:bg-[#43a047]"
+                  : "bg-[#e9744c] hover:bg-[#f0b76a]"
+              } text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300`}
               onClick={() => setIsAutoCall((prev) => !prev)}
               disabled={!gameData?._id || !isPlaying || isGameOver}
             >
