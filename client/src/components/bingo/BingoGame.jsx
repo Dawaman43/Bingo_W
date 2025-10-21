@@ -660,8 +660,12 @@ const BingoGame = () => {
         `[updatePrizePoolDisplay] Setting full game (prizePool: ${newPrizePool})`
       );
 
-      // FIXED: Overwrite entire gameData (includes selectedCards, etc.)
-      setGameData(game);
+      // Preserve selectedCards if backend omits it in this response
+      setGameData((prev) => ({
+        ...prev,
+        ...game,
+        selectedCards: game.selectedCards ?? prev?.selectedCards ?? [],
+      }));
 
       console.log(
         `[updatePrizePoolDisplay] After setGameData, gameData.selectedCards length: ${
@@ -682,7 +686,12 @@ const BingoGame = () => {
   useEffect(() => {
     if (game) {
       setGameData((prev) => {
-        const newData = { ...prev, ...game };
+        const newData = {
+          ...prev,
+          ...game,
+          // Preserve selectedCards if missing from this update
+          selectedCards: game.selectedCards ?? prev?.selectedCards ?? [],
+        };
         // Preserve prizePool if the game is completed (backend may reset it to 0)
         if (
           game.status === "completed" &&
@@ -1435,13 +1444,27 @@ const BingoGame = () => {
         `[handleCallNumber] response.game?.prizePool: ${response.game?.prizePool}`
       );
       const updatedGameData = {
+        ...gameData,
         ...response.game,
         prizePool: response.game?.prizePool || currentPrizePool,
+        // Preserve selectedCards if not returned in response
+        selectedCards:
+          response.game && response.game.selectedCards !== undefined
+            ? response.game.selectedCards
+            : gameData?.selectedCards ?? [],
       };
       console.log(
         `[handleCallNumber] updatedGameData.prizePool after fallback: ${updatedGameData.prizePool}`
       );
-      setGameData(updatedGameData);
+      setGameData((prev) => ({
+        ...prev,
+        ...updatedGameData,
+        // Double-ensure preservation against race conditions
+        selectedCards:
+          updatedGameData && updatedGameData.selectedCards !== undefined
+            ? updatedGameData.selectedCards
+            : prev?.selectedCards ?? [],
+      }));
       console.log(
         `[handleCallNumber] After setGameData, gameData.prizePool: ${updatedGameData.prizePool}`
       );
@@ -1640,6 +1663,10 @@ const BingoGame = () => {
         ...prev,
         ...response.game,
         prizePool: currentPrizePool, // Preserve current prizePool
+        selectedCards:
+          response.game && response.game.selectedCards !== undefined
+            ? response.game.selectedCards
+            : prev?.selectedCards ?? [],
       }));
       // Do NOT call updatePrizePoolDisplay() to avoid overwriting preserved data
       SoundService.playSound("game_finish");
@@ -1831,8 +1858,15 @@ const BingoGame = () => {
 
       console.log(`[handleCheckCard] Backend response:`, data);
 
-      // Update game state
-      setGameData((prevGame) => ({ ...prevGame, ...data.game }));
+      // Update game state and preserve selectedCards if omitted
+      setGameData((prevGame) => ({
+        ...prevGame,
+        ...data.game,
+        selectedCards:
+          data.game && data.game.selectedCards !== undefined
+            ? data.game.selectedCards
+            : prevGame?.selectedCards ?? [],
+      }));
 
       // Helper to build 2D grid from card numbers (if needed for modals)
       const buildGrid = (numbers) => {
