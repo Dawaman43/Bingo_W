@@ -212,12 +212,12 @@ const CashierReport = () => {
 
   // Compute filtered data reactively
   const filteredData = useMemo(() => {
+    // Derive effective date range: if only one date is selected, treat it as a single-day filter
+    const effStartDate = filters.startDate || filters.endDate || "";
+    const effEndDate = filters.endDate || filters.startDate || "";
     const todayStr = getLocalDateStr(new Date());
     let filteredGames;
-    if (
-      filters.startDate > todayStr ||
-      (filters.endDate && filters.endDate > todayStr)
-    ) {
+    if (effStartDate > todayStr || (effEndDate && effEndDate > todayStr)) {
       filteredGames = [];
     } else {
       filteredGames = reportData.games.filter((game) => {
@@ -228,8 +228,8 @@ const CashierReport = () => {
             game.pattern.toLowerCase().includes(searchTerm.toLowerCase())) &&
           (!filters.status || game.status === filters.status) &&
           (!filters.pattern || game.pattern === filters.pattern) &&
-          (!filters.startDate || gameDateStr >= filters.startDate) &&
-          (!filters.endDate || gameDateStr <= filters.endDate)
+          (!effStartDate || gameDateStr >= effStartDate) &&
+          (!effEndDate || gameDateStr <= effEndDate)
         );
       });
     }
@@ -256,10 +256,10 @@ const CashierReport = () => {
     setShowAlert(false);
   };
 
-  // Fetch data only once on mount
+  // Fetch data on mount and when date/status/pattern filters change (server-side filtering)
   useEffect(() => {
     fetchReportData();
-  }, []);
+  }, [filters.startDate, filters.endDate, filters.status, filters.pattern]);
 
   // Update summaries and charts whenever filteredData changes
   useEffect(() => {
@@ -394,7 +394,16 @@ const CashierReport = () => {
         "[fetchReportData] Fetching report for cashierId:",
         cashierId
       );
-      const data = await gameService.getCashierReport(cashierId);
+      // Derive effective dates for server: one selected date means single-day filter
+      const effStartDate = filters.startDate || filters.endDate || undefined;
+      const effEndDate = filters.endDate || filters.startDate || undefined;
+      const serverFilters = {
+        status: filters.status || undefined,
+        pattern: filters.pattern || undefined,
+        startDate: effStartDate,
+        endDate: effEndDate,
+      };
+      const data = await gameService.getCashierReport(cashierId, serverFilters);
       console.log("[fetchReportData] Report data:", data);
       if (!data || !Array.isArray(data.games)) {
         throw new Error(data.message || "Invalid report data format");
@@ -601,15 +610,19 @@ const CashierReport = () => {
     });
 
     // Adjust revenue trend to respect date filters if startDate/endDate are set
+    const effStartStr = filters.startDate || filters.endDate || null;
+    const effEndStr = filters.endDate || filters.startDate || null;
     let trendStartDate = new Date();
     let trendEndDate = new Date();
-    if (filters.startDate && filters.endDate) {
-      trendStartDate = new Date(filters.startDate);
-      trendEndDate = new Date(filters.endDate);
-    } else if (filters.startDate) {
-      trendStartDate = new Date(filters.startDate);
-    } else if (filters.endDate) {
-      trendEndDate = new Date(filters.endDate);
+    if (effStartStr && effEndStr) {
+      trendStartDate = new Date(effStartStr);
+      trendEndDate = new Date(effEndStr);
+    } else if (effStartStr) {
+      trendStartDate = new Date(effStartStr);
+      trendEndDate = new Date(effStartStr);
+    } else if (effEndStr) {
+      trendStartDate = new Date(effEndStr);
+      trendEndDate = new Date(effEndStr);
     }
     // Generate dates for the trend within the filter range or last 7 days
     const numDays =
@@ -667,8 +680,8 @@ const CashierReport = () => {
     // Filter games within date range first
     const filteredForTrend = games.filter((g) => {
       const gDateStr = getLocalDateStr(g.createdAt);
-      if (filters.startDate && gDateStr < filters.startDate) return false;
-      if (filters.endDate && gDateStr > filters.endDate) return false;
+      if (effStartStr && gDateStr < effStartStr) return false;
+      if (effEndStr && gDateStr > effEndStr) return false;
       return true;
     });
 

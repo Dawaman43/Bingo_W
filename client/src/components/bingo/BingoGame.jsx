@@ -87,6 +87,14 @@ const BingoGame = () => {
 
   // Refs
   const autoIntervalRef = useRef(null);
+  // Precise auto-call scheduler (drift-corrected)
+  const autoSchedulerRef = useRef({
+    timerId: null,
+    nextAt: null,
+    running: false,
+  });
+  const autoModeRef = useRef(false);
+  const lastPrizePoolUpdateRef = useRef(0);
   const containerRef = useRef(null);
   const confettiContainerRef = useRef(null);
   const fireworksContainerRef = useRef(null);
@@ -658,37 +666,81 @@ const BingoGame = () => {
     updateJackpotWinnerDisplay();
   }, [user?.id]); // Depend on user.id for refetch
 
-  // Auto-call interval
+  // Auto-call scheduler (drift-corrected and sequential)
   useEffect(() => {
-    if (autoIntervalRef.current) {
-      clearInterval(autoIntervalRef.current);
-      autoIntervalRef.current = null;
-    }
-    if (
+    const canAutoCall =
       isAutoCall &&
       !isGameOver &&
-      gameData?._id &&
+      !!gameData?._id &&
       isPlaying &&
-      !isCallingNumber &&
       calledNumbers.length < 75 &&
-      gameData?.status === "active"
-    ) {
-      autoIntervalRef.current = setInterval(() => {
-        handleCallNumber();
-      }, speed * 1000);
-    }
-    return () => {
+      gameData?.status === "active";
+
+    const stopScheduler = () => {
+      autoModeRef.current = false;
+      autoSchedulerRef.current.running = false;
+      if (autoSchedulerRef.current.timerId) {
+        clearTimeout(autoSchedulerRef.current.timerId);
+        autoSchedulerRef.current.timerId = null;
+      }
       if (autoIntervalRef.current) {
         clearInterval(autoIntervalRef.current);
         autoIntervalRef.current = null;
       }
+    };
+
+    const scheduleNext = (nextAt) => {
+      autoSchedulerRef.current.nextAt = nextAt;
+      const delay = Math.max(0, nextAt - Date.now());
+      autoSchedulerRef.current.timerId = setTimeout(async () => {
+        // Guard checks before calling
+        if (
+          !autoModeRef.current ||
+          isGameOver ||
+          !gameData?._id ||
+          !isPlaying ||
+          calledNumbers.length >= 75 ||
+          gameData?.status !== "active"
+        ) {
+          stopScheduler();
+          return;
+        }
+        try {
+          await handleCallNumber(null, { isAuto: true });
+        } finally {
+          // Compute next tick, drift-corrected
+          const intervalMs = speed * 1000;
+          let target =
+            (autoSchedulerRef.current.nextAt || Date.now()) + intervalMs;
+          const now = Date.now();
+          // If we fell behind too far (e.g., network lag), reset from now
+          if (target < now - intervalMs) {
+            target = now + intervalMs;
+          }
+          if (autoModeRef.current) {
+            scheduleNext(target);
+          }
+        }
+      }, delay);
+    };
+
+    if (canAutoCall) {
+      autoModeRef.current = true;
+      autoSchedulerRef.current.running = true;
+      // Start from now + interval for predictable cadence
+      scheduleNext(Date.now() + speed * 1000);
+    } else {
+      stopScheduler();
+    }
+
+    return () => {
+      stopScheduler();
     };
   }, [
     isAutoCall,
     speed,
     isGameOver,
     isPlaying,
-    isCallingNumber,
     gameData?._id,
     gameData?.status,
     calledNumbers.length,
@@ -1192,7 +1244,8 @@ const BingoGame = () => {
     }
   };
 
-  const handleCallNumber = async (manualNum = null) => {
+  const handleCallNumber = async (manualNum = null, options = {}) => {
+    const isAuto = options?.isAuto === true;
     if (
       isGameOver ||
       isCallingNumber ||
@@ -1228,7 +1281,17 @@ const BingoGame = () => {
       console.log(
         `[handleCallNumber] Before updatePrizePoolDisplay, current gameData.prizePool: ${gameData?.prizePool}`
       );
-      await updatePrizePoolDisplay();
+      // During auto mode, avoid blocking on prize pool fetch to reduce lag
+      if (!isAuto) {
+        await updatePrizePoolDisplay();
+      } else {
+        // Throttle background updates to at most once every 5s during auto
+        const now = Date.now();
+        if (now - lastPrizePoolUpdateRef.current > 5000) {
+          lastPrizePoolUpdateRef.current = now;
+          updatePrizePoolDisplay();
+        }
+      }
       console.log(
         `[handleCallNumber] After updatePrizePoolDisplay, gameData.prizePool: ${gameData?.prizePool}`
       );
@@ -1298,7 +1361,15 @@ const BingoGame = () => {
       console.log(
         `[handleCallNumber] After setGameData, gameData.prizePool: ${updatedGameData.prizePool}`
       );
-      await updatePrizePoolDisplay();
+      if (!isAuto) {
+        await updatePrizePoolDisplay();
+      } else {
+        const now2 = Date.now();
+        if (now2 - lastPrizePoolUpdateRef.current > 5000) {
+          lastPrizePoolUpdateRef.current = now2;
+          updatePrizePoolDisplay();
+        }
+      }
       console.log(
         `[handleCallNumber] After await updatePrizePoolDisplay, gameData.prizePool: ${gameData?.prizePool}`
       );
@@ -1585,7 +1656,7 @@ const BingoGame = () => {
           `[handleCheckCard] Card ${cardIdParam} missing in state, fetching...`
         );
         try {
-          const response = await fetch(`/api/cards/${cardIdParam}`, {
+          const response = await fetch(`/api/games/cards/${cardIdParam}`, {
             headers: {
               Authorization: `Bearer ${localStorage.getItem("token")}`,
             },
@@ -2269,7 +2340,7 @@ const BingoGame = () => {
       {/* Jackpot Display (already positioned bottom left) */}
       <div
         className={`fixed bottom-5 left-[0.1%] bg-[#0f1a4a] border-3 border-[#f0e14a] rounded-xl p-4 text-center shadow-lg z-10 min-w-[200px] transition-all duration-300 ${
-          isJackpotAnimating ? "animate-pulse scale-105 animate-bounce" : ""
+          isJackpotAnimating ? "scale-105 animate-bounce" : ""
         }`}
       >
         <div className="text-3xl font-bold text-[#e9a64c] uppercase mb-2">
