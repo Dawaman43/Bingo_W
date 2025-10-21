@@ -86,7 +86,6 @@ export const getReportData = async (req, res, next) => {
 };
 
 // Get cashier report
-// Get cashier report with filters
 export const getCashierReport = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -132,38 +131,71 @@ export const getCashierReport = async (req, res, next) => {
       });
     }
 
-    // Extract filters from query params
-    const { status, pattern, startDate, endDate } = req.query;
-
-    let gamesQuery = { cashierId };
-    if (role === "admin" && !req.query.cashierId) {
-      delete gamesQuery.cashierId; // Admin sees all
-    }
-
-    // Apply filters
-    if (status && status !== "") {
-      gamesQuery.status = status === "finished" ? "completed" : status;
-    }
-    if (pattern && pattern !== "") {
-      gamesQuery.pattern = pattern;
-    }
-    if (startDate || endDate) {
-      gamesQuery.createdAt = {};
-      if (startDate) {
-        gamesQuery.createdAt.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        gamesQuery.createdAt.$lte = new Date(endDate);
-      }
-    }
-
     let games, counters, results;
 
-    games = await Game.find(gamesQuery).sort({ gameNumber: 1 });
-    counters = await Counter.find({ cashierId });
-    results = await Result.find({
-      gameId: { $in: games.map((g) => g._id) },
-    });
+    // Build game filter based on role and optional query filters (status, pattern, date range)
+    const { status, pattern, startDate, endDate } = req.query || {};
+
+    // Base filter: all games (admin system-wide) or restricted by cashier
+    const baseFilter = {};
+    if (!(role === "admin" && !req.query.cashierId)) {
+      // Not system-wide; restrict to specific cashier
+      const cashier = await User.findById(cashierId);
+      if (!cashier || cashier.role !== "cashier") {
+        return res.status(404).json({
+          message: "Cashier not found",
+          errorCode: "CASHIER_NOT_FOUND",
+        });
+      }
+      baseFilter.cashierId = cashierId;
+    }
+
+    // Apply status filter (map 'finished' to 'completed')
+    if (status) {
+      baseFilter.status = status === "finished" ? "completed" : status;
+    }
+
+    // Apply pattern filter
+    if (pattern) {
+      baseFilter.pattern = pattern;
+    }
+
+    // Apply date range filter (inclusive per-day)
+    if (startDate || endDate) {
+      baseFilter.createdAt = {};
+      if (startDate) {
+        const s = new Date(startDate);
+        if (!isNaN(s)) {
+          s.setHours(0, 0, 0, 0);
+          baseFilter.createdAt.$gte = s;
+        }
+      }
+      if (endDate) {
+        const e = new Date(endDate);
+        if (!isNaN(e)) {
+          e.setHours(23, 59, 59, 999);
+          baseFilter.createdAt.$lte = e;
+        }
+      }
+      // Remove empty createdAt object if invalid dates
+      if (Object.keys(baseFilter.createdAt).length === 0) {
+        delete baseFilter.createdAt;
+      }
+    }
+
+    if (role === "admin" && !req.query.cashierId) {
+      // System-wide admin view with filters applied
+      games = await Game.find(baseFilter).sort({ gameNumber: 1 });
+      counters = await Counter.find({});
+      results = await Result.find({});
+    } else {
+      // Cashier-specific view with filters applied
+      games = await Game.find(baseFilter).sort({ gameNumber: 1 });
+      counters = await Counter.find({ cashierId });
+      results = await Result.find({
+        gameId: { $in: games.map((g) => g._id) },
+      });
+    }
 
     const totalGames = games.length;
     const totalPrizePool = games.reduce(
