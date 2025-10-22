@@ -220,7 +220,7 @@ const BingoModals = ({
                 </h3>
                 <div className="w-full max-w-[360px] mx-auto relative p-2 bg-black/30 rounded-lg">
                   <div className="grid grid-cols-5 gap-1 mb-2 justify-items-center">
-                    {/* Legend for late call */}
+                    {/* Legend for late call (pattern-only removed) */}
                     {bingoStatus?.lateCall && (
                       <div className="flex gap-2 mt-2 justify-center items-center">
                         <div className="flex items-center gap-1">
@@ -230,12 +230,6 @@ const BingoModals = ({
                         <div className="flex items-center gap-1">
                           <span className="w-4 h-4 bg-orange-500 rounded" />
                           <span className="text-xs text-white">Winning</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="w-4 h-4 bg-purple-600 rounded" />
-                          <span className="text-xs text-white">
-                            Pattern only
-                          </span>
                         </div>
                         <div className="flex items-center gap-1">
                           <span className="w-4 h-4 bg-blue-600 rounded" />
@@ -332,11 +326,6 @@ const BingoModals = ({
                               calledNumbers.includes(numberValue) ||
                               isOtherCalledNumber ||
                               isWinningNumber;
-                            // pattern-only (not yet called) using localSelectedIndices as hint
-                            const patternOnly =
-                              bingoStatus.patternInfo?.localSelectedIndices?.includes(
-                                cellIndex
-                              ) && !isCalledNumber;
                             const displayNumber = isFreeSpace
                               ? "FREE"
                               : numberValue;
@@ -353,10 +342,6 @@ const BingoModals = ({
                               bgClass =
                                 "bg-gradient-to-br from-orange-500 to-orange-600 text-white border-orange-700 shadow-[0_6px_24px_rgba(255,165,0,0.35)]";
                               extra = "ring-4 ring-orange-300/30";
-                            } else if (patternOnly) {
-                              // Pattern-required but not yet called
-                              bgClass =
-                                "bg-purple-600 text-white border-purple-400";
                             } else if (isCalledNumber) {
                               bgClass =
                                 "bg-blue-600 text-white border-blue-400 shadow-[0_4px_12px_rgba(59,130,246,0.16)]";
@@ -383,15 +368,11 @@ const BingoModals = ({
                     })()}
                   </div>
                 </div>
-                {/* Legend */}
+                {/* Legend (pattern-only removed) */}
                 <div className="flex gap-2 mt-2 justify-center items-center">
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-4 bg-orange-500 rounded" />
                     <span className="text-xs text-white">Winning</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-4 h-4 bg-purple-600 rounded" />
-                    <span className="text-xs text-white">Pattern only</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-4 bg-blue-600 rounded" />
@@ -660,8 +641,6 @@ const BingoModals = ({
                         const isWinningCell =
                           nonWinnerCardData.lateCall &&
                           patternIndices.includes(cellIndex);
-                        const patternOnly =
-                          patternIndices.includes(cellIndex) && !isCalled;
                         const displayNum = isFree ? "FREE" : num;
                         const base =
                           "flex items-center justify-center rounded border relative overflow-hidden";
@@ -674,9 +653,6 @@ const BingoModals = ({
                           bgClass =
                             "bg-gradient-to-br from-orange-500 to-orange-600 text-white border-orange-700 shadow-[0_6px_24px_rgba(255,165,0,0.25)]";
                           extra += " ring-4 ring-orange-300/25";
-                        } else if (patternOnly) {
-                          bgClass =
-                            "bg-purple-600 text-white border-purple-400 shadow-[0_4px_10px_rgba(139,92,246,0.12)]";
                         } else if (isCalled) {
                           bgClass =
                             "bg-blue-600 text-white border-blue-400 shadow-[0_4px_12px_rgba(59,130,246,0.12)]";
