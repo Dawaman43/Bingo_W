@@ -142,7 +142,260 @@ export const callNumber = async (req, res, next) => {
 
 // controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
 // controllers/bingoController.js — Full corrected checkBingo with enhanced logs and fixes
-export const checkBingo = async (req, res, next) => {};
+export const checkBingo = async (req, res, next) => {
+  try {
+    const { cardId, preferredPattern } = req.body;
+    const gameId = req.params.id;
+
+    if (!cardId) {
+      return res.status(400).json({ message: "Card identifier is required" });
+    }
+
+    const game = await Game.findById(gameId)
+      .select(
+        "gameNumber status calledNumbers calledNumbersLog selectedCards forced* pattern winner prizePool"
+      )
+      .lean();
+
+    if (!game) {
+      await GameLog.create({
+        gameId,
+        action: "checkBingo",
+        status: "failed",
+        details: { error: "Game not found", timestamp: new Date() },
+      });
+      return res.status(404).json({ message: "Game not found" });
+    }
+
+    const lastCalledNumber =
+      game.calledNumbersLog?.[game.calledNumbersLog.length - 1] || null;
+    if (!lastCalledNumber) {
+      return res.json({
+        isBingo: false,
+        message: "No numbers called yet",
+        winners: [],
+        game,
+      });
+    }
+
+    // Find the specific card in selectedCards
+    const selectedCard = game.selectedCards.find(
+      (sc) => sc.id === parseInt(cardId)
+    );
+    if (!selectedCard) {
+      return res
+        .status(404)
+        .json({ message: "Card not found in selected cards" });
+    }
+
+    // Fetch full card
+    const fullCard = await Card.findOne({ card_number: parseInt(cardId) })
+      .select("numbers")
+      .lean();
+    if (!fullCard?.numbers) {
+      return res.status(404).json({ message: "Full card data not found" });
+    }
+
+    // 🚨 FIXED: Removed FutureWinner check — now allows any selected card to bingo
+    // If needed, add back as optional: const requireScheduled = req.query.requireScheduled === 'true';
+    // Then fetch/validate only if true, else log warning and proceed.
+
+    // Use preferredPattern or fallback to game pattern
+    const expectedPattern = preferredPattern || game.pattern || "all";
+
+    // Log if no future winner scheduled (for auditing)
+    // await GameLog.create({ gameId, action: "checkBingo", status: "unscheduled_check", details: { cardId: parseInt(cardId), pattern: expectedPattern } });
+
+    // Check card state
+    let checkCount = selectedCard.checkCount || 0;
+    let disqualified = selectedCard.disqualified || false;
+    const lastCheckTime = selectedCard.lastCheckTime || null;
+
+    // Reset checkCount if checking after last call
+    if (
+      lastCheckTime &&
+      lastCalledNumber.calledAt &&
+      new Date(lastCheckTime) < new Date(lastCalledNumber.calledAt)
+    ) {
+      checkCount += 1;
+    } else {
+      checkCount = 1;
+      disqualified = false;
+    }
+
+    // Update the specific card
+    const currentTime = new Date();
+    const index = game.selectedCards.findIndex(
+      (sc) => sc.id === parseInt(cardId)
+    ); // Safer index lookup
+    if (index === -1) {
+      return res
+        .status(404)
+        .json({ message: "Card index not found in selectedCards" });
+    }
+    await Game.findByIdAndUpdate(gameId, {
+      $set: {
+        [`selectedCards.${index}.checkCount`]: checkCount,
+        [`selectedCards.${index}.lastCheckTime`]: currentTime,
+        [`selectedCards.${index}.disqualified`]: disqualified,
+      },
+    });
+
+    if (disqualified || checkCount > 1) {
+      return res.json({
+        isBingo: false,
+        message: "Card disqualified or multiple checks",
+        winners: [],
+        game,
+      });
+    }
+
+    // Check if pattern is complete with all called numbers
+    const [isComplete, detectedPattern] = checkCardBingo(
+      fullCard.numbers,
+      game.calledNumbers,
+      expectedPattern,
+      lastCalledNumber?.number
+    );
+
+    const actualPattern =
+      expectedPattern === "all" ? detectedPattern : expectedPattern;
+
+    if (!isComplete) {
+      return res.json({
+        isBingo: false,
+        message: "Pattern not complete",
+        winners: [],
+        game,
+      });
+    }
+
+    // Late call check: determine if completed by last number or earlier
+    const lateCallResult = await detectLateCallForCurrentPattern(
+      fullCard.numbers,
+      actualPattern,
+      game.calledNumbers,
+      gameId
+    );
+
+    const completingNumber =
+      lateCallResult?.completingNumber || lastCalledNumber.number;
+
+    if (lateCallResult?.hasMissedOpportunity) {
+      // Mark as late call
+      disqualified = true;
+      await Game.findByIdAndUpdate(gameId, {
+        $set: {
+          [`selectedCards.${index}.disqualified`]: true,
+        },
+      });
+
+      await GameLog.create({
+        gameId,
+        action: "checkBingo",
+        status: "late_call",
+        details: {
+          cardId: parseInt(cardId),
+          pattern: actualPattern,
+          completingNumber,
+          lateCallMessage: lateCallResult.message,
+          timestamp: new Date(),
+        },
+      });
+
+      return res.json({
+        isBingo: false,
+        message: "Late call detected",
+        winners: [
+          {
+            cardId: parseInt(cardId),
+            numbers: fullCard.numbers,
+            winningPattern: actualPattern,
+            disqualified: true,
+            completingNumber,
+            lateCall: true,
+            lateCallMessage: lateCallResult.message,
+            jackpotEnabled: false, // Default since no fw
+          },
+        ],
+        gameStatus: game.status,
+      });
+    }
+
+    // It's a valid bingo, completed by last number
+    const winningCard = {
+      cardId: parseInt(cardId),
+      numbers: fullCard.numbers,
+      winningPattern: actualPattern,
+      disqualified: false,
+      completingNumber,
+      lateCall: false,
+      lateCallMessage: null,
+      jackpotEnabled: false, // Default since no fw
+    };
+
+    // Save winner to Game & Result
+    const session = await Game.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const freshGame = await Game.findById(gameId).session(session);
+        freshGame.status = "completed";
+        freshGame.winnerCards = [
+          // Assuming winnerCards as per earlier note; adjust to winner if standardized
+          {
+            cardId: winningCard.cardId,
+            winningPattern: winningCard.winningPattern,
+            numbers: winningCard.numbers,
+            jackpotEnabled: winningCard.jackpotEnabled,
+          },
+        ];
+        await freshGame.save({ session });
+
+        await Result.create(
+          [
+            {
+              gameId: freshGame._id,
+              winnerCardId: winningCard.cardId,
+              userId: req.user?._id || null,
+              identifier: cardId || `${freshGame._id}-${winningCard.cardId}`,
+              prize: freshGame.prizePool,
+              isJackpot: winningCard.jackpotEnabled,
+              winningPattern: winningCard.winningPattern,
+              lastCalledNumber: winningCard.completingNumber,
+              timestamp: new Date(),
+            },
+          ],
+          { session }
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    await GameLog.create({
+      gameId,
+      action: "checkBingo",
+      status: "success",
+      details: {
+        cardId: parseInt(cardId),
+        pattern: actualPattern,
+        completingNumber,
+        timestamp: new Date(),
+      },
+    });
+
+    return res.json({
+      isBingo: true,
+      winners: [winningCard],
+      gameStatus: "completed",
+    });
+  } catch (err) {
+    console.error("[checkBingo] ❌ ERROR:", err);
+    return res
+      .status(500)
+      .json({ message: "Internal server error", error: err.message });
+  }
+};
 
 // ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
 // ✅ UPDATED FUNCTION: Pattern-specific late call detection — Now always returns completingNumber when applicable
