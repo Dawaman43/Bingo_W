@@ -2704,6 +2704,14 @@ const BingoGame = () => {
               value={cardId}
               onChange={(e) => setCardId(e.target.value)}
               placeholder="Enter Card ID"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && gameData?._id) {
+                  // Prevent form submission if inside a form
+                  e.preventDefault();
+                  // Only trigger when not disabled
+                  handleCheckCard(cardId, undefined);
+                }
+              }}
               disabled={!gameData?._id}
             />
             <button
