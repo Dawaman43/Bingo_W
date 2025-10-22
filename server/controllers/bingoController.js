@@ -211,7 +211,7 @@ export const checkBingo = async (req, res, next) => {
     let disqualified = selectedCard.disqualified || false;
     const lastCheckTime = selectedCard.lastCheckTime || null;
 
-    // Reset checkCount if checking after last call
+    // Reset or increment checkCount based on whether a new number has been called since last check
     if (
       lastCheckTime &&
       lastCalledNumber.calledAt &&
@@ -241,7 +241,60 @@ export const checkBingo = async (req, res, next) => {
       },
     });
 
-    if (disqualified || checkCount > 1) {
+    // If this card was already checked in a previous call (checkCount > 1),
+    // it's disqualified for any subsequent win in this game. We still compute
+    // completion info to return helpful UI details when applicable.
+    if (checkCount > 1) {
+      // Evaluate completion state for context
+      const [isCompleteOnRecheck, detectedPatternOnRecheck] = checkCardBingo(
+        fullCard.numbers,
+        game.calledNumbers,
+        expectedPattern,
+        lastCalledNumber?.number
+      );
+
+      const actualPatternOnRecheck =
+        expectedPattern === "all" ? detectedPatternOnRecheck : expectedPattern;
+
+      // Persist disqualification state for this card
+      await Game.findByIdAndUpdate(gameId, {
+        $set: {
+          [`selectedCards.${index}.disqualified`]: true,
+        },
+      });
+
+      if (isCompleteOnRecheck) {
+        const lateInfo = await detectLateCallForCurrentPattern(
+          fullCard.numbers,
+          actualPatternOnRecheck,
+          game.calledNumbers,
+          gameId
+        );
+        const completingNumberOnRecheck =
+          lateInfo?.completingNumber || lastCalledNumber.number;
+
+        return res.json({
+          isBingo: false,
+          message:
+            "Card disqualified due to previous check; subsequent wins are not eligible",
+          winners: [
+            {
+              cardId: parseInt(cardId),
+              numbers: fullCard.numbers,
+              winningPattern: actualPatternOnRecheck,
+              disqualified: true,
+              completingNumber: completingNumberOnRecheck,
+              lateCall: true,
+              lateCallMessage:
+                lateInfo?.message ||
+                "This card was already checked before; later completion is disqualified.",
+              jackpotEnabled: false,
+            },
+          ],
+          gameStatus: game.status,
+        });
+      }
+
       return res.json({
         isBingo: false,
         message: "Card disqualified or multiple checks",

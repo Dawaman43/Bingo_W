@@ -2302,6 +2302,15 @@ const BingoGame = () => {
             lateCall: isLateCall,
             lateCallMessage,
             wouldHaveWon,
+            // If backend says not a winner, clear any previous winner flags
+            isWinner: false,
+            winningPositions: {
+              B: [false, false, false, false, false],
+              I: [false, false, false, false, false],
+              N: [false, false, false, false, false],
+              G: [false, false, false, false, false],
+              O: [false, false, false, false, false],
+            },
             checkCount: data.checkCount || cardInState.checkCount || 0,
             disqualified:
               data.disqualified || cardInState.disqualified || false,
