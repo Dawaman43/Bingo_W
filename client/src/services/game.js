@@ -194,6 +194,29 @@ const gameService = {
       // Return the full response data so the component can access all fields
       return response.data;
     } catch (error) {
+      // Check if the request was canceled (aborted).
+      // Different axios/browser combinations may surface this as
+      // error.code, error.name or simply error.message === 'canceled'
+      const msg = (error && error.message) || "";
+      const isCanceled =
+        error?.code === "ERR_CANCELED" ||
+        error?.name === "CanceledError" ||
+        (typeof msg === "string" && msg.toLowerCase().includes("cancel")) ||
+        (typeof msg === "string" && msg.toLowerCase().includes("aborted"));
+
+      if (isCanceled) {
+        // Don't treat canceled/aborted requests as errors — they're expected
+        // when the UI intentionally aborts an in-flight call (e.g. toggling
+        // auto-call off). Log at debug level and rethrow the original error
+        // so upstream callers that inspect `error.code` can detect it.
+        console.log(
+          `[gameService.callNumber] Request canceled for game ${gameId}, number ${Number(
+            number
+          )}`
+        );
+        throw error; // rethrow to allow caller to handle/ignore
+      }
+
       console.error(
         "[gameService.callNumber] Detailed error:",
         JSON.stringify(
