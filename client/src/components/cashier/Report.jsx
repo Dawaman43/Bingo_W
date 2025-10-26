@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Component } from "react";
+import React, { useState, useEffect, Component, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import gameService from "../../services/game";
 import {
@@ -201,6 +201,51 @@ const CashierReport = () => {
     totalPrizesAwarded: 0,
   });
 
+  // Helper to get local YYYY-MM-DD string
+  const getLocalDateStr = (date) => {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  // Compute filtered data reactively
+  const filteredData = useMemo(() => {
+    // Derive effective date range: if only one date is selected, treat it as a single-day filter
+    const effStartDate = filters.startDate || filters.endDate || "";
+    const effEndDate = filters.endDate || filters.startDate || "";
+    const todayStr = getLocalDateStr(new Date());
+    let filteredGames;
+    if (effStartDate > todayStr || (effEndDate && effEndDate > todayStr)) {
+      filteredGames = [];
+    } else {
+      filteredGames = reportData.games.filter((game) => {
+        const gameDateStr = getLocalDateStr(game.createdAt);
+        return (
+          (game.gameNumber?.toString().includes(searchTerm) ||
+            game.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            game.pattern.toLowerCase().includes(searchTerm.toLowerCase())) &&
+          (!filters.status || game.status === filters.status) &&
+          (!filters.pattern || game.pattern === filters.pattern) &&
+          (!effStartDate || gameDateStr >= effStartDate) &&
+          (!effEndDate || gameDateStr <= effEndDate)
+        );
+      });
+    }
+    return {
+      games: filteredGames,
+      counters: reportData.counters, // Counters don't filter by date, so keep full
+      results: reportData.results, // Same for results
+    };
+  }, [
+    reportData.games,
+    reportData.counters,
+    reportData.results,
+    filters,
+    searchTerm,
+  ]);
+
   const showPopup = (message, type = "info") => {
     setAlertMessage(message);
     setAlertType(type);
@@ -211,9 +256,126 @@ const CashierReport = () => {
     setShowAlert(false);
   };
 
+  // Fetch data on mount and when date/status/pattern filters change (server-side filtering)
   useEffect(() => {
     fetchReportData();
-  }, [filters]);
+  }, [filters.startDate, filters.endDate, filters.status, filters.pattern]);
+
+  // Update summaries and charts whenever filteredData changes
+  useEffect(() => {
+    if (filteredData.games.length > 0) {
+      updateSummaryStats({
+        games: filteredData.games,
+        totalPrizesAwarded: filteredData.results.reduce(
+          (sum, r) => sum + (parseFloat(r.prize) || 0),
+          0
+        ),
+      });
+      updateCharts(filteredData.games);
+      // Update reportData total for consistency
+      setReportData((prev) => ({
+        ...prev,
+        totalGames: filteredData.games.length,
+      }));
+    } else {
+      // Reset to empty if no filtered games
+      updateSummaryStats({ games: [], totalPrizesAwarded: 0 });
+      // Reset charts to zero
+      setGamesStatusData({
+        labels: ["Active/Pending", "Finished"],
+        datasets: [
+          {
+            data: [0, 0],
+            backgroundColor: ["#3B82F6", "#10B981"],
+            borderColor: ["#1D4ED8", "#059669"],
+            borderWidth: 1,
+          },
+        ],
+      });
+      setPatternsData({
+        labels: [
+          "Four Corners Center",
+          "Cross",
+          "Main Diagonal",
+          "Other Diagonal",
+          "Horizontal Line",
+          "Vertical Line",
+          "All",
+        ],
+        datasets: [
+          {
+            data: [0, 0, 0, 0, 0, 0, 0],
+            backgroundColor: "#F59E0B",
+            borderColor: "#D97706",
+            borderWidth: 1,
+          },
+        ],
+      });
+      setDailyActivityData({
+        labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        datasets: [
+          {
+            data: [0, 0, 0, 0, 0, 0, 0],
+            borderColor: "#8B5CF6",
+            backgroundColor: "rgba(139, 92, 246, 0.1)",
+            fill: true,
+            tension: 0.4,
+          },
+        ],
+      });
+      setBetAmountData({
+        labels: [
+          "0-10 Birr",
+          "11-20 Birr",
+          "21-50 Birr",
+          "51-100 Birr",
+          "100+ Birr",
+        ],
+        datasets: [
+          {
+            data: [0, 0, 0, 0, 0],
+            backgroundColor: "#10B981",
+            borderColor: "#059669",
+            borderWidth: 1,
+          },
+        ],
+      });
+      setHouseFeeData({
+        labels: ["Low (<10%)", "Medium (10-20%)", "High (>20%)"],
+        datasets: [
+          {
+            data: [0, 0, 0],
+            backgroundColor: "#EF4444",
+            borderColor: "#DC2626",
+            borderWidth: 1,
+          },
+        ],
+      });
+      setRevenueTrendData({
+        labels: [],
+        datasets: [
+          {
+            data: [],
+            borderColor: "#10B981",
+            backgroundColor: "rgba(16, 185, 129, 0.1)",
+            fill: true,
+            tension: 0.4,
+          },
+        ],
+      });
+      setJackpotContributionData({
+        labels: ["This Week", "Last Week", "Prior"],
+        datasets: [
+          {
+            data: [0, 0, 0],
+            backgroundColor: "#F59E0B",
+            borderColor: "#D97706",
+            borderWidth: 1,
+          },
+        ],
+      });
+    }
+  }, [filteredData]);
 
   const fetchReportData = async () => {
     setLoading(true);
@@ -232,25 +394,28 @@ const CashierReport = () => {
         "[fetchReportData] Fetching report for cashierId:",
         cashierId
       );
-      const data = await gameService.getCashierReport(cashierId);
+      // Derive effective dates for server: one selected date means single-day filter
+      const effStartDate = filters.startDate || filters.endDate || undefined;
+      const effEndDate = filters.endDate || filters.startDate || undefined;
+      const serverFilters = {
+        status: filters.status || undefined,
+        pattern: filters.pattern || undefined,
+        startDate: effStartDate,
+        endDate: effEndDate,
+      };
+      const data = await gameService.getCashierReport(cashierId, serverFilters);
       console.log("[fetchReportData] Report data:", data);
       if (!data || !Array.isArray(data.games)) {
         throw new Error(data.message || "Invalid report data format");
       }
       setReportData({
         totalGames: data.totalGames || 0,
-        activeGames: data.games.filter(
-          (g) => g.status === "active" || g.status === "pending"
-        ).length,
-        totalHouseFee: data.games
-          .reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0)
-          .toFixed(2),
+        activeGames: data.activeGames || 0,
+        totalHouseFee: data.totalHouseFee || "0.00",
         games: data.games,
         counters: data.counters || [],
         results: data.results || [],
       });
-      updateSummaryStats(data);
-      updateCharts(data.games);
 
       // Handle jackpot fetch separately to avoid failing the entire report
       try {
@@ -302,7 +467,7 @@ const CashierReport = () => {
     const totalPrizesAwarded = data.totalPrizesAwarded || 0;
 
     setSummaryStats({
-      totalGames: data.totalGames || 0,
+      totalGames: games.length,
       activeGames: games.filter(
         (g) => g.status === "active" || g.status === "pending"
       ).length,
@@ -444,20 +609,46 @@ const CashierReport = () => {
       ],
     });
 
-    const last7Days = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      return d.toISOString().split("T")[0];
-    }).reverse();
-    const revenueData = last7Days.map((date) => {
+    // Adjust revenue trend to respect date filters if startDate/endDate are set
+    const effStartStr = filters.startDate || filters.endDate || null;
+    const effEndStr = filters.endDate || filters.startDate || null;
+    let trendStartDate = new Date();
+    let trendEndDate = new Date();
+    if (effStartStr && effEndStr) {
+      trendStartDate = new Date(effStartStr);
+      trendEndDate = new Date(effEndStr);
+    } else if (effStartStr) {
+      trendStartDate = new Date(effStartStr);
+      trendEndDate = new Date(effStartStr);
+    } else if (effEndStr) {
+      trendStartDate = new Date(effEndStr);
+      trendEndDate = new Date(effEndStr);
+    }
+    // Generate dates for the trend within the filter range or last 7 days
+    const numDays =
+      filters.startDate || filters.endDate
+        ? Math.ceil((trendEndDate - trendStartDate) / (1000 * 60 * 60 * 24)) + 1
+        : 7;
+    const lastDays = [];
+    const tempDate = new Date(trendEndDate);
+    for (let i = numDays - 1; i >= 0; i--) {
+      const year = tempDate.getFullYear();
+      const month = String(tempDate.getMonth() + 1).padStart(2, "0");
+      const day = String(tempDate.getDate()).padStart(2, "0");
+      lastDays.push(`${year}-${month}-${day}`);
+      tempDate.setDate(tempDate.getDate() - 1);
+    }
+    lastDays.reverse();
+    const revenueData = lastDays.map((date) => {
       return games
-        .filter(
-          (g) => new Date(g.createdAt).toISOString().split("T")[0] === date
-        )
+        .filter((g) => {
+          const gDateStr = getLocalDateStr(g.createdAt);
+          return gDateStr === date;
+        })
         .reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0);
     });
     setRevenueTrendData({
-      labels: last7Days.map((d) =>
+      labels: lastDays.map((d) =>
         new Date(d).toLocaleDateString("en-US", {
           weekday: "short",
           month: "short",
@@ -476,25 +667,38 @@ const CashierReport = () => {
       ],
     });
 
-    const thisWeek = games
-      .filter((g) => {
-        const weekAgo = new Date();
-        weekAgo.setDate(weekAgo.getDate() - 7);
-        return new Date(g.createdAt) > weekAgo;
-      })
+    // Adjust jackpot contributions to respect filters
+    const now = new Date();
+    let weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    const weekAgo = new Date(weekStart);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const twoWeeksAgo = new Date(weekAgo);
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 7);
+
+    // Filter games within date range first
+    const filteredForTrend = games.filter((g) => {
+      const gDateStr = getLocalDateStr(g.createdAt);
+      if (effStartStr && gDateStr < effStartStr) return false;
+      if (effEndStr && gDateStr > effEndStr) return false;
+      return true;
+    });
+
+    const thisWeek = filteredForTrend
+      .filter((g) => new Date(g.createdAt) >= weekStart)
       .reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0);
-    const lastWeek = games
+    const lastWeek = filteredForTrend
       .filter((g) => {
-        const twoWeeksAgo = new Date();
-        twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-        const weekAgo = new Date();
-        weekAgo.setDate(weekAgo.getDate() - 7);
         const gDate = new Date(g.createdAt);
-        return gDate > twoWeeksAgo && gDate <= weekAgo;
+        return gDate > weekAgo && gDate <= weekStart;
       })
       .reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0);
     const prior =
-      games.reduce((sum, g) => sum + (parseFloat(g.houseFee) || 0), 0) -
+      filteredForTrend.reduce(
+        (sum, g) => sum + (parseFloat(g.houseFee) || 0),
+        0
+      ) -
       thisWeek -
       lastWeek;
     setJackpotContributionData({
@@ -515,19 +719,6 @@ const CashierReport = () => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
-  const filteredGames = reportData.games.filter(
-    (game) =>
-      (game.gameNumber?.toString().includes(searchTerm) ||
-        game.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        game.pattern.toLowerCase().includes(searchTerm.toLowerCase())) &&
-      (!filters.status || game.status === filters.status) &&
-      (!filters.pattern || game.pattern === filters.pattern) &&
-      (!filters.startDate ||
-        new Date(game.createdAt) >= new Date(filters.startDate)) &&
-      (!filters.endDate ||
-        new Date(game.createdAt) <= new Date(filters.endDate))
-  );
-
   const exportToCSV = () => {
     const headers = [
       "Game #",
@@ -541,7 +732,7 @@ const CashierReport = () => {
     ];
     const csvContent = [
       headers.join(","),
-      ...filteredGames.map((game) =>
+      ...filteredData.games.map((game) =>
         [
           game.gameNumber,
           new Date(game.createdAt).toLocaleDateString(),
@@ -667,7 +858,7 @@ const CashierReport = () => {
         }
       }
 
-      // Sync charts
+      // Sync charts (will use filteredData which includes the update)
       updateCharts(updatedGames);
 
       // Show success
@@ -834,7 +1025,7 @@ const CashierReport = () => {
               color:
                 "bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-300",
               icon: "🎲",
-              label: "All Time",
+              label: "Filtered",
             },
             {
               name: "Active Games",
@@ -858,7 +1049,7 @@ const CashierReport = () => {
               color:
                 "bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-300",
               icon: "💰",
-              label: "Total house fee",
+              label: "Filtered",
             },
             {
               name: "Avg Bet Amount",
@@ -961,7 +1152,7 @@ const CashierReport = () => {
         <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden mb-6">
           <div className="p-6 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Games List ({filteredGames.length} results)
+              Games List ({filteredData.games.length} results)
             </h2>
           </div>
           <div className="overflow-x-auto">
@@ -998,7 +1189,7 @@ const CashierReport = () => {
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {filteredGames.length === 0 ? (
+                {filteredData.games.length === 0 ? (
                   <tr>
                     <td
                       colSpan="9"
@@ -1008,7 +1199,7 @@ const CashierReport = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredGames.map((game, index) =>
+                  filteredData.games.map((game, index) =>
                     renderTableRow(game, index + 1)
                   )
                 )}
@@ -1076,7 +1267,7 @@ const CashierReport = () => {
           </div>
           <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-6 lg:col-span-2">
             <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
-              Revenue Trend (Last 7 Days)
+              Revenue Trend (Filtered Period)
             </h3>
             <div className="h-64">
               <Line
@@ -1087,7 +1278,7 @@ const CashierReport = () => {
           </div>
           <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-6 lg:col-span-2">
             <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
-              Jackpot Contributions by Period
+              Jackpot Contributions by Period (Filtered)
             </h3>
             <div className="h-64">
               <Bar

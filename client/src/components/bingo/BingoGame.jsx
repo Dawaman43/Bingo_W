@@ -31,6 +31,42 @@ const BingoGame = () => {
   const [speed, setSpeed] = useState(
     () => parseInt(localStorage.getItem("bingoAutoCallSpeed")) || 8
   );
+  // Internal lead time (computed): initiate auto-call earlier to mask latency
+  // Goal: for 8s interval, start around the 6th–7th second (lead ≈ 1.6–2.0s)
+  const computeLeadMs = (s) => {
+    const interval = Math.max(1, s) * 1000;
+    // Base as 20% of interval
+    let base = Math.round(interval * 0.2); // e.g., 8s -> 1600ms lead
+    // For longer intervals, ensure a minimum absolute lead window
+    if (interval >= 6000) base = Math.max(base, 1200);
+    if (interval >= 8000) base = Math.max(base, 1600); // 8s+: at least 1.6s early
+    if (interval >= 10000) base = Math.max(base, 2000); // 10s+: at least 2s early
+
+    const safetyMargin = 100; // keep at least 100ms before the exact target
+    const maxLead = Math.max(0, interval - safetyMargin);
+    // Clamp to [150ms, interval - safety]
+    const clamped = Math.min(Math.max(base, 150), maxLead);
+    return clamped;
+  };
+  const getLeadMs = (s) => {
+    try {
+      const interval = Math.max(1, s) * 1000;
+      const safetyMargin = 100;
+      // adaptiveLeadMsRef may not exist in older code paths; guard access
+      const adaptive =
+        typeof adaptiveLeadMsRef !== "undefined" &&
+        Number.isFinite(adaptiveLeadMsRef?.current)
+          ? adaptiveLeadMsRef.current
+          : null;
+      const baseLead = computeLeadMs(s);
+      // Never go below the base lead; allow adaptive to increase if needed
+      const candidate = Math.max(baseLead, adaptive ?? 0);
+      const lead = Math.min(candidate, Math.max(0, interval - safetyMargin));
+      return Math.max(0, lead);
+    } catch (e) {
+      return computeLeadMs(s);
+    }
+  };
   const [isPlaying, setIsPlaying] = useState(false);
   const [cardId, setCardId] = useState("");
   const [manualNumber, setManualNumber] = useState("");
@@ -87,6 +123,26 @@ const BingoGame = () => {
 
   // Refs
   const autoIntervalRef = useRef(null);
+  // Precise auto-call scheduler (drift-corrected)
+  const autoSchedulerRef = useRef({
+    timerId: null,
+    nextAt: null,
+    running: false,
+    pending: false,
+  });
+  // Prevent overlapping network calls and track in-flight number
+  const inFlightCallRef = useRef(false);
+  const inFlightNumberRef = useRef(null);
+  // Map<number, [{ cardId, letter, row }]>
+  const numberIndexRef = useRef(new Map());
+  // Fast membership cache for called numbers
+  const calledNumbersSetRef = useRef(new Set());
+  // Guard to prevent overlapping card checks
+  const checkInFlightRef = useRef(false);
+  // Adaptive network/audio lead time (ms) based on measured RTT
+  const adaptiveLeadMsRef = useRef(null);
+  const autoModeRef = useRef(false);
+  const lastPrizePoolUpdateRef = useRef(0);
   const containerRef = useRef(null);
   const confettiContainerRef = useRef(null);
   const fireworksContainerRef = useRef(null);
@@ -94,6 +150,23 @@ const BingoGame = () => {
   useEffect(() => {
     localStorage.setItem("bingoAutoCallSpeed", speed);
   }, [speed]);
+  // Reset adaptive lead when speed changes
+  useEffect(() => {
+    if (typeof adaptiveLeadMsRef !== "undefined") {
+      adaptiveLeadMsRef.current = null;
+    }
+  }, [speed]);
+
+  // Keep a Set of called numbers for O(1) membership checks
+  useEffect(() => {
+    try {
+      calledNumbersSetRef.current = new Set(
+        Array.isArray(calledNumbers) ? calledNumbers : []
+      );
+    } catch (e) {
+      calledNumbersSetRef.current = new Set();
+    }
+  }, [calledNumbers]);
 
   // Real jackpot fetch using service
   const fetchJackpotAmount = async () => {
@@ -607,8 +680,12 @@ const BingoGame = () => {
         `[updatePrizePoolDisplay] Setting full game (prizePool: ${newPrizePool})`
       );
 
-      // FIXED: Overwrite entire gameData (includes selectedCards, etc.)
-      setGameData(game);
+      // Preserve selectedCards if backend omits it in this response
+      setGameData((prev) => ({
+        ...prev,
+        ...game,
+        selectedCards: game.selectedCards ?? prev?.selectedCards ?? [],
+      }));
 
       console.log(
         `[updatePrizePoolDisplay] After setGameData, gameData.selectedCards length: ${
@@ -629,7 +706,12 @@ const BingoGame = () => {
   useEffect(() => {
     if (game) {
       setGameData((prev) => {
-        const newData = { ...prev, ...game };
+        const newData = {
+          ...prev,
+          ...game,
+          // Preserve selectedCards if missing from this update
+          selectedCards: game.selectedCards ?? prev?.selectedCards ?? [],
+        };
         // Preserve prizePool if the game is completed (backend may reset it to 0)
         if (
           game.status === "completed" &&
@@ -658,40 +740,90 @@ const BingoGame = () => {
     updateJackpotWinnerDisplay();
   }, [user?.id]); // Depend on user.id for refetch
 
-  // Auto-call interval
+  // Auto-call scheduler (drift-corrected and sequential, schedules before work)
   useEffect(() => {
-    if (autoIntervalRef.current) {
-      clearInterval(autoIntervalRef.current);
-      autoIntervalRef.current = null;
-    }
-    if (
+    const nowMs = () =>
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+
+    const canAutoCall =
       isAutoCall &&
       !isGameOver &&
-      gameData?._id &&
+      !!gameData?._id &&
       isPlaying &&
-      !isCallingNumber &&
-      calledNumbers.length < 75 &&
-      gameData?.status === "active"
-    ) {
-      autoIntervalRef.current = setInterval(() => {
-        handleCallNumber();
-      }, speed * 1000);
-    }
-    return () => {
+      gameData?.status === "active";
+
+    const stopScheduler = () => {
+      autoModeRef.current = false;
+      autoSchedulerRef.current.running = false;
+      autoSchedulerRef.current.pending = false;
+      if (autoSchedulerRef.current.timerId) {
+        clearTimeout(autoSchedulerRef.current.timerId);
+        autoSchedulerRef.current.timerId = null;
+      }
       if (autoIntervalRef.current) {
         clearInterval(autoIntervalRef.current);
         autoIntervalRef.current = null;
       }
+    };
+
+    const scheduleNext = (baseNextAt) => {
+      autoSchedulerRef.current.nextAt = baseNextAt;
+      const lead = getLeadMs ? getLeadMs(speed) : computeLeadMs(speed);
+      const delay = Math.max(0, baseNextAt - lead - nowMs());
+      autoSchedulerRef.current.timerId = setTimeout(async () => {
+        // Pre-checks: if any fail, stop
+        if (
+          !autoModeRef.current ||
+          isGameOver ||
+          !gameData?._id ||
+          !isPlaying ||
+          gameData?.status !== "active"
+        ) {
+          stopScheduler();
+          return;
+        }
+
+        // Schedule the following tick BEFORE doing the work, to keep cadence
+        const intervalMs = speed * 1000;
+        let nextTarget =
+          (autoSchedulerRef.current.nextAt || nowMs()) + intervalMs;
+        const now = nowMs();
+        if (nextTarget < now - intervalMs) {
+          // If we fell way behind (tab throttling, etc), reset schedule
+          nextTarget = now + intervalMs;
+        }
+        if (autoModeRef.current) {
+          scheduleNext(nextTarget);
+        }
+
+        // Now perform the call (non-blocking for the schedule)
+        try {
+          await handleCallNumber(null, { isAuto: true });
+        } catch (e) {
+          // Swallow here; handleCallNumber manages its own errors
+        }
+      }, delay);
+    };
+
+    if (canAutoCall) {
+      autoModeRef.current = true;
+      autoSchedulerRef.current.running = true;
+      // Start from now + interval for predictable cadence
+      scheduleNext(nowMs() + speed * 1000);
+    } else {
+      stopScheduler();
+    }
+
+    return () => {
+      stopScheduler();
     };
   }, [
     isAutoCall,
     speed,
     isGameOver,
     isPlaying,
-    isCallingNumber,
     gameData?._id,
     gameData?.status,
-    calledNumbers.length,
   ]);
 
   // Fullscreen handling
@@ -770,6 +902,13 @@ const BingoGame = () => {
             G: new Array(5).fill(false),
             O: new Array(5).fill(false),
           };
+          const winningPositions = {
+            B: new Array(5).fill(false),
+            I: new Array(5).fill(false),
+            N: new Array(5).fill(false),
+            G: new Array(5).fill(false),
+            O: new Array(5).fill(false),
+          };
           currentCalledNumbers.forEach((calledNum) => {
             for (let row = 0; row < 5; row++) {
               for (let col = 0; col < 5; col++) {
@@ -786,6 +925,7 @@ const BingoGame = () => {
             cardNumber: selected.id,
             numbers,
             markedPositions,
+            winningPositions,
             isWinner: false,
             checkCount: 0, // NEW: Add defaults for check logic
             disqualified: false,
@@ -793,6 +933,22 @@ const BingoGame = () => {
           };
         }) || [];
       gameCards = gameCards.filter(Boolean); // Remove nulls
+      // Build fast lookup index: number -> list of {cardId, letter, row}
+      const index = new Map();
+      for (const card of gameCards) {
+        const letters = ["B", "I", "N", "G", "O"];
+        for (let col = 0; col < 5; col++) {
+          for (let row = 0; row < 5; row++) {
+            const letter = letters[col];
+            const num = card.numbers[letter][row];
+            if (typeof num === "number") {
+              if (!index.has(num)) index.set(num, []);
+              index.get(num).push({ cardId: card.id, letter, row });
+            }
+          }
+        }
+      }
+      numberIndexRef.current = index;
       setBingoCards(gameCards);
       setCards(gameCards); // NEW: Sync to cards state
       console.log(`[fetchBingoCards] Set ${gameCards.length} cards`);
@@ -800,6 +956,126 @@ const BingoGame = () => {
       setCallError(error.message || "Failed to fetch cards");
       setIsErrorModalOpen(true);
     }
+  };
+
+  // NEW: Helper function to get numbers for pattern (mirroring backend logic)
+  // In BingoGame.jsx — Replace the function with this (adds scanning logic)
+  const getNumbersForPatternBackendStyle = (
+    numbers, // 2D 5x5 grid
+    pattern,
+    excludeIndices = [],
+    isWinner = false,
+    calledNumbers = [], // NEW: Pass from caller (e.g., calledNumbers state)
+    includeMarked = true // NEW: For winners, include all in pattern
+  ) => {
+    console.log(
+      "[getNumbersForPatternBackendStyle] Processing pattern:",
+      pattern,
+      "with numbers:",
+      numbers,
+      "calledNumbers:",
+      calledNumbers
+    );
+
+    // Validate input (unchanged)
+    if (
+      !Array.isArray(numbers) ||
+      numbers.length !== 5 ||
+      numbers.some((row) => !Array.isArray(row) || row.length !== 5)
+    ) {
+      throw new Error("Invalid card numbers: must be a 5x5 array");
+    }
+    if (!pattern) {
+      throw new Error("Pattern must be specified");
+    }
+
+    // Define fixed patterns (unchanged, but we'll override for lines)
+    const patterns = {
+      four_corners_center: [0, 4, 20, 24, 12],
+      cross: [2, 7, 12, 17, 22, 10, 11, 13, 14],
+      main_diagonal: [0, 6, 12, 18, 24],
+      other_diagonal: [4, 8, 12, 16, 20],
+      // REMOVED: horizontal_line & vertical_line hardcodes — handle dynamically below
+      all: Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12),
+      full_card: Array.from({ length: 25 }, (_, i) => i).filter(
+        (i) => i !== 12
+      ),
+      inner_corners: [6, 8, 16, 18],
+    };
+
+    let selectedIndices = [];
+
+    if (patterns[pattern]) {
+      selectedIndices = patterns[pattern];
+    } else if (pattern === "horizontal_line" || pattern === "vertical_line") {
+      // NEW: Dynamic scan for actual complete line (mirror backend)
+      const safeCalled = Array.isArray(calledNumbers) ? calledNumbers : [];
+      const isLineComplete = (line) =>
+        line.every(
+          (cell) => cell === "FREE" || safeCalled.includes(Number(cell))
+        );
+
+      if (pattern === "horizontal_line") {
+        let winningRow = -1;
+        if (includeMarked) {
+          // For winners: Find first complete row
+          for (let row = 0; row < 5; row++) {
+            if (isLineComplete(numbers[row])) {
+              winningRow = row;
+              break;
+            }
+          }
+        } else if (!isWinner) {
+          // For non-winners: Random row (unchanged)
+          winningRow = Math.floor(Math.random() * 5);
+        }
+        if (winningRow >= 0) {
+          selectedIndices = Array.from(
+            { length: 5 },
+            (_, col) => winningRow * 5 + col
+          );
+        }
+      } else if (pattern === "vertical_line") {
+        let winningCol = -1;
+        if (includeMarked) {
+          for (let col = 0; col < 5; col++) {
+            const colLine = numbers.map((row) => row[col]);
+            if (isLineComplete(colLine)) {
+              winningCol = col;
+              break;
+            }
+          }
+        } else if (!isWinner) {
+          winningCol = Math.floor(Math.random() * 5);
+        }
+        if (winningCol >= 0) {
+          selectedIndices = Array.from(
+            { length: 5 },
+            (_, row) => row * 5 + winningCol
+          );
+        }
+      }
+    } else {
+      throw new Error(`Invalid pattern: ${pattern}`);
+    }
+
+    // Filter exclusions & free (unchanged)
+    selectedIndices = selectedIndices.filter(
+      (idx) => !excludeIndices.includes(idx) && idx !== 12
+    );
+
+    // Map to numbers (unchanged)
+    const flatNumbers = numbers.flat();
+    const selectedNumbers = selectedIndices
+      .map((idx) => flatNumbers[idx])
+      .filter((num) => typeof num === "number" && num >= 1 && num <= 75);
+
+    console.log("[getNumbersForPatternBackendStyle] Returning:", {
+      selectedIndices,
+      selectedNumbers,
+    });
+
+    return { selectedIndices, selectedNumbers };
   };
 
   const getNumbersForPattern = (
@@ -1064,10 +1340,13 @@ const BingoGame = () => {
     }
   };
 
-  const handleCallNumber = async (manualNum = null) => {
+  // Removed optimistic auto-call to keep server authoritative and avoid state mismatches
+
+  const handleCallNumber = async (manualNum = null, options = {}) => {
+    const isAuto = options?.isAuto === true;
+    // Guard conditions; avoid turning off auto-call if we're simply busy
     if (
       isGameOver ||
-      isCallingNumber ||
       !isPlaying ||
       calledNumbers.length >= 75 ||
       gameData?.status !== "active"
@@ -1078,15 +1357,28 @@ const BingoGame = () => {
         await handleFinish();
         return;
       }
-      setCallError(
-        gameData?.status !== "active"
-          ? "Cannot call number: Game is paused or finished"
-          : "Cannot call number: Game is over, paused, or already calling"
-      );
-      setIsErrorModalOpen(true);
-      setIsAutoCall(false);
+      if (!isAuto) {
+        setCallError(
+          gameData?.status !== "active"
+            ? "Cannot call number: Game is paused or finished"
+            : "Cannot call number: Game is over or paused"
+        );
+        setIsErrorModalOpen(true);
+      }
       return;
     }
+    // Prevent overlapping network calls at a higher level (covers race windows)
+    if (isCallingNumber || inFlightCallRef.current) {
+      // If auto mode, queue one pending auto-call to be flushed after current call ends
+      if (isAuto) {
+        autoSchedulerRef.current.pending = true;
+        return;
+      }
+      setCallError("Cannot call number: A call is already in progress");
+      setIsErrorModalOpen(true);
+      return;
+    }
+    // Server-authoritative path only (no optimistic UI) to avoid mismatches
     if (!gameData?._id) {
       setCallError("Game ID is missing");
       setIsErrorModalOpen(true);
@@ -1100,7 +1392,17 @@ const BingoGame = () => {
       console.log(
         `[handleCallNumber] Before updatePrizePoolDisplay, current gameData.prizePool: ${gameData?.prizePool}`
       );
-      await updatePrizePoolDisplay();
+      // During auto mode, avoid blocking on prize pool fetch to reduce lag
+      if (!isAuto) {
+        await updatePrizePoolDisplay();
+      } else {
+        // Throttle background updates to at most once every 5s during auto
+        const now = Date.now();
+        if (now - lastPrizePoolUpdateRef.current > 5000) {
+          lastPrizePoolUpdateRef.current = now;
+          updatePrizePoolDisplay();
+        }
+      }
       console.log(
         `[handleCallNumber] After updatePrizePoolDisplay, gameData.prizePool: ${gameData?.prizePool}`
       );
@@ -1124,12 +1426,44 @@ const BingoGame = () => {
           await handleFinish();
           return;
         }
-        numberToCall =
-          availableNumbers[Math.floor(Math.random() * availableNumbers.length)];
+        // Avoid selecting a number that is currently in-flight
+        const inFlight = inFlightNumberRef.current;
+        const options = inFlight
+          ? availableNumbers.filter((n) => n !== inFlight)
+          : availableNumbers;
+        numberToCall = options[Math.floor(Math.random() * options.length)];
+        // If filter removed all options (rare), fall back
+        if (!numberToCall)
+          numberToCall =
+            availableNumbers[
+              Math.floor(Math.random() * availableNumbers.length)
+            ];
       }
       console.log(`[handleCallNumber] Calling number: ${numberToCall}`);
+      // Mark in-flight
+      inFlightCallRef.current = true;
+      inFlightNumberRef.current = numberToCall;
+      const t0 =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
       const response = await callNumber(gameData._id, { number: numberToCall });
       console.log(`[handleCallNumber] Response from callNumber:`, response);
+      if (isAuto) {
+        const t1 =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        const rtt = Math.max(0, t1 - t0);
+        const interval = Math.max(1, speed) * 1000;
+        const targetLead = Math.min(interval - 80, Math.max(100, rtt + 60));
+        const prev =
+          typeof adaptiveLeadMsRef !== "undefined" &&
+          adaptiveLeadMsRef?.current != null
+            ? adaptiveLeadMsRef.current
+            : computeLeadMs(speed);
+        const alpha = 0.3;
+        const smoothed = prev * (1 - alpha) + targetLead * alpha;
+        if (typeof adaptiveLeadMsRef !== "undefined") {
+          adaptiveLeadMsRef.current = smoothed;
+        }
+      }
       const calledNumber =
         response?.calledNumber ||
         numberToCall ||
@@ -1160,17 +1494,39 @@ const BingoGame = () => {
         `[handleCallNumber] response.game?.prizePool: ${response.game?.prizePool}`
       );
       const updatedGameData = {
+        ...gameData,
         ...response.game,
         prizePool: response.game?.prizePool || currentPrizePool,
+        // Preserve selectedCards if not returned in response
+        selectedCards:
+          response.game && response.game.selectedCards !== undefined
+            ? response.game.selectedCards
+            : gameData?.selectedCards ?? [],
       };
       console.log(
         `[handleCallNumber] updatedGameData.prizePool after fallback: ${updatedGameData.prizePool}`
       );
-      setGameData(updatedGameData);
+      setGameData((prev) => ({
+        ...prev,
+        ...updatedGameData,
+        // Double-ensure preservation against race conditions
+        selectedCards:
+          updatedGameData && updatedGameData.selectedCards !== undefined
+            ? updatedGameData.selectedCards
+            : prev?.selectedCards ?? [],
+      }));
       console.log(
         `[handleCallNumber] After setGameData, gameData.prizePool: ${updatedGameData.prizePool}`
       );
-      await updatePrizePoolDisplay();
+      if (!isAuto) {
+        await updatePrizePoolDisplay();
+      } else {
+        const now2 = Date.now();
+        if (now2 - lastPrizePoolUpdateRef.current > 5000) {
+          lastPrizePoolUpdateRef.current = now2;
+          updatePrizePoolDisplay();
+        }
+      }
       console.log(
         `[handleCallNumber] After await updatePrizePoolDisplay, gameData.prizePool: ${gameData?.prizePool}`
       );
@@ -1239,6 +1595,23 @@ const BingoGame = () => {
       }
     } finally {
       setIsCallingNumber(false);
+      // Clear in-flight markers
+      inFlightCallRef.current = false;
+      inFlightNumberRef.current = null;
+      // If an auto tick arrived while busy, fire a pending call immediately
+      if (
+        autoSchedulerRef.current.pending &&
+        isAutoCall &&
+        !isGameOver &&
+        isPlaying &&
+        gameData?.status === "active" &&
+        calledNumbers.length < 75 &&
+        !isCallingNumber
+      ) {
+        autoSchedulerRef.current.pending = false;
+        // Fire and forget; cadence remains controlled by scheduler
+        handleCallNumber(null, { isAuto: true });
+      }
     }
   };
 
@@ -1343,14 +1716,18 @@ const BingoGame = () => {
         ...prev,
         ...response.game,
         prizePool: currentPrizePool, // Preserve current prizePool
+        selectedCards:
+          response.game && response.game.selectedCards !== undefined
+            ? response.game.selectedCards
+            : prev?.selectedCards ?? [],
       }));
       // Do NOT call updatePrizePoolDisplay() to avoid overwriting preserved data
       SoundService.playSound("game_finish");
 
       setIsGameFinishedModalOpen(true);
 
-      // Update jackpot contribution using preserved prizePool
-      await updateJackpotAfterGame(currentPrizePool);
+      // CHANGE: Comment out or remove this line to prevent jackpot increment
+      // await updateJackpotAfterGame(currentPrizePool);
     } catch (error) {
       setCallError(error.message || "Failed to finish game");
       setIsErrorModalOpen(true);
@@ -1389,6 +1766,13 @@ const BingoGame = () => {
             G: [false, false, false, false, false],
             O: [false, false, false, false, false],
           },
+          winningPositions: {
+            B: [false, false, false, false, false],
+            I: [false, false, false, false, false],
+            N: [false, false, false, false, false],
+            G: [false, false, false, false, false],
+            O: [false, false, false, false, false],
+          },
           isWinner: false,
           eligibleForWin: false,
           eligibleAtNumber: null,
@@ -1404,11 +1788,20 @@ const BingoGame = () => {
             G: [false, false, false, false, false],
             O: [false, false, false, false, false],
           },
+          winningPositions: {
+            B: [false, false, false, false, false],
+            I: [false, false, false, false, false],
+            N: [false, false, false, false, false],
+            G: [false, false, false, false, false],
+            O: [false, false, false, false, false],
+          },
           isWinner: false,
           eligibleForWin: false,
           eligibleAtNumber: null,
         }))
       );
+      // Clear fast lookup index; will be rebuilt on next fetchBingoCards
+      numberIndexRef.current = new Map();
       setIsShuffling(false);
       setIsGameOver(false);
     }, 5000);
@@ -1421,13 +1814,24 @@ const BingoGame = () => {
         `[handleCheckCard] Checking card ${cardIdParam} with pattern ${preferredPattern}`
       );
 
-      // NEW: Validate if card is selected for this game
-      if (
-        !gameData?.selectedCards ||
-        !gameData.selectedCards.some((c) => c.id === parseInt(cardIdParam))
-      ) {
+      // NEW: Validate if card is selected for this game (robust to type/field variations)
+      const idNum = Number(String(cardIdParam).trim());
+      const selected = Array.isArray(gameData?.selectedCards)
+        ? gameData.selectedCards.some((c) => {
+            const candidates = [
+              c?.id,
+              c?.cardRef,
+              c?.card_number,
+              c?.cardNumber,
+            ];
+            return candidates.some((v) => Number(v) === idNum);
+          })
+        : false;
+      if (!selected) {
         console.warn(
-          `[handleCheckCard] Card ${cardIdParam} is not selected for this game`
+          `[handleCheckCard] Card ${cardIdParam} is not selected for this game (selectedCards length: ${
+            gameData?.selectedCards?.length || 0
+          })`
         );
         setCallError(
           `Card ${cardIdParam} is not selected for this game. Please select valid cards.`
@@ -1443,7 +1847,7 @@ const BingoGame = () => {
           `[handleCheckCard] Card ${cardIdParam} missing in state, fetching...`
         );
         try {
-          const response = await fetch(`/api/cards/${cardIdParam}`, {
+          const response = await fetch(`/api/games/cards/${cardIdParam}`, {
             headers: {
               Authorization: `Bearer ${localStorage.getItem("token")}`,
             },
@@ -1470,8 +1874,48 @@ const BingoGame = () => {
             fullCard.lastCheckTime = null;
             fullCard.id = parseInt(cardIdParam); // Ensure id is set
             fullCard.numbers = numbers; // Set transposed numbers
+            fullCard.markedPositions = {
+              B: new Array(5).fill(false),
+              I: new Array(5).fill(false),
+              N: new Array(5)
+                .fill(false)
+                .map((_, i) => (i === 2 ? true : false)),
+              G: new Array(5).fill(false),
+              O: new Array(5).fill(false),
+            };
+            fullCard.winningPositions = {
+              B: new Array(5).fill(false),
+              I: new Array(5).fill(false),
+              N: new Array(5).fill(false),
+              G: new Array(5).fill(false),
+              O: new Array(5).fill(false),
+            };
             // Add to state
             setCards((prevCards) => [...prevCards, fullCard]);
+            // Update fast lookup index for the fetched card
+            try {
+              const idx = numberIndexRef.current || new Map();
+              const letters2 = ["B", "I", "N", "G", "O"];
+              for (let col = 0; col < 5; col++) {
+                for (let row = 0; row < 5; row++) {
+                  const letter = letters2[col];
+                  const num = fullCard.numbers[letter][row];
+                  if (typeof num === "number") {
+                    if (!idx.has(num)) idx.set(num, []);
+                    idx.get(num).push({ cardId: fullCard.id, letter, row });
+                  }
+                }
+              }
+              numberIndexRef.current = idx;
+              console.log(
+                `[handleCheckCard] numberIndexRef updated for card ${cardIdParam}`
+              );
+            } catch (err) {
+              console.warn(
+                "Failed to update numberIndexRef for fetched card:",
+                err
+              );
+            }
             cardInState = fullCard;
             console.log(
               `[handleCheckCard] Fetched and added card ${cardIdParam}`
@@ -1495,7 +1939,123 @@ const BingoGame = () => {
         }
       }
 
-      // FIXED: Use gameService.checkBingo instead of direct fetch
+      // Prevent overlapping checks (speeds up by avoiding duplicate work)
+      if (checkInFlightRef.current) {
+        console.warn(
+          "[handleCheckCard] A check is already in progress; skipping"
+        );
+        return;
+      }
+      checkInFlightRef.current = true;
+
+      // EXTRA FAST PATH: instant local detection of any complete row/column (line win)
+      const numbersObj = cardInState?.numbers;
+      if (numbersObj && typeof numbersObj === "object") {
+        const grid = Array.from({ length: 5 }, (_, r) => [
+          numbersObj.B?.[r],
+          numbersObj.I?.[r],
+          numbersObj.N?.[r],
+          numbersObj.G?.[r],
+          numbersObj.O?.[r],
+        ]);
+        const calledSet = calledNumbersSetRef.current || new Set();
+        const isComplete = (line) =>
+          line && line.every((v) => v === "FREE" || calledSet.has(Number(v)));
+        let localWin = null;
+        for (let r = 0; r < 5; r++) {
+          if (isComplete(grid[r])) {
+            localWin = {
+              pattern: "horizontal_line",
+              rowIndex: r,
+              colIndex: null,
+              indices: Array.from({ length: 5 }, (_, c) => r * 5 + c),
+            };
+            break;
+          }
+        }
+        if (!localWin) {
+          for (let c = 0; c < 5; c++) {
+            const colLine = [
+              grid[0][c],
+              grid[1][c],
+              grid[2][c],
+              grid[3][c],
+              grid[4][c],
+            ];
+            if (isComplete(colLine)) {
+              localWin = {
+                pattern: "vertical_line",
+                rowIndex: null,
+                colIndex: c,
+                indices: Array.from({ length: 5 }, (_, r) => r * 5 + c),
+              };
+              break;
+            }
+          }
+        }
+        if (localWin) {
+          const flat = grid.flat();
+          const winningNumbersLocal = localWin.indices
+            .filter((i) => i !== 12)
+            .map((i) => Number(flat[i]))
+            .filter((n) => Number.isFinite(n));
+          setBingoStatus({
+            pattern: localWin.pattern,
+            lateCall: false,
+            winnerCardNumbers: grid,
+            winningIndices: localWin.indices,
+            winningNumbers: winningNumbersLocal,
+            otherCalledNumbers: winningNumbersLocal.filter((n) =>
+              calledSet.has(n)
+            ),
+            prize: gameData?.prizePool || 0,
+            patternInfo: {
+              rowIndex: localWin.rowIndex,
+              colIndex: localWin.colIndex,
+              localSelectedIndices: localWin.indices,
+              localSelectedNumbers: winningNumbersLocal,
+            },
+          });
+          // Do not open the winner modal yet; wait for backend confirmation to avoid flashing on late calls
+        }
+      }
+
+      // QUICK PATH: perform a fast local check to compute pattern indices and called numbers
+      // This avoids waiting for backend for UI feedback and speeds up modal rendering.
+      let localPatternInfo = null;
+      try {
+        const nums = cardInState.numbers;
+        const cardGrid = nums
+          ? Array.from({ length: 5 }, (_, r) => [
+              nums.B?.[r],
+              nums.I?.[r],
+              nums.N?.[r],
+              nums.G?.[r],
+              nums.O?.[r],
+            ])
+          : null;
+        const patternToUse =
+          preferredPattern || gameData?.defaultPattern || "horizontal_line";
+        // Use backend-style function but pass current calledNumbers for accurate detection
+        const { selectedIndices, selectedNumbers } =
+          getNumbersForPatternBackendStyle(
+            cardGrid,
+            patternToUse,
+            [],
+            false,
+            calledNumbers,
+            false
+          );
+        localPatternInfo = {
+          selectedIndices,
+          selectedNumbers,
+          pattern: patternToUse,
+        };
+      } catch (err) {
+        console.warn("[handleCheckCard] Local pattern compute failed:", err);
+      }
+
+      // FIXED: Use gameService.checkBingo instead of direct fetch (still call backend for authoritative result)
       const data = await gameService.checkBingo(
         gameData._id,
         cardIdParam,
@@ -1504,8 +2064,15 @@ const BingoGame = () => {
 
       console.log(`[handleCheckCard] Backend response:`, data);
 
-      // Update game state
-      setGameData((prevGame) => ({ ...prevGame, ...data.game }));
+      // Update game state and preserve selectedCards if omitted
+      setGameData((prevGame) => ({
+        ...prevGame,
+        ...data.game,
+        selectedCards:
+          data.game && data.game.selectedCards !== undefined
+            ? data.game.selectedCards
+            : prevGame?.selectedCards ?? [],
+      }));
 
       // Helper to build 2D grid from card numbers (if needed for modals)
       const buildGrid = (numbers) => {
@@ -1548,30 +2115,116 @@ const BingoGame = () => {
         (a, b) => a - b
       );
 
-      // Handle bingo win
-      if (data.isBingo && data.winner) {
-        console.log(`[handleCheckCard] 🎉 BINGO! Winner:`, data.winner);
+      // FIXED: Trigger win if isBingo true (even if winner null, e.g., completed game)
+      if (data.isBingo) {
+        console.log(
+          `[handleCheckCard] 🎉 BINGO! (Previous winner if completed)`
+        );
+        // NEW: Compute winning numbers and indices using backend-style logic
+        let winningNumbers = [];
+        let winningIndices = [];
+        let effectivePattern = data.winningPattern;
+        if (data.winners && data.winners.length > 0) {
+          const winner = data.winners[0];
+          const cardNumbers = winner.numbers; // 5x5 grid from backend
+          const pattern = winner.winningPattern;
+          try {
+            const result = getNumbersForPatternBackendStyle(
+              cardNumbers, // 2D grid
+              pattern,
+              [], // exclude
+              true, // isWinner
+              calledNumbers, // NEW: Pass state
+              true // NEW: includeMarked
+            );
+            winningNumbers = result.selectedNumbers;
+            winningIndices = result.selectedIndices;
+          } catch (err) {
+            console.error(
+              "[handleCheckCard] Error computing winning pattern:",
+              err
+            );
+          }
+        }
+        // NEW: Log winner card winning numbers
+        console.log(
+          `[DEBUG] Winner Card ${cardIdParam} Winning Numbers:`,
+          winningNumbers
+        );
+        console.log(
+          `[DEBUG] Winner Card ${cardIdParam} Winning Indices:`,
+          winningIndices
+        );
+        console.log(
+          `[DEBUG] Winner Card Full Grid:`,
+          buildGrid(cardInState.numbers)
+        );
+        console.log(
+          `[DEBUG] All Called on Winner Card:`,
+          uniqueCardCalledNumbers
+        );
+        console.log(
+          `[DEBUG] Other Called on Winner Card:`,
+          uniqueCardCalledNumbers.filter((n) => !winningNumbers?.includes(n))
+        );
+        console.log(`[DEBUG] Effective Pattern:`, effectivePattern);
+        console.log(`[DEBUG] Completed Patterns:`, data.completedPatterns);
         // Set bingoStatus with API data for winner modal rendering
         setBingoStatus({
-          pattern: data.pattern || "line",
-          lateCall: false, // Assume not late for true win
+          pattern: effectivePattern || data.winningPattern || "line",
+          lateCall: data.lateCall || false, // Use backend lateCall
           winnerCardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
-          winningIndices: data.winningIndices || [],
-          winningNumbers: data.winningNumbers || [],
+          winningIndices,
+          winningNumbers,
           otherCalledNumbers:
             data.otherCalledNumbers ||
-            uniqueCardCalledNumbers.filter(
-              (n) => !data.winningNumbers?.includes(n)
-            ),
-          prize: data.prize || gameData?.prizePool || 0,
+            uniqueCardCalledNumbers.filter((n) => !winningNumbers?.includes(n)),
+          prize:
+            data.prize ||
+            data.previousWinner?.prize ||
+            gameData?.prizePool ||
+            0,
           patternInfo: {
             rowIndex: data.rowIndex || null,
             colIndex: data.colIndex || null,
+            // include local pattern info for faster UI (fallback to backend indices)
+            localSelectedIndices: localPatternInfo?.selectedIndices || [],
+            localSelectedNumbers: localPatternInfo?.selectedNumbers || [],
           },
         });
         setShowWinModal(true);
         setIsWinnerModalOpen(true); // Explicitly set for consistency
-        setWinnerData(data.winner);
+        setWinnerData(data.winner || data.previousWinner); // Fallback to previousWinner
+        // NEW: Update card state with winning positions for orange marking
+        const updatedCard = { ...cardInState, isWinner: true };
+        const tempGrid = buildGrid(cardInState.numbers);
+        winningIndices.forEach((idx) => {
+          if (idx !== 12) {
+            // Skip free space
+            const row = Math.floor(idx / 5);
+            const col = idx % 5;
+            const letter = letters[col];
+            updatedCard.winningPositions[letter][row] = true;
+            // Also ensure marked if called
+            if (
+              typeof tempGrid[row][col] === "number" &&
+              calledNumbers.includes(tempGrid[row][col])
+            ) {
+              updatedCard.markedPositions[letter][row] = true;
+            }
+          }
+        });
+        // Update both states
+        setCards((prevCards) =>
+          prevCards.map((c) =>
+            c.id === parseInt(cardIdParam) ? updatedCard : c
+          )
+        );
+        setBingoCards((prevCards) =>
+          prevCards.map((c) =>
+            c.id === parseInt(cardIdParam) ? updatedCard : c
+          )
+        );
         // Optionally disable other cards
         setCards((prevCards) =>
           prevCards.map((c) => ({
@@ -1584,22 +2237,60 @@ const BingoGame = () => {
         SoundService.playSound("winner");
       } else {
         // Non-bingo/late call handling
+        // Ensure any optimistic winner modal is closed
+        if (isWinnerModalOpen || showWinModal) {
+          setIsWinnerModalOpen(false);
+          setShowWinModal(false);
+        }
+        const winnerInfo = data.winners?.[0];
+        const isLateCall = winnerInfo?.lateCall || false;
+        const lateCallMessage =
+          winnerInfo?.lateCallMessage ||
+          data.message ||
+          "No bingo found. Try again!";
+        const wouldHaveWon = winnerInfo?.wouldHaveWon || {
+          pattern: winnerInfo?.winningPattern || data.pattern,
+          callIndex: winnerInfo?.callIndex,
+          completingNumber: winnerInfo?.completingNumber,
+        };
+
         console.log(`[handleCheckCard] Non-bingo/late:`, {
-          lateCall: data.lateCall,
-          message: data.message || data.lateCallMessage,
+          isLateCall,
+          lateCallMessage,
+          wouldHaveWon,
         });
 
         // FIXED: Safely update card state with response data (no more "missing")
         if (cardInState) {
+          const cardGrid = buildGrid(cardInState.numbers);
+          let selectedIndices = data.selectedIndices || [];
+          if (isLateCall && wouldHaveWon.pattern) {
+            try {
+              const { selectedIndices: lateIndices } =
+                getNumbersForPatternBackendStyle(
+                  cardGrid,
+                  wouldHaveWon.pattern,
+                  [],
+                  true
+                );
+              selectedIndices = lateIndices;
+            } catch (err) {
+              console.error(
+                "[handleCheckCard] Error computing late pattern indices:",
+                err
+              );
+            }
+          }
+
           const updatedCard = {
             ...cardInState,
             cardId: cardIdParam,
-            cardNumbers: buildGrid(cardInState.numbers), // 2D grid for modal
+            cardNumbers: cardGrid, // 2D grid for modal
             patternInfo: {
-              selectedIndices: data.selectedIndices || [],
+              selectedIndices,
               rowIndex: data.rowIndex || null,
               colIndex: data.colIndex || null,
-              pattern: data.pattern || null,
+              pattern: isLateCall ? wouldHaveWon.pattern : data.pattern || null,
             },
             calledNumbersInPattern: data.calledNumbersInPattern || [],
             otherCalledNumbers:
@@ -1608,12 +2299,18 @@ const BingoGame = () => {
                 (n) => !data.calledNumbersInPattern?.includes(n)
               ) ||
               uniqueCardCalledNumbers,
-            lateCall: data.lateCall || false,
-            lateCallMessage:
-              data.message ||
-              data.lateCallMessage ||
-              "No bingo found. Try again!",
-            wouldHaveWon: data.wouldHaveWon || null, // For late call details
+            lateCall: isLateCall,
+            lateCallMessage,
+            wouldHaveWon,
+            // If backend says not a winner, clear any previous winner flags
+            isWinner: false,
+            winningPositions: {
+              B: [false, false, false, false, false],
+              I: [false, false, false, false, false],
+              N: [false, false, false, false, false],
+              G: [false, false, false, false, false],
+              O: [false, false, false, false, false],
+            },
             checkCount: data.checkCount || cardInState.checkCount || 0,
             disqualified:
               data.disqualified || cardInState.disqualified || false,
@@ -1624,14 +2321,14 @@ const BingoGame = () => {
           };
 
           // If disqualified or late, add visual cue (e.g., shake animation)
-          if (data.disqualified || data.lateCall) {
+          if (data.disqualified || isLateCall) {
             updatedCard.shake = true; // Trigger CSS animation
             setTimeout(() => {
               setCards((prevCards) =>
                 prevCards.map((c) => ({ ...c, shake: false }))
               );
             }, 1000);
-            if (data.lateCall) {
+            if (isLateCall) {
               SoundService.playSound("you_didnt_win"); // Optional sound
             }
           }
@@ -1676,48 +2373,111 @@ const BingoGame = () => {
       // Optional: Set generic message
       setShowMessage("Check failed. Please try again.");
       setMessageType("error");
+    } finally {
+      checkInFlightRef.current = false;
     }
   };
 
   // NEW: Define updateMarkedGrids (was missing)
   const updateMarkedGrids = () => {
-    setBingoCards((prevCards) =>
-      prevCards.map((card) => {
-        const newCard = { ...card };
-        const letters = ["B", "I", "N", "G", "O"];
-        calledNumbers.forEach((calledNum) => {
-          for (let col = 0; col < 5; col++) {
-            for (let row = 0; row < 5; row++) {
-              const letter = letters[col];
-              const number = card.numbers[letter][row];
-              if (typeof number === "number" && number === calledNum) {
-                newCard.markedPositions[letter][row] = true;
+    // Fast path: use precomputed index of number -> card positions
+    const index = numberIndexRef.current;
+    if (!index || index.size === 0) {
+      // Fallback to previous behavior if index is not built
+      setBingoCards((prevCards) =>
+        prevCards.map((card) => {
+          const newCard = { ...card };
+          const letters = ["B", "I", "N", "G", "O"];
+          calledNumbers.forEach((calledNum) => {
+            for (let col = 0; col < 5; col++) {
+              for (let row = 0; row < 5; row++) {
+                const letter = letters[col];
+                const number = card.numbers[letter][row];
+                if (typeof number === "number" && number === calledNum) {
+                  newCard.markedPositions[letter][row] = true;
+                }
               }
             }
-          }
-        });
-        return newCard;
-      })
-    );
-    // Sync to cards state too
-    setCards((prevCards) =>
-      prevCards.map((card) => {
-        const newCard = { ...card };
-        const letters = ["B", "I", "N", "G", "O"];
-        calledNumbers.forEach((calledNum) => {
-          for (let col = 0; col < 5; col++) {
-            for (let row = 0; row < 5; row++) {
-              const letter = letters[col];
-              const number = card.numbers[letter][row];
-              if (typeof number === "number" && number === calledNum) {
-                newCard.markedPositions[letter][row] = true;
-              }
-            }
-          }
-        });
-        return newCard;
-      })
-    );
+          });
+          return newCard;
+        })
+      );
+      setCards((prevCards) => prevCards.map((c) => ({ ...c })));
+      return;
+    }
+
+    // Only update cards that have newly called numbers
+    const affectedCardUpdates = new Map(); // cardId -> updatedCard
+    for (const calledNum of calledNumbers) {
+      const entries = index.get(calledNum);
+      if (!entries) continue;
+      for (const pos of entries) {
+        const id = pos.cardId;
+        if (!affectedCardUpdates.has(id)) {
+          // clone from current state (search in bingoCards)
+          const base =
+            bingoCards.find((c) => c.id === id) ||
+            cards.find((c) => c.id === id) ||
+            null;
+          if (!base) continue;
+          affectedCardUpdates.set(id, {
+            ...base,
+            markedPositions: {
+              B: base.markedPositions?.B?.slice() || [
+                false,
+                false,
+                false,
+                false,
+                false,
+              ],
+              I: base.markedPositions?.I?.slice() || [
+                false,
+                false,
+                false,
+                false,
+                false,
+              ],
+              N: base.markedPositions?.N?.slice() || [
+                false,
+                false,
+                true,
+                false,
+                false,
+              ],
+              G: base.markedPositions?.G?.slice() || [
+                false,
+                false,
+                false,
+                false,
+                false,
+              ],
+              O: base.markedPositions?.O?.slice() || [
+                false,
+                false,
+                false,
+                false,
+                false,
+              ],
+            },
+          });
+        }
+        const upd = affectedCardUpdates.get(id);
+        upd.markedPositions[pos.letter][pos.row] = true;
+      }
+    }
+
+    if (affectedCardUpdates.size > 0) {
+      setBingoCards((prev) =>
+        prev.map((c) =>
+          affectedCardUpdates.has(c.id) ? affectedCardUpdates.get(c.id) : c
+        )
+      );
+      setCards((prev) =>
+        prev.map((c) =>
+          affectedCardUpdates.has(c.id) ? affectedCardUpdates.get(c.id) : c
+        )
+      );
+    }
   };
 
   // FIXED: useEffect for loading cards (use gameData instead of this.state.game)
@@ -1909,9 +2669,11 @@ const BingoGame = () => {
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
-              className={`bg-[#e9744c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a] ${
-                isAutoCall ? "bg-[#4caf50]" : ""
-              }`}
+              className={`${
+                isAutoCall
+                  ? "bg-[#4caf50] hover:bg-[#43a047]"
+                  : "bg-[#e9744c] hover:bg-[#f0b76a]"
+              } text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300`}
               onClick={() => setIsAutoCall((prev) => !prev)}
               disabled={!gameData?._id || !isPlaying || isGameOver}
             >
@@ -1951,10 +2713,18 @@ const BingoGame = () => {
               value={cardId}
               onChange={(e) => setCardId(e.target.value)}
               placeholder="Enter Card ID"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && gameData?._id) {
+                  // Prevent form submission if inside a form
+                  e.preventDefault();
+                  // Only trigger when not disabled
+                  handleCheckCard(cardId, undefined);
+                }
+              }}
               disabled={!gameData?._id}
             />
             <button
-              className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
+              className="bg-[#e9a64c] text-black border-none px-4 py-4 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCheckCard(cardId, undefined)} // FIXED: Pass preferredPattern as undefined
               disabled={!gameData?._id}
             >
@@ -1998,7 +2768,7 @@ const BingoGame = () => {
       {/* Jackpot Display (already positioned bottom left) */}
       <div
         className={`fixed bottom-5 left-[0.1%] bg-[#0f1a4a] border-3 border-[#f0e14a] rounded-xl p-4 text-center shadow-lg z-10 min-w-[200px] transition-all duration-300 ${
-          isJackpotAnimating ? "animate-pulse scale-105 animate-bounce" : ""
+          isJackpotAnimating ? "scale-105 animate-bounce" : ""
         }`}
       >
         <div className="text-3xl font-bold text-[#e9a64c] uppercase mb-2">
@@ -2074,6 +2844,9 @@ const BingoGame = () => {
         winnerData={winnerData}
         showMessage={showMessage}
         messageType={messageType}
+        bingoCards={bingoCards} // NEW: Pass for rendering winner card with orange highlights
+        cards={cards} // NEW: Pass for access to winningPositions
+        calledNumbers={calledNumbers}
         // NEW: Pass invalid card modal props
         isInvalidCardModalOpen={isInvalidCardModalOpen}
         setIsInvalidCardModalOpen={setIsInvalidCardModalOpen}

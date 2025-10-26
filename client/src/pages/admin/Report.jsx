@@ -1,5 +1,5 @@
 // src/pages/admin/Report.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import AdminLayout from "../../components/admin/AdminLayout"; // Add this import
 import {
   getAllCashiers,
@@ -9,7 +9,7 @@ import {
   getActiveCashiers,
   getAllCashierSummaries,
 } from "../../services/admin";
-import API from "../../services/admin";
+// Note: axios instance is configured in services/axios; no direct API import needed here
 
 const AdminReport = () => {
   const [cashiers, setCashiers] = useState([]);
@@ -31,13 +31,29 @@ const AdminReport = () => {
         const allCashiersResponse = await getAllCashiers();
         setCashiers(allCashiersResponse.cashiers || []);
 
-        // Fetch active cashiers with metrics
-        const activeResponse = await getActiveCashiers();
-        setActiveCashiers(activeResponse.activeCashiers || []);
-
-        // Fetch all cashier summaries
+        // Fetch all cashier summaries (real metrics per cashier)
         const summariesResponse = await getAllCashierSummaries();
         setAllCashierSummaries(summariesResponse.cashiers || []);
+
+        // Derive "recently active" cashiers from summaries: those with games, sorted by latest game date
+        const derivedActive = (summariesResponse.cashiers || [])
+          .map((s) => {
+            const latestGame = (s.recentGames || []).reduce((acc, g) => {
+              const t = new Date(g.createdAt).getTime();
+              return !acc || t > acc ? t : acc;
+            }, null);
+            return {
+              id: s.cashier.id,
+              name: s.cashier.name,
+              email: s.cashier.email,
+              totalGames: Number(s.summary?.totalGames || 0),
+              totalHouseFee: Number(s.summary?.totalHouseFee || 0),
+              latestActivity: latestGame,
+            };
+          })
+          .filter((x) => x.totalGames > 0)
+          .sort((a, b) => (b.latestActivity || 0) - (a.latestActivity || 0));
+        setActiveCashiers(derivedActive);
 
         console.log("[AdminReport] Loaded all data:", {
           cashiers: allCashiersResponse,
@@ -542,7 +558,7 @@ const AdminReport = () => {
                 Recently Active ({activeCashiers.length})
               </h3>
               <div className="space-y-2 max-h-96 overflow-y-auto">
-                {activeCashiers.slice(0, 5).map((cashier) => (
+                {activeCashiers.slice(0, 8).map((cashier) => (
                   <div
                     key={cashier.id}
                     className={`p-3 rounded cursor-pointer hover:bg-gray-50 border-l-4 ${
@@ -566,12 +582,19 @@ const AdminReport = () => {
                         <p className="text-xs text-green-600 font-medium">
                           {formatBirr(cashier.totalHouseFee || 0)} Br
                         </p>
+                        {cashier.latestActivity && (
+                          <p className="text-[10px] text-gray-400 mt-1">
+                            {new Date(
+                              cashier.latestActivity
+                            ).toLocaleDateString()}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
-              {activeCashiers.length > 5 && (
+              {activeCashiers.length > 8 && (
                 <button className="mt-3 text-blue-600 hover:text-blue-800 text-sm">
                   View All Active ({activeCashiers.length})
                 </button>
