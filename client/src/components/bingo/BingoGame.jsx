@@ -2745,9 +2745,10 @@ const BingoGame = () => {
             disabled: c.id !== parseInt(cardIdParam),
           }))
         );
-        // Trigger celebration (e.g., confetti)
-        createConfetti();
-        SoundService.playSound("winner");
+  // Trigger celebration (e.g., confetti)
+  // NOTE: play sound from the modal component to avoid duplicate or
+  // incorrect plays when multiple code paths open/close modals rapidly.
+  createConfetti();
       } else {
         // Non-bingo/late call handling
         // Ensure any optimistic winner modal is closed
@@ -2842,7 +2843,7 @@ const BingoGame = () => {
               );
             }, 1000);
             if (isLateCall) {
-              SoundService.playSound("you_didnt_win"); // Optional sound
+              // Non-winner sound will be played by the modal component when it opens.
             }
           }
 
