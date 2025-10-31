@@ -19,6 +19,10 @@ const BingoGame = () => {
     useContext(LanguageContext);
   const { game, fetchGame, callNumber, checkBingo, finishGame, error } =
     useBingoGame();
+  // Track online/offline status to gracefully handle slow networks
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
   const [searchParams] = useSearchParams();
 
   // Game state
@@ -196,6 +200,28 @@ const BingoGame = () => {
     }
     // no cleanup
   }, [isAutoCall]);
+
+  // Listen for online/offline events and handle transitions
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true);
+    };
+    const onOffline = () => {
+      setIsOnline(false);
+      // If we go offline, stop auto-calling and abort any in-flight request
+      try {
+        setIsAutoCall(false);
+        if (callAbortControllerRef.current)
+          callAbortControllerRef.current.abort();
+      } catch (e) {}
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
   // Idempotent helper to apply a called number to state (prevents double-marking)
   const applyCalledNumber = (num) => {
@@ -2745,10 +2771,10 @@ const BingoGame = () => {
             disabled: c.id !== parseInt(cardIdParam),
           }))
         );
-  // Trigger celebration (e.g., confetti)
-  // NOTE: play sound from the modal component to avoid duplicate or
-  // incorrect plays when multiple code paths open/close modals rapidly.
-  createConfetti();
+        // Trigger celebration (e.g., confetti)
+        // NOTE: play sound from the modal component to avoid duplicate or
+        // incorrect plays when multiple code paths open/close modals rapidly.
+        createConfetti();
       } else {
         // Non-bingo/late call handling
         // Ensure any optimistic winner modal is closed
@@ -3058,6 +3084,13 @@ const BingoGame = () => {
           </span>
         </button>
       </div>
+      {/* Offline banner */}
+      {!isOnline && (
+        <div className="w-full max-w-[1200px] mt-2 p-3 bg-red-600 text-white rounded">
+          You are offline — network requests are paused. Reconnect to resume
+          game actions.
+        </div>
+      )}
       {/* Title and Recent Numbers */}
       <div className="w-full flex justify-between px-16 items-center my-8 max-[1100px]:flex-col max-[1100px]:gap-2">
         <h1 className="text-7xl font-black text-[#f0e14a] text-center">
@@ -3104,7 +3137,7 @@ const BingoGame = () => {
                   : "bg-[#e9744c] hover:bg-[#f0b76a]"
               } text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300`}
               onClick={handleToggleAutoCall}
-              disabled={!gameData?._id || !isPlaying || isGameOver}
+              disabled={!gameData?._id || !isPlaying || isGameOver || !isOnline}
             >
               Auto Call {isAutoCall ? "On" : "Off"}
             </button>
@@ -3112,7 +3145,11 @@ const BingoGame = () => {
               className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={handleNextClick}
               disabled={
-                !gameData?._id || isCallingNumber || !isPlaying || isGameOver
+                !gameData?._id ||
+                isCallingNumber ||
+                !isPlaying ||
+                isGameOver ||
+                !isOnline
               }
             >
               {isCallingNumber ? "Calling..." : "Next"}
@@ -3120,7 +3157,7 @@ const BingoGame = () => {
             <button
               className="bg-[#e9a64c] text-black border-none px-4 py-2 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={handleFinish}
-              disabled={isGameOver}
+              disabled={isGameOver || !isOnline}
             >
               Finish
             </button>
@@ -3155,7 +3192,7 @@ const BingoGame = () => {
             <button
               className="bg-[#e9a64c] text-black border-none px-4 py-4 font-bold rounded cursor-pointer text-sm transition-colors duration-300 hover:bg-[#f0b76a]"
               onClick={() => handleCheckCard(cardId, undefined)} // FIXED: Pass preferredPattern as undefined
-              disabled={!gameData?._id}
+              disabled={!gameData?._id || !isOnline}
             >
               Check
             </button>

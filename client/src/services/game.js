@@ -172,13 +172,28 @@ const gameService = {
       );
 
       // Pass abort signal through axios config so the request can be cancelled
-      const response = await API.post(
-        `/games/${gameId}/call-number`,
-        {
-          number: parsedNumber, // ✅ Ensure we send a clean number
-        },
-        signal ? { signal } : undefined
-      );
+      // Use requestWithRetry if available to survive transient network issues
+      const requestConfig = {
+        method: "post",
+        url: `/games/${gameId}/call-number`,
+        data: { number: parsedNumber },
+      };
+      const retryOptions = {
+        retries: 2,
+        backoff: 300,
+        timeout: 10000,
+        signal,
+      };
+      let response;
+      if (API.requestWithRetry) {
+        response = await API.requestWithRetry(requestConfig, retryOptions);
+      } else {
+        response = await API.post(
+          `/games/${gameId}/call-number`,
+          { number: parsedNumber },
+          signal ? { signal } : undefined
+        );
+      }
 
       console.log("[gameService.callNumber] Success response:", {
         message: response.data.message,
