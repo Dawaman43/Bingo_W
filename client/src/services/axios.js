@@ -5,7 +5,7 @@ const API = axios.create({
   baseURL: "https://bingo-web-9lh2.onrender.com/api",
   // baseURL: "https://localhost:5000/api",
   withCredentials: true, // only if you actually use cookies
-  timeout: 20000, // default 20s timeout to avoid hanging on slow networks
+ 
 });
 
 // Attach auth token automatically
