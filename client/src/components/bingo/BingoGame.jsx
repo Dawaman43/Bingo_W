@@ -1606,38 +1606,27 @@ const BingoGame = () => {
       return false;
     }
     // If an interrupted number exists (from a previously-aborted call),
-    // prefer applying that number now and do not proceed to pick a fresh one.
+    // prefer sending THAT number to the server next instead of applying it locally.
+    // This keeps client and server in sync so backend winner checks are correct.
     if (!manualNum && interruptedNumberRef.current) {
       try {
         const intNum = interruptedNumberRef.current;
         console.log(
-          `[handleCallNumber] Early-path: detected interrupted number ${intNum} (will apply via early-path). inFlightNumber=${inFlightNumberRef.current}`
+          `[handleCallNumber] Early-path: detected interrupted number ${intNum} (will request server to call it). inFlightNumber=${inFlightNumberRef.current}`
         );
-        // clear the interruptedNumber here to avoid re-applying if applyCalledNumber
-        // triggers other flows; handleCallNumber previously managed this.
+        // Clear the interrupted marker so we don't loop here again
         interruptedNumberRef.current = null;
-        // We are about to apply this interrupted number locally; remove it
-        // from the preserved set so future late responses are not blocked
-        // unnecessarily.
+        // We intend to call the server with this number; remove it from preserved/pendings
         try {
           interruptedNumbersSetRef.current.delete(intNum);
         } catch (e) {}
-        // Remove from pending server calls to avoid double-apply
         pendingServerCallsRef.current = (
           pendingServerCallsRef.current || []
         ).filter((n) => n !== intNum);
-        applyCalledNumber(intNum);
-        try {
-          // Make the interrupted number the sole "recent" number so the
-          // UI shows only one "Last called" bubble (operator requested).
-          setLastCalledNumbers([intNum]);
-          setCurrentNumber(intNum);
-        } catch (e) {}
-        // Ensure we don't launch a new network call in this tick
-        skipNextCallRef.current = false;
-        return true;
+        // Re-enter handleCallNumber as a manual request so normal networking path runs
+        return await handleCallNumber(intNum, options);
       } catch (e) {
-        console.error("Error applying interrupted number:", e);
+        console.error("Error scheduling interrupted number with server:", e);
       }
     }
     // If there is a pending server-side call (from a previously-aborted/late response),
@@ -1729,7 +1718,7 @@ const BingoGame = () => {
       console.log(
         `[handleCallNumber] After updatePrizePoolDisplay, gameData.prizePool: ${gameData?.prizePool}`
       );
-      if (manualNum !== null && manualNum !== undefined && manualNum !== "") {
+  if (manualNum !== null && manualNum !== undefined && manualNum !== "") {
         const num = parseInt(manualNum, 10);
         if (isNaN(num) || num < 1 || num > 75) {
           throw new Error(`Invalid manual number: ${manualNum} (must be 1-75)`);
@@ -1852,43 +1841,11 @@ const BingoGame = () => {
         throw new Error("No called number in response");
       }
       console.log(`[handleCallNumber] Called number (server): ${calledNumber}`);
-      // If this was a manual request (explicit number provided) prefer the
-      // requested number for local UI consistency. The server may return a
-      // different calledNumber (server-authoritative cadence) — in that case
-      // apply the manual number now for the operator and enqueue the server
-      // number to be applied afterwards so we don't lose it.
-      if (manualNum !== null && manualNum !== undefined && manualNum !== "") {
-        const requested = Number(numberToCall);
-        const serverNum = Number(calledNumber);
-        if (requested && requested === requested && serverNum !== requested) {
-          console.log(
-            `[handleCallNumber] Server returned ${serverNum} but manual request was ${requested}; preferring manual for UI and enqueueing server number.`
-          );
-          // Apply the manual/requested number locally
-          applyCalledNumber(requested);
-          try {
-            // When operator manually requested a number (or we resumed an
-            // interrupted number), prefer showing that as the single recent
-            // number so the UI highlights only it.
-            setLastCalledNumbers([requested]);
-            setCurrentNumber(requested);
-          } catch (e) {}
-          // Enqueue server number to be applied next (if it's not already known)
-          if (
-            serverNum &&
-            !calledNumbersSetRef.current.has(serverNum) &&
-            !pendingServerCallsRef.current.includes(serverNum)
-          ) {
-            pendingServerCallsRef.current.push(serverNum);
-          }
-        } else {
-          // Normal case: server agreed with request
-          applyCalledNumber(serverNum);
-        }
-      } else {
-        // Auto/manual absent: apply server number
-        applyCalledNumber(calledNumber);
-      }
+      // Apply exactly one number per call: trust the server-authoritative number.
+      // If a manual number was requested but the server returned a different
+      // number, we do NOT apply the requested number locally to avoid double
+      // counting across ticks. Always apply the server's number only.
+      applyCalledNumber(Number(calledNumber));
       // Preserve the current prizePool to avoid flashing 0 during re-render
       const currentPrizePool = gameData?.prizePool || 0;
       console.log(
@@ -2031,9 +1988,9 @@ const BingoGame = () => {
       // Clear in-flight markers
       inFlightCallRef.current = false;
       inFlightNumberRef.current = null;
-      // If this call finished/aborted, bump sequence to avoid applying any stray late responses
+      // Invalidate this sequence so any late responses from this call are ignored
       try {
-        callSequenceRef.current = (callSequenceRef.current || 0) + 0; // no-op but keeps ref in this scope
+        callSequenceRef.current = (callSequenceRef.current || 0) + 1;
       } catch (e) {}
       // If an auto tick arrived while busy, fire a pending call immediately
       if (
