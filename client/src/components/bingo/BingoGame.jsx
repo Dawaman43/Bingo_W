@@ -2729,6 +2729,11 @@ const BingoGame = () => {
         });
         setShowWinModal(true);
         setIsWinnerModalOpen(true); // Explicitly set for consistency
+        // Ensure non-winner modal is closed to avoid conflicting UI/audio
+        try {
+          setIsNonWinnerModalOpen(false);
+          setNonWinnerCardData(null);
+        } catch {}
         setWinnerData(data.winner || data.previousWinner); // Fallback to previousWinner
         // NEW: Update card state with winning positions for orange marking
         const updatedCard = { ...cardInState, isWinner: true };
@@ -3109,7 +3114,7 @@ const BingoGame = () => {
         </div>
       </div>
       {/* Bingo Board */}
-      <div className="flex flex-col gap-[5px] mb-5 w-full max-w-[1200px] flex-grow justify-center items-center">
+  <div className="flex flex-col gap-[5px] mb-5 w-full max-w-[1200px] grow justify-center items-center">
         {generateBoard()}
       </div>
       {/* Controls and Last Number */}

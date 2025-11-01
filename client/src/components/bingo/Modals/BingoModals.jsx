@@ -42,13 +42,22 @@ const BingoModals = ({
       const isDisqualified = !!bingoStatus.lateCall || !!bingoStatus.disqualified;
       if (!isDisqualified && (hasWinningNumbers || hasWinnerGrid)) {
         SoundService.playSound("winner");
+        // Ensure any non-winner indicators are closed to avoid contradictory cues
+        try {
+          setIsNonWinnerModalOpen(false);
+          setNonWinnerCardData(null);
+        } catch {}
       }
     }
   }, [isWinnerModalOpen, bingoStatus]);
 
   useEffect(() => {
-    // Play non-winner sound only when we have card details to show.
-    if (isNonWinnerModalOpen && nonWinnerCardData) {
+    // Play non-winner sound only when we have card details to show and no winner modal is open.
+    if (
+      isNonWinnerModalOpen &&
+      nonWinnerCardData &&
+      !isWinnerModalOpen
+    ) {
       SoundService.playSound("you_didnt_win");
     }
   }, [isNonWinnerModalOpen, nonWinnerCardData]);

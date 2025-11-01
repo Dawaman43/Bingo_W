@@ -3,6 +3,7 @@ import API from "./axios";
 class SoundService {
   constructor() {
     this.audioCache = {};
+    this.lastWinnerAt = 0; // timestamp to suppress non-winner right after winner
   }
 
   async preloadAudio(key, url) {
@@ -98,6 +99,24 @@ class SoundService {
   }
 
   playSound(key, options = {}) {
+    // Priority rules for result sounds
+    if (key === "winner") {
+      this.lastWinnerAt = Date.now();
+      // Stop any pending/playing non-winner sound to avoid contradictory cues
+      const lose = this.audioCache["you_didnt_win"];
+      if (lose) {
+        try {
+          lose.pause();
+          lose.currentTime = 0;
+        } catch {}
+      }
+    } else if (key === "you_didnt_win") {
+      // If a winner was played very recently, suppress the non-winner sound
+      if (Date.now() - this.lastWinnerAt < 2000) {
+        return;
+      }
+    }
+
     const audio = this.audioCache[key];
     if (!audio) {
       console.warn(`Audio for ${key} not found in cache`);
