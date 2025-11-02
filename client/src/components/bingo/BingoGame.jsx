@@ -421,6 +421,19 @@ const BingoGame = () => {
     }
   }, [calledNumbers]);
 
+  // Derive current and last five called numbers from calledNumbers (persist across refresh)
+  useEffect(() => {
+    if (Array.isArray(calledNumbers) && calledNumbers.length > 0) {
+      const curr = calledNumbers[calledNumbers.length - 1];
+      const lastFive = calledNumbers.slice(-5).reverse();
+      setCurrentNumber(curr);
+      setLastCalledNumbers(lastFive);
+    } else {
+      setCurrentNumber(null);
+      setLastCalledNumbers([]);
+    }
+  }, [calledNumbers]);
+
   // Real jackpot fetch using service
   const fetchJackpotAmount = async () => {
     if (!user?.id) {
