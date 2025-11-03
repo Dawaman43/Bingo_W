@@ -2437,6 +2437,10 @@ const BingoGame = () => {
           gameData?._id &&
           isPlaying
         ) {
+          // Allow the resume call to proceed
+          inFlightCallRef.current = false;
+          inFlightNumberRef.current = null;
+          setIsCallingNumber(false);
           interruptedNumberRef.current = preferNum;
           // Schedule the call on next tick to avoid reentrancy
           setTimeout(() => {
