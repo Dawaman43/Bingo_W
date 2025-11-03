@@ -207,6 +207,28 @@ const BingoGame = () => {
   useEffect(() => {
     const onOnline = () => {
       setIsOnline(true);
+      // If we come back online and auto-call is on + playing + active,
+      // try to resume the pending/interrupted number immediately.
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        if (!gid) return;
+        if (!isAutoCall || !isPlaying || isGameOver || gameData?.status !== "active") return;
+        const key = `bingo_pending_call_${gid}`;
+        let pendingNum = null;
+        const raw = sessionStorage.getItem(key);
+        if (raw) {
+          try { pendingNum = Number(JSON.parse(raw)?.number); } catch { /* noop */ }
+        }
+        const preferNum = pendingNum || interruptedNumberRef.current;
+        if (preferNum) {
+          // Clear blockers and schedule a call for the pending number
+          inFlightCallRef.current = false;
+          inFlightNumberRef.current = null;
+          setIsCallingNumber(false);
+          interruptedNumberRef.current = preferNum;
+          setTimeout(() => { handleCallNumber(); }, 0);
+        }
+      } catch { /* noop */ }
     };
     const onOffline = () => {
       setIsOnline(false);
@@ -1786,6 +1808,12 @@ const BingoGame = () => {
 
   const handleCallNumber = async (manualNum = null, options = {}) => {
     const isAuto = options?.isAuto === true;
+    // If offline, surface a clear error and hold pending state
+    if (!isOnline) {
+      setCallError("No internet connection. Waiting to resume calls...");
+      setIsErrorModalOpen(true);
+      return false;
+    }
     // If recently aborted, skip this call to prevent duplicate server processing
     if (recentlyAbortedRef.current && !manualNum) {
       console.log("[handleCallNumber] Skipping call due to recent abort");
@@ -2165,18 +2193,53 @@ const BingoGame = () => {
       // rejected it (e.g., already called), do NOT accept a different number
       // in this tick. Preserve the number to retry next tick and exit quietly.
       if (error?.response?.status === 412) {
+        const reason = error?.response?.data?.reason;
+        const gameFromErr = error?.response?.data?.game;
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        // If server says the requested number is already called, treat as synced success
+        if (reason === "ALREADY_CALLED") {
+          try {
+            if (gid) sessionStorage.removeItem(`bingo_pending_call_${gid}`);
+          } catch { /* noop */ }
+          // Clear interrupted markers so we don't retry the same number
+          try {
+            if (manualNum != null) interruptedNumbersSetRef.current.delete(manualNum);
+            interruptedNumberRef.current = null;
+          } catch { /* noop */ }
+          // Sync local game state from server payload if present
+          if (gameFromErr && gameFromErr.calledNumbers) {
+            try {
+              setGameData((prev) => ({
+                ...prev,
+                ...gameFromErr,
+                selectedCards: gameFromErr.selectedCards ?? prev?.selectedCards ?? [],
+              }));
+              // Apply any server-called numbers we haven't applied yet (without forcing re-call).
+              const serverList = (gameFromErr.calledNumbers || []).map(Number);
+              for (const n of serverList) {
+                if (!calledNumbersSetRef.current.has(n)) {
+                  applyCalledNumber(n);
+                }
+              }
+            } catch { /* noop */ }
+          }
+          // Clear in-flight and allow next tick to proceed without error modal
+          inFlightCallRef.current = false;
+          inFlightNumberRef.current = null;
+          setIsCallingNumber(false);
+          callAbortControllerRef.current = null;
+          return;
+        }
+        // Other 412 reasons: preserve to retry on next tick
         if (manualNum != null) {
           try {
             interruptedNumberRef.current = manualNum;
             interruptedNumbersSetRef.current.add(manualNum);
             console.warn(
-              `[handleCallNumber] Server rejected enforced number ${manualNum}; preserving for next tick. Reason: ${error?.response?.data?.reason}`
+              `[handleCallNumber] Server rejected enforced number ${manualNum}; preserving for next tick. Reason: ${reason}`
             );
-          } catch {
-            /* noop */
-          }
+          } catch { /* noop */ }
         }
-        // Clear in-flight markers and exit without showing error modal
         inFlightCallRef.current = false;
         inFlightNumberRef.current = null;
         setIsCallingNumber(false);
@@ -2324,6 +2387,22 @@ const BingoGame = () => {
       bgLog("handleToggleAutoCall", { turningOn });
     } catch {
       /* noop */
+    }
+    // Prevent turning on auto-call when offline; show clear message
+    if (turningOn && !isOnline) {
+      setCallError("No internet connection. Auto Call can't start. We'll resume when back online.");
+      setIsErrorModalOpen(true);
+      // Keep waiting state if there's a pending number
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        const pendingKey = gid ? `bingo_pending_call_${gid}` : null;
+        const hasPending = pendingKey && !!sessionStorage.getItem(pendingKey);
+        const hasInterrupted = !!interruptedNumberRef.current || !!inFlightNumberRef.current;
+        setIsCallingNumber(hasPending || hasInterrupted || isCallingNumber);
+      } catch {
+        /* noop */
+      }
+      return;
     }
     // If turning off, abort any in-flight call
     if (!turningOn) {
