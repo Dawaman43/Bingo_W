@@ -113,6 +113,19 @@ const BingoGame = () => {
   const [jackpotPrizeAmount, setJackpotPrizeAmount] = useState("--- BIRR");
   const [jackpotDrawDate, setJackpotDrawDate] = useState("----");
   const [isJackpotDrawn, setIsJackpotDrawn] = useState(false); // New state to track if jackpot has been drawn
+    // Auto-call resume on refresh if it was on for this game
+    try {
+      const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+      const key = gid ? `bingo_auto_on_${gid}` : null;
+      if (key) {
+        const wasAuto = sessionStorage.getItem(key) === "true";
+        if (wasAuto && active && !isAutoCall) {
+          setIsAutoCall(true);
+        }
+      }
+    } catch {
+      /* noop */
+    }
   const [isJackpotEnabled, setIsJackpotEnabled] = useState(false);
   const [isJackpotAnimating, setIsJackpotAnimating] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
@@ -172,6 +185,8 @@ const BingoGame = () => {
   const containerRef = useRef(null);
   const confettiContainerRef = useRef(null);
   const fireworksContainerRef = useRef(null);
+  // Persist last-heard called number across refreshes (per-game)
+  const lastHeardRef = useRef({ gameId: null, number: null });
 
   // Simple prefixed logger for easier filtering in console
   const bgLog = (...args) => console.log("[bingo game]", ...args);
@@ -213,7 +228,9 @@ const BingoGame = () => {
         setIsAutoCall(false);
         if (callAbortControllerRef.current)
           callAbortControllerRef.current.abort();
-      } catch (e) {}
+      } catch {
+        /* noop */
+      }
     };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
@@ -390,6 +407,21 @@ const BingoGame = () => {
       });
       setCurrentNumber(n);
       SoundService.playSound(`number_${n}`);
+      // Persist last-heard number for refresh catch-up (per game)
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        if (gid) {
+          sessionStorage.setItem(
+            `bingo_last_heard_${gid}`,
+            JSON.stringify({ number: n, ts: Date.now() })
+          );
+          if (lastHeardRef && lastHeardRef.current) {
+            lastHeardRef.current = { gameId: gid, number: n };
+          }
+        }
+      } catch {
+        /* noop */
+      }
       return true;
     } catch (e) {
       console.error(`[markNumberPositions] error applying ${n}:`, e);
@@ -1005,6 +1037,135 @@ const BingoGame = () => {
     updateJackpotDisplay();
     updateJackpotWinnerDisplay();
   }, [user?.id]); // Depend on user.id for refetch
+
+  // Keep local play/pause aligned with server status across refreshes
+  useEffect(() => {
+    if (!gameData?._id) return;
+    const active = gameData?.status === "active" && !isGameOver;
+    setIsPlaying(active);
+  }, [gameData?._id, gameData?.status, isGameOver]);
+
+  // Auto-call resume on refresh if it was on for this game
+  useEffect(() => {
+    const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+    if (!gid) return;
+    const key = `bingo_auto_on_${gid}`;
+    try {
+      const wasAuto = sessionStorage.getItem(key) === "true";
+      if (wasAuto && gameData?.status === "active" && !isGameOver && !isAutoCall) {
+        setIsAutoCall(true);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [gameData?._id, gameData?.status, isGameOver, isAutoCall]);
+
+  // Refresh catch-up: if new numbers arrived while reloading and the game is active,
+  // announce the missed numbers sequentially (but do not alter marks/state).
+  useEffect(() => {
+    const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+    if (!gid) return;
+    if (!Array.isArray(calledNumbers) || calledNumbers.length === 0) return;
+    if (!isPlaying || gameData?.status !== "active") return;
+
+    const key = `bingo_last_heard_${gid}`;
+    let lastHeard = null;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (raw) lastHeard = JSON.parse(raw)?.number ?? null;
+    } catch {
+      /* noop */
+    }
+
+    if (lastHeard == null) {
+      const latest = calledNumbers[calledNumbers.length - 1];
+      try {
+        sessionStorage.setItem(key, JSON.stringify({ number: latest, ts: Date.now() }));
+      } catch {
+        /* noop */
+      }
+      if (lastHeardRef && lastHeardRef.current) {
+        lastHeardRef.current = { gameId: gid, number: latest };
+      }
+      return;
+    }
+
+    const idx = calledNumbers.lastIndexOf(lastHeard);
+    const toPlay = idx >= 0 ? calledNumbers.slice(idx + 1) : [];
+    if (!toPlay.length) return;
+
+    (async () => {
+      try {
+        await SoundService.playNumberSequence(toPlay);
+      } finally {
+        const latest = calledNumbers[calledNumbers.length - 1];
+        try {
+          sessionStorage.setItem(key, JSON.stringify({ number: latest, ts: Date.now() }));
+        } catch {
+          /* noop */
+        }
+        if (lastHeardRef && lastHeardRef.current) {
+          lastHeardRef.current = { gameId: gid, number: latest };
+        }
+      }
+    })();
+  }, [gameData?._id, gameData?.status, isPlaying, calledNumbers]);
+
+  // Resume exactly one pending call after refresh for slow network cases.
+  // If a pending number was stored before refresh and server hasn't called it yet,
+  // call that specific number (once) when game is active and not paused.
+  useEffect(() => {
+    const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+    if (!gid) return;
+    if (gameData?.status !== "active" || isGameOver || !isPlaying) return;
+
+    const key = `bingo_pending_call_${gid}`;
+    let pendingNum = null;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (raw) pendingNum = Number(JSON.parse(raw)?.number);
+    } catch {
+      /* noop */
+    }
+    if (!pendingNum || Number.isNaN(pendingNum)) return;
+    if (Array.isArray(calledNumbers) && calledNumbers.includes(pendingNum)) {
+      try { sessionStorage.removeItem(key); } catch { /* noop */ }
+      return;
+    }
+    if (isCallingNumber || inFlightCallRef.current) return;
+
+    (async () => {
+      try {
+        const requestId =
+          (typeof crypto !== "undefined" && crypto.randomUUID && crypto.randomUUID()) ||
+          `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const resp = await gameService.callNumber(gid, pendingNum, {
+          requestId,
+          enforce: true,
+        });
+        const calledNumber =
+          resp?.calledNumber ||
+          pendingNum ||
+          resp?.game?.calledNumbers?.[resp?.game?.calledNumbers?.length - 1];
+        if (
+          calledNumber &&
+          !calledNumbersSetRef.current.has(Number(calledNumber))
+        ) {
+          applyCalledNumber(Number(calledNumber));
+        }
+        setGameData((prev) => ({
+          ...prev,
+          ...resp?.game,
+          prizePool: resp?.game?.prizePool ?? prev?.prizePool ?? 0,
+          selectedCards: resp?.game?.selectedCards ?? prev?.selectedCards ?? [],
+        }));
+      } catch {
+        /* swallow errors to avoid modal on refresh */
+      } finally {
+        try { sessionStorage.removeItem(key); } catch { /* noop */ }
+      }
+    })();
+  }, [gameData?._id, gameData?.status, isGameOver, isPlaying, calledNumbers, isCallingNumber, applyCalledNumber]);
 
   // Auto-call scheduler (drift-corrected and sequential, schedules after work)
   useEffect(() => {
@@ -1632,7 +1793,9 @@ const BingoGame = () => {
         // We intend to call the server with this number; remove it from preserved/pendings
         try {
           interruptedNumbersSetRef.current.delete(intNum);
-        } catch (e) {}
+        } catch {
+          /* noop */
+        }
         pendingServerCallsRef.current = (
           pendingServerCallsRef.current || []
         ).filter((n) => n !== intNum);
@@ -1765,13 +1928,27 @@ const BingoGame = () => {
             ];
       }
       console.log(`[handleCallNumber] Calling number: ${numberToCall}`);
+      // Persist pending number so a refresh during slow network can resume calling exactly this number
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        if (gid) {
+          sessionStorage.setItem(
+            `bingo_pending_call_${gid}`,
+            JSON.stringify({ number: numberToCall, ts: Date.now() })
+          );
+        }
+      } catch {
+        /* noop */
+      }
       try {
         bgLog("handleCallNumber calling", {
           numberToCall,
           isAuto,
           seq: myCallSeq,
         });
-      } catch (e) {}
+      } catch {
+        /* noop */
+      }
       // Mark in-flight and create AbortController to allow cancellation
       inFlightCallRef.current = true;
       inFlightNumberRef.current = numberToCall;
@@ -1779,7 +1956,9 @@ const BingoGame = () => {
       if (callAbortControllerRef.current) {
         try {
           callAbortControllerRef.current.abort();
-        } catch (e) {}
+        } catch {
+          /* noop */
+        }
       }
       const controller = new AbortController();
       callAbortControllerRef.current = controller;
@@ -1949,7 +2128,9 @@ const BingoGame = () => {
             interruptedNumberRef.current = num;
             try {
               interruptedNumbersSetRef.current.add(num);
-            } catch (ee) {}
+            } catch {
+              /* noop */
+            }
             console.log(
               `[handleCallNumber] Call aborted; storing interrupted number ${num} for next tick.`
             );
@@ -1977,7 +2158,9 @@ const BingoGame = () => {
             console.warn(
               `[handleCallNumber] Server rejected enforced number ${manualNum}; preserving for next tick. Reason: ${error?.response?.data?.reason}`
             );
-          } catch {}
+          } catch {
+            /* noop */
+          }
         }
         // Clear in-flight markers and exit without showing error modal
         inFlightCallRef.current = false;
@@ -2043,7 +2226,9 @@ const BingoGame = () => {
       // Invalidate this sequence so any late responses from this call are ignored
       try {
         callSequenceRef.current = (callSequenceRef.current || 0) + 1;
-      } catch (e) {}
+      } catch {
+        /* noop */
+      }
       // If an auto tick arrived while busy, fire a pending call immediately
       if (
         autoSchedulerRef.current.pending &&
@@ -2068,7 +2253,9 @@ const BingoGame = () => {
       bgLog("handleNextClick invoked", {
         interruptedNumber: interruptedNumberRef.current,
       });
-    } catch (e) {}
+    } catch {
+      /* noop */
+    }
     // If we have a previously-interrupted number, prefer calling/applying it
     // when the user presses Next.
     if (interruptedNumberRef.current) {
@@ -2091,7 +2278,9 @@ const BingoGame = () => {
       interruptedNumberRef.current = null;
       try {
         interruptedNumbersSetRef.current.delete(toCall);
-      } catch (e) {}
+      } catch {
+        /* noop */
+      }
       await handleCallNumber(toCall);
       return;
     }
@@ -2119,7 +2308,9 @@ const BingoGame = () => {
     const turningOn = !isAutoCall;
     try {
       bgLog("handleToggleAutoCall", { turningOn });
-    } catch (e) {}
+    } catch {
+      /* noop */
+    }
     // If turning off, abort any in-flight call
     if (!turningOn) {
       // If there's an in-flight number, preserve it BEFORE aborting so we
@@ -2130,7 +2321,9 @@ const BingoGame = () => {
           interruptedNumberRef.current = preserved;
           try {
             interruptedNumbersSetRef.current.add(preserved);
-          } catch (ee) {}
+          } catch {
+            /* noop */
+          }
           try {
             bgLog(
               "handleToggleAutoCall preserving interrupted number",
@@ -2176,6 +2369,20 @@ const BingoGame = () => {
       recentlyAbortedRef.current = false;
     }
     setIsAutoCall(turningOn);
+    // Persist auto-call preference per game so it resumes after refresh
+    try {
+      const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+      const key = gid ? `bingo_auto_on_${gid}` : null;
+      if (key) {
+        if (turningOn) {
+          sessionStorage.setItem(key, "true");
+        } else {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch {
+      /* noop */
+    }
   };
 
   const handlePlayPause = async () => {
@@ -2193,6 +2400,13 @@ const BingoGame = () => {
       return newPlaying;
     });
     setIsAutoCall(false);
+    // Clear persisted auto state when manually toggling play/pause
+    try {
+      const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+      if (gid) sessionStorage.removeItem(`bingo_auto_on_${gid}`);
+    } catch {
+      /* noop */
+    }
     if (autoIntervalRef.current) {
       clearInterval(autoIntervalRef.current);
       autoIntervalRef.current = null;
@@ -2208,7 +2422,7 @@ const BingoGame = () => {
       return;
     }
     try {
-      const updatedGame = await gameService.updateGameStatus(
+      await gameService.updateGameStatus(
         gameData._id,
         newStatus
       );
@@ -2303,7 +2517,9 @@ const BingoGame = () => {
       // Clear applied numbers tracking when shuffling/resetting
       try {
         appliedNumbersRef.current = new Set();
-      } catch (e) {}
+      } catch {
+        /* noop */
+      }
       setBingoCards((prev) =>
         prev.map((card) => ({
           ...card,
@@ -2746,7 +2962,9 @@ const BingoGame = () => {
         try {
           setIsNonWinnerModalOpen(false);
           setNonWinnerCardData(null);
-        } catch {}
+        } catch {
+          /* noop */
+        }
         setWinnerData(data.winner || data.previousWinner); // Fallback to previousWinner
         // NEW: Update card state with winning positions for orange marking
         const updatedCard = { ...cardInState, isWinner: true };

@@ -98,6 +98,63 @@ class SoundService {
     console.log("Audio cache keys:", Object.keys(this.audioCache));
   }
 
+  // Play a sound and return a promise that resolves when playback ends (or after a safety timeout)
+  playSoundAwait(key, options = {}) {
+    const audio = this.audioCache[key];
+    if (!audio) {
+      console.warn(`Audio for ${key} not found in cache`);
+      return Promise.resolve();
+    }
+    if (options.stop) {
+      audio.pause();
+      audio.currentTime = 0;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const onEnded = () => {
+        try {
+          audio.removeEventListener("ended", onEnded);
+        } catch {
+          /* noop */
+        }
+        resolve();
+      };
+      try {
+        audio.loop = options.loop || false;
+        audio.currentTime = 0;
+        audio.addEventListener("ended", onEnded, { once: true });
+        // Safety timeout in case 'ended' doesn't fire (e.g., short files on some browsers)
+        const safetyMs = Math.max(700, Math.min(2500, (audio.duration || 1) * 1000));
+        const t = setTimeout(() => {
+          try { audio.removeEventListener("ended", onEnded); } catch {
+            /* noop */
+          }
+          resolve();
+        }, safetyMs);
+        audio.play().catch((err) => {
+          console.error(`Error playing sound ${key}:`, err);
+          try { audio.removeEventListener("ended", onEnded); } catch {
+            /* noop */
+          }
+          clearTimeout(t);
+          resolve();
+        });
+      } catch (e) {
+        console.error(`Failed to play sound ${key}:`, e);
+        resolve();
+      }
+    });
+  }
+
+  // Sequentially play a list of bingo number sounds (e.g., on refresh catch-up)
+  async playNumberSequence(numbers = []) {
+    for (const n of numbers) {
+      const key = `number_${Number(n)}`;
+      // Use the awaitable player to avoid overlaps
+      await this.playSoundAwait(key);
+    }
+  }
+
   playSound(key, options = {}) {
     // Priority rules for result sounds
     if (key === "winner") {
@@ -108,7 +165,9 @@ class SoundService {
         try {
           lose.pause();
           lose.currentTime = 0;
-        } catch {}
+        } catch {
+          /* noop */
+        }
       }
     } else if (key === "you_didnt_win") {
       // If a winner was played very recently, suppress the non-winner sound
