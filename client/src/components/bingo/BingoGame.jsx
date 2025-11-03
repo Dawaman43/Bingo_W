@@ -1038,27 +1038,7 @@ const BingoGame = () => {
     updateJackpotWinnerDisplay();
   }, [user?.id]); // Depend on user.id for refetch
 
-  // Keep local play/pause aligned with server status across refreshes
-  useEffect(() => {
-    if (!gameData?._id) return;
-    const active = gameData?.status === "active" && !isGameOver;
-    setIsPlaying(active);
-  }, [gameData?._id, gameData?.status, isGameOver]);
-
-  // Auto-call resume on refresh if it was on for this game
-  useEffect(() => {
-    const gid = gameData?._id || sessionStorage.getItem("currentGameId");
-    if (!gid) return;
-    const key = `bingo_auto_on_${gid}`;
-    try {
-      const wasAuto = sessionStorage.getItem(key) === "true";
-      if (wasAuto && gameData?.status === "active" && !isGameOver && !isAutoCall) {
-        setIsAutoCall(true);
-      }
-    } catch {
-      /* noop */
-    }
-  }, [gameData?._id, gameData?.status, isGameOver, isAutoCall]);
+  // Do not auto-play on refresh: require user to press Play. No syncing of isPlaying to server here.
 
   // Refresh catch-up: if new numbers arrived while reloading and the game is active,
   // announce the missed numbers sequentially (but do not alter marks/state).
@@ -1217,15 +1197,14 @@ const BingoGame = () => {
           // passing it as a "manual" number which causes an additional
           // server request. This prevents double-calling/marking when the
           // operator toggles auto-call during an in-flight request.
-          let didWork = false;
           if (interruptedNumberRef.current) {
             // Do NOT clear interruptedNumberRef here. Call handleCallNumber
             // with null so its early-path can apply the interrupted number
             // locally (or decide to call the server once). That keeps a
             // single, authoritative application flow.
-            didWork = await handleCallNumber(null, { isAuto: true });
+            await handleCallNumber(null, { isAuto: true });
           } else {
-            didWork = await handleCallNumber(null, { isAuto: true });
+            await handleCallNumber(null, { isAuto: true });
           }
           // Always schedule the next tick while auto mode remains active.
           // Some ticks may skip doing work (didWork === false) because of
@@ -2479,8 +2458,7 @@ const BingoGame = () => {
             ? response.game.selectedCards
             : prev?.selectedCards ?? [],
       }));
-      // Do NOT call updatePrizePoolDisplay() to avoid overwriting preserved data
-      SoundService.playSound("game_finish");
+  // Do NOT call updatePrizePoolDisplay() to avoid overwriting preserved data
 
       setIsGameFinishedModalOpen(true);
 
