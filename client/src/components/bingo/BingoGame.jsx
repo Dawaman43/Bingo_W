@@ -937,6 +937,26 @@ const BingoGame = () => {
     }
   }, [gameData?._id]);
 
+  // Resume Play after refresh if this game had started previously and is still active
+  useEffect(() => {
+    const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+    if (!gid) return;
+    try {
+      const started =
+        hasStarted || localStorage.getItem(`bingoGameStarted_${gid}`) === "true";
+      if (
+        started &&
+        gameData?.status === "active" &&
+        !isGameOver &&
+        !isPlaying
+      ) {
+        setIsPlaying(true);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [gameData?._id, gameData?.status, hasStarted, isGameOver, isPlaying]);
+
   useEffect(() => {
     if (!user?.id) return;
     updateJackpotDisplay();
@@ -1113,8 +1133,8 @@ const BingoGame = () => {
       return;
     }
 
-    // If not playing, hold the pending number and keep UI in waiting state; don't play audio
-    if (!isPlaying) {
+    // If not playing or auto-call is off, hold the pending number and keep UI in waiting state; don't play audio or call
+    if (!isPlaying || !isAutoCall) {
       try {
         interruptedNumberRef.current = pendingNum;
         setIsCallingNumber(true);
@@ -1158,7 +1178,7 @@ const BingoGame = () => {
         try { sessionStorage.removeItem(key); } catch { /* noop */ }
       }
     })();
-  }, [gameData?._id, gameData?.status, isGameOver, isPlaying, calledNumbers, isCallingNumber]);
+  }, [gameData?._id, gameData?.status, isGameOver, isPlaying, isAutoCall, calledNumbers, isCallingNumber]);
 
   // Auto-call scheduler (drift-corrected and sequential, schedules after work)
   useEffect(() => {
