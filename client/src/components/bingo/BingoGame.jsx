@@ -113,19 +113,6 @@ const BingoGame = () => {
   const [jackpotPrizeAmount, setJackpotPrizeAmount] = useState("--- BIRR");
   const [jackpotDrawDate, setJackpotDrawDate] = useState("----");
   const [isJackpotDrawn, setIsJackpotDrawn] = useState(false); // New state to track if jackpot has been drawn
-    // Auto-call resume on refresh if it was on for this game
-    try {
-      const gid = gameData?._id || sessionStorage.getItem("currentGameId");
-      const key = gid ? `bingo_auto_on_${gid}` : null;
-      if (key) {
-        const wasAuto = sessionStorage.getItem(key) === "true";
-        if (wasAuto && active && !isAutoCall) {
-          setIsAutoCall(true);
-        }
-      }
-    } catch {
-      /* noop */
-    }
   const [isJackpotEnabled, setIsJackpotEnabled] = useState(false);
   const [isJackpotAnimating, setIsJackpotAnimating] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
@@ -1079,17 +1066,11 @@ const BingoGame = () => {
 
     const idx = calledNumbers.lastIndexOf(lastHeard);
     const toPlay = idx >= 0 ? calledNumbers.slice(idx + 1) : [];
-    if (!toPlay.length) return;
+    if (!toPlay.length || !isPlaying) return;
 
     (async () => {
       try {
-        if (isPlaying) {
-          await SoundService.playNumberSequence(toPlay);
-        } else {
-          // Not playing: only announce the latest one to notify the operator
-          const latest = toPlay[toPlay.length - 1];
-          await SoundService.playSoundAwait(`number_${latest}`);
-        }
+        await SoundService.playNumberSequence(toPlay);
       } finally {
         const latest = calledNumbers[calledNumbers.length - 1];
         try {
@@ -1132,10 +1113,14 @@ const BingoGame = () => {
       return;
     }
 
-    // If not playing, just notify once and clear
+    // If not playing, hold the pending number and keep UI in waiting state; don't play audio
     if (!isPlaying) {
-      SoundService.playSound(`number_${pendingNum}`);
-      try { sessionStorage.removeItem(key); } catch { /* noop */ }
+      try {
+        interruptedNumberRef.current = pendingNum;
+        setIsCallingNumber(true);
+      } catch {
+        /* noop */
+      }
       return;
     }
 
@@ -2148,7 +2133,9 @@ const BingoGame = () => {
         // ensure we don't keep the in-flight number excluded from next picks
         inFlightCallRef.current = false;
         inFlightNumberRef.current = null;
-        setIsCallingNumber(false);
+        // Keep UI in a "calling/waiting" state so operators see it's pending
+        // and will resume once auto-call is turned back on.
+        setIsCallingNumber(true);
         // clear controller
         callAbortControllerRef.current = null;
         return;
@@ -2322,21 +2309,24 @@ const BingoGame = () => {
     if (!turningOn) {
       // If there's an in-flight number, preserve it BEFORE aborting so we
       // can guarantee it will be applied first on the next tick/Next press.
+      const hadInFlightNumber = !!(interruptedNumberRef.current || inFlightNumberRef.current);
       try {
-        const preserved = inFlightNumberRef.current;
-        if (preserved) {
-          interruptedNumberRef.current = preserved;
+        const preservedNow = inFlightNumberRef.current;
+        if (preservedNow) {
+          interruptedNumberRef.current = preservedNow;
           try {
-            interruptedNumbersSetRef.current.add(preserved);
+            interruptedNumbersSetRef.current.add(preservedNow);
           } catch {
             /* noop */
           }
           try {
             bgLog(
               "handleToggleAutoCall preserving interrupted number",
-              preserved
+              preservedNow
             );
-          } catch (ee) {}
+          } catch {
+            /* noop */
+          }
         }
       } catch (e) {
         console.warn("Failed to preserve in-flight number on toggle off:", e);
@@ -2354,7 +2344,20 @@ const BingoGame = () => {
       // Allow the in-flight number to be considered on next selection
       inFlightNumberRef.current = null;
       autoSchedulerRef.current.pending = false;
-      setIsCallingNumber(false);
+      // If we had an in-flight or pending number, keep UI in a waiting state
+      // so it can resume once auto-call is turned back on.
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        const pendingKey = gid ? `bingo_pending_call_${gid}` : null;
+        let hasPending = false;
+        if (pendingKey) {
+          const raw = sessionStorage.getItem(pendingKey);
+          hasPending = !!raw;
+        }
+        setIsCallingNumber(hadInFlightNumber || hasPending);
+      } catch {
+        setIsCallingNumber(hadInFlightNumber || !!interruptedNumberRef.current);
+      }
       // Invalidate any previous call so late responses are ignored
       try {
         callSequenceRef.current = (callSequenceRef.current || 0) + 1;
@@ -2389,6 +2392,40 @@ const BingoGame = () => {
       }
     } catch {
       /* noop */
+    }
+
+    // If turning on and we have a pending/interrupted number, try to call it immediately
+    if (turningOn) {
+      try {
+        const gid = gameData?._id || sessionStorage.getItem("currentGameId");
+        const pendingKey = gid ? `bingo_pending_call_${gid}` : null;
+        let pendingNum = null;
+        if (pendingKey) {
+          const raw = sessionStorage.getItem(pendingKey);
+          if (raw) {
+            try {
+              pendingNum = Number(JSON.parse(raw)?.number);
+            } catch {
+              /* noop */
+            }
+          }
+        }
+        const preferNum = pendingNum || interruptedNumberRef.current;
+        if (
+          preferNum &&
+          !isGameOver &&
+          gameData?._id &&
+          isPlaying
+        ) {
+          interruptedNumberRef.current = preferNum;
+          // Schedule the call on next tick to avoid reentrancy
+          setTimeout(() => {
+            handleCallNumber();
+          }, 0);
+        }
+      } catch {
+        /* noop */
+      }
     }
   };
 
