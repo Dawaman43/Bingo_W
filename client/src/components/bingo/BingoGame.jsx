@@ -1040,13 +1040,15 @@ const BingoGame = () => {
 
   // Do not auto-play on refresh: require user to press Play. No syncing of isPlaying to server here.
 
-  // Refresh catch-up: if new numbers arrived while reloading and the game is active,
-  // announce the missed numbers sequentially (but do not alter marks/state).
+  // Refresh catch-up: if new numbers arrived while reloading,
+  // - if playing: play all missed numbers sequentially
+  // - if not playing: play only the latest missed number once
+  // Never alters marks/state; purely audio notification.
   useEffect(() => {
     const gid = gameData?._id || sessionStorage.getItem("currentGameId");
     if (!gid) return;
     if (!Array.isArray(calledNumbers) || calledNumbers.length === 0) return;
-    if (!isPlaying || gameData?.status !== "active") return;
+    if (gameData?.status !== "active") return;
 
     const key = `bingo_last_heard_${gid}`;
     let lastHeard = null;
@@ -1059,14 +1061,19 @@ const BingoGame = () => {
 
     if (lastHeard == null) {
       const latest = calledNumbers[calledNumbers.length - 1];
-      try {
-        sessionStorage.setItem(key, JSON.stringify({ number: latest, ts: Date.now() }));
-      } catch {
-        /* noop */
-      }
-      if (lastHeardRef && lastHeardRef.current) {
-        lastHeardRef.current = { gameId: gid, number: latest };
-      }
+      // First load: announce only the latest once to notify, regardless of play state
+      (async () => {
+        try {
+          await SoundService.playSoundAwait(`number_${latest}`);
+        } finally {
+          try {
+            sessionStorage.setItem(key, JSON.stringify({ number: latest, ts: Date.now() }));
+          } catch { /* noop */ }
+          if (lastHeardRef && lastHeardRef.current) {
+            lastHeardRef.current = { gameId: gid, number: latest };
+          }
+        }
+      })();
       return;
     }
 
@@ -1076,7 +1083,13 @@ const BingoGame = () => {
 
     (async () => {
       try {
-        await SoundService.playNumberSequence(toPlay);
+        if (isPlaying) {
+          await SoundService.playNumberSequence(toPlay);
+        } else {
+          // Not playing: only announce the latest one to notify the operator
+          const latest = toPlay[toPlay.length - 1];
+          await SoundService.playSoundAwait(`number_${latest}`);
+        }
       } finally {
         const latest = calledNumbers[calledNumbers.length - 1];
         try {
@@ -1092,12 +1105,12 @@ const BingoGame = () => {
   }, [gameData?._id, gameData?.status, isPlaying, calledNumbers]);
 
   // Resume exactly one pending call after refresh for slow network cases.
-  // If a pending number was stored before refresh and server hasn't called it yet,
-  // call that specific number (once) when game is active and not paused.
+  // If a pending number was stored before refresh and server hasn't called it yet:
+  // - if playing and active: call it once with enforce;
+  // - otherwise: just play its sound once to notify, then clear.
   useEffect(() => {
     const gid = gameData?._id || sessionStorage.getItem("currentGameId");
     if (!gid) return;
-    if (gameData?.status !== "active" || isGameOver || !isPlaying) return;
 
     const key = `bingo_pending_call_${gid}`;
     let pendingNum = null;
@@ -1112,6 +1125,20 @@ const BingoGame = () => {
       try { sessionStorage.removeItem(key); } catch { /* noop */ }
       return;
     }
+    if (gameData?.status !== "active" || isGameOver) {
+      // Game not active anymore: just notify once and clear
+      SoundService.playSound(`number_${pendingNum}`);
+      try { sessionStorage.removeItem(key); } catch { /* noop */ }
+      return;
+    }
+
+    // If not playing, just notify once and clear
+    if (!isPlaying) {
+      SoundService.playSound(`number_${pendingNum}`);
+      try { sessionStorage.removeItem(key); } catch { /* noop */ }
+      return;
+    }
+
     if (isCallingNumber || inFlightCallRef.current) return;
 
     (async () => {
@@ -1140,12 +1167,13 @@ const BingoGame = () => {
           selectedCards: resp?.game?.selectedCards ?? prev?.selectedCards ?? [],
         }));
       } catch {
-        /* swallow errors to avoid modal on refresh */
+        // If call fails, at least notify the operator with the sound
+        SoundService.playSound(`number_${pendingNum}`);
       } finally {
         try { sessionStorage.removeItem(key); } catch { /* noop */ }
       }
     })();
-  }, [gameData?._id, gameData?.status, isGameOver, isPlaying, calledNumbers, isCallingNumber, applyCalledNumber]);
+  }, [gameData?._id, gameData?.status, isGameOver, isPlaying, calledNumbers, isCallingNumber]);
 
   // Auto-call scheduler (drift-corrected and sequential, schedules after work)
   useEffect(() => {
