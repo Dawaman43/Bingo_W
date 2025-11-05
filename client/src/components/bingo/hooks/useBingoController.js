@@ -1,5 +1,5 @@
 // src/components/bingo/hooks/useBingoController.js
-import { useContext, useEffect, useState, useCallback } from "react";
+import { useContext, useEffect, useState, useCallback, useRef } from "react";
 import { LanguageContext } from "../../../context/LanguageProvider";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import API from "../../../services/axios";
@@ -64,6 +64,9 @@ export default function useBingoController() {
    *  NUMBER CALLING (core API)
    * ------------------------------------------------------------------ */
   const numberCalling = useNumberCalling(gameState, { speed: initialSpeed });
+
+  // Prevent rapid consecutive NEXT presses from triggering multiple calls
+  const nextClickLockRef = useRef(0);
 
   /* ------------------------------------------------------------------ *
    *  AUTO CALLER – thin wrapper that toggles start/stop
@@ -400,17 +403,34 @@ export default function useBingoController() {
    *  NEXT BUTTON – manual next call even when paused
    * ------------------------------------------------------------------ */
   const handleNextClick = useCallback(async () => {
+    // If we're within the lock window, ignore this press
+    const now = performance.now();
+    if (now < nextClickLockRef.current) return false;
+
     // Always prefer server-decided next number and request immediate call
     if (typeof numberCalling.callNextFromServer === "function") {
       const cushion = 120; // ms
+      const atMs = performance.now() + cushion;
+      const playAtEpoch = Date.now() + cushion;
+
+      // Lock until shortly after the scheduled playback time to avoid double calls while "calling"
+      const lockBuffer = 400; // ms after playback start
+      nextClickLockRef.current = atMs + lockBuffer;
+
       const ok = await numberCalling.callNextFromServer({
         overridePlaying: true,
-        atMs: performance.now() + cushion,
+        atMs,
         minIntervalMs: 50,
-        playAtEpoch: Date.now() + cushion,
+        playAtEpoch,
         playNow: true, // bypass server min-interval
         manual: true, // treat as manual even if no explicit number sent
       });
+
+      // If it failed, release the lock early so the user can retry
+      if (!ok) {
+        nextClickLockRef.current = performance.now();
+      }
+
       if (ok) return true;
     }
     // If server declined, do not fall back to client-generated numbers to keep authority on server
