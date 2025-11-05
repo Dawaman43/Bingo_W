@@ -222,6 +222,18 @@ export default function useBingoController() {
    * ------------------------------------------------------------------ */
   const handleCheckCard = useCallback(
     async (rawCardId = null, preferredPattern = undefined) => {
+      // Abort any in-flight check to keep only the latest request relevant
+      if (!handleCheckCard.abortRef) {
+        handleCheckCard.abortRef = { controller: null };
+      }
+      try {
+        handleCheckCard.abortRef.controller?.abort?.();
+      } catch {
+        // ignore
+      }
+      const controller = new AbortController();
+      handleCheckCard.abortRef.controller = controller;
+
       const normalized = `${rawCardId ?? cardId ?? ""}`.trim();
       if (!normalized) {
         setCallError("Please enter a card ID to check.");
@@ -250,7 +262,8 @@ export default function useBingoController() {
         const result = await gameService.checkBingo(
           gameState.gameData._id,
           normalized,
-          preferredPattern
+          preferredPattern,
+          { signal: controller.signal, retries: 1, timeout: 6000 }
         );
 
         // Update game state if the server sent fresh data
@@ -262,28 +275,7 @@ export default function useBingoController() {
           ? result.winners[0]
           : null;
 
-        /* ---------- Resolve card numbers (fallback chain) ---------- */
-        let resolvedCardNumbers = winner?.numbers || null;
-
-        const extract = (cards) =>
-          Array.isArray(cards)
-            ? cards.find((c) => String(c.id) === normalized)?.numbers || null
-            : null;
-
-        if (!resolvedCardNumbers) resolvedCardNumbers = extract(cardMgmt.cards);
-        // Prefer server-provided flat card for speed before any fetch
-        if (
-          !resolvedCardNumbers &&
-          Array.isArray(result?.card) &&
-          result.card.length === 25
-        ) {
-          resolvedCardNumbers = normalizeFlat(result.card);
-        }
-        if (!resolvedCardNumbers) {
-          const refreshed = await cardMgmt.fetchBingoCards();
-          resolvedCardNumbers = extract(refreshed);
-        }
-
+        /* ---------- Resolve card numbers fast (no extra fetch) ---------- */
         // Convert a flat 25 row-major array (5 rows x 5 cols) into {B,I,N,G,O} columns
         const normalizeFlat = (flat) => {
           const panel = { B: [], I: [], N: [], G: [], O: [] };
@@ -299,12 +291,26 @@ export default function useBingoController() {
             }
             panel[letter] = colVals;
           });
-          // Ensure center FREE space
           if (panel.N && panel.N.length >= 3) panel.N[2] = "FREE";
           return panel;
         };
 
-        // already handled above to avoid extra fetch
+        let resolvedCardNumbers = winner?.numbers || null;
+
+        const extract = (cards) =>
+          Array.isArray(cards)
+            ? cards.find((c) => String(c.id) === normalized)?.numbers || null
+            : null;
+
+        if (!resolvedCardNumbers) resolvedCardNumbers = extract(cardMgmt.cards);
+        if (
+          !resolvedCardNumbers &&
+          Array.isArray(result?.card) &&
+          result.card.length === 25
+        ) {
+          resolvedCardNumbers = normalizeFlat(result.card);
+        }
+        // Avoid extra network fetches to keep check fast
 
         /* --------------------- WINNER --------------------- */
         if (result?.isBingo && winner && !winner.disqualified) {

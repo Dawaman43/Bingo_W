@@ -391,9 +391,8 @@ const BingoModals = ({
                         Array.isArray(bingoStatus.winnerCardNumbers) &&
                         Array.isArray(bingoStatus.winnerCardNumbers[0])
                       ) {
-                        cardGrid = normalizeGridOrientation(
-                          bingoStatus.winnerCardNumbers
-                        );
+                        // Keep original orientation for winners so indices from backend align
+                        cardGrid = bingoStatus.winnerCardNumbers;
                       } else if (
                         bingoStatus.winnerCardNumbers &&
                         typeof bingoStatus.winnerCardNumbers === "object"
@@ -483,6 +482,16 @@ const BingoModals = ({
                           corners.every(([r, c]) => isMarked(cardGrid[r][c]))
                         ) {
                           return { indices: [0, 4, 20, 24] };
+                        }
+                        // inner corners
+                        const inner = [
+                          [1, 1],
+                          [1, 3],
+                          [3, 1],
+                          [3, 3],
+                        ];
+                        if (inner.every(([r, c]) => isMarked(cardGrid[r][c]))) {
+                          return { indices: [6, 8, 16, 18] };
                         }
                         return { indices: [] };
                       };
