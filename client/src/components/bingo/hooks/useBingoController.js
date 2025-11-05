@@ -18,7 +18,6 @@ import useModalState from "./useModalState";
 import {
   connectSocket,
   joinCashierRoom,
-  getSocket,
   requestNextCall,
   cancelNextCall,
 } from "../../../services/socket";
@@ -132,21 +131,16 @@ export default function useBingoController() {
     const userId = gameState.user?.id;
     if (!userId) return;
 
-    // Determine which cashier room to join
-    const roomId = gameState.user?.managedCashier || userId;
+    const socket = connectSocket();
+    try {
+      const cashierId = gameState.user?.managedCashier || gameState.user?.id;
+      joinCashierRoom(cashierId);
+    } catch {
+      /* noop */
+    }
 
-    // Ensure connection and join room
-    connectSocket();
-    joinCashierRoom(String(roomId));
-
-    const socket = getSocket();
     const onNumberCalled = (payload) => {
       try {
-        // Only apply for the current game
-        if (payload?.gameId && payload.gameId !== gameState.gameData?._id) {
-          return;
-        }
-
         const called = payload?.calledNumber;
         if (called) {
           // Prefer server-provided epoch schedule if present; fallback to next local tick
@@ -277,27 +271,7 @@ export default function useBingoController() {
             : null;
 
         if (!resolvedCardNumbers) resolvedCardNumbers = extract(cardMgmt.cards);
-        if (!resolvedCardNumbers) {
-          const refreshed = await cardMgmt.fetchBingoCards();
-          resolvedCardNumbers = extract(refreshed);
-        }
-
-        const normalizeFlat = (flat) => {
-          const panel = { B: [], I: [], N: [], G: [], O: [] };
-          ["B", "I", "N", "G", "O"].forEach((letter, col) => {
-            panel[letter] = flat.slice(col * 5, col * 5 + 5).map((v, row) => {
-              if (v === "FREE" || v === null) return "FREE";
-              const n = Number(v);
-              return Number.isFinite(n)
-                ? n
-                : col === 2 && row === 2
-                ? "FREE"
-                : v;
-            });
-          });
-          return panel;
-        };
-
+        // Prefer server-provided flat card for speed before any fetch
         if (
           !resolvedCardNumbers &&
           Array.isArray(result?.card) &&
@@ -305,6 +279,32 @@ export default function useBingoController() {
         ) {
           resolvedCardNumbers = normalizeFlat(result.card);
         }
+        if (!resolvedCardNumbers) {
+          const refreshed = await cardMgmt.fetchBingoCards();
+          resolvedCardNumbers = extract(refreshed);
+        }
+
+        // Convert a flat 25 row-major array (5 rows x 5 cols) into {B,I,N,G,O} columns
+        const normalizeFlat = (flat) => {
+          const panel = { B: [], I: [], N: [], G: [], O: [] };
+          ["B", "I", "N", "G", "O"].forEach((letter, col) => {
+            const colVals = [];
+            for (let row = 0; row < 5; row++) {
+              const v = flat[row * 5 + col];
+              if (v === "FREE" || v === null) colVals.push("FREE");
+              else {
+                const n = Number(v);
+                colVals.push(Number.isFinite(n) ? n : v);
+              }
+            }
+            panel[letter] = colVals;
+          });
+          // Ensure center FREE space
+          if (panel.N && panel.N.length >= 3) panel.N[2] = "FREE";
+          return panel;
+        };
+
+        // already handled above to avoid extra fetch
 
         /* --------------------- WINNER --------------------- */
         if (result?.isBingo && winner && !winner.disqualified) {
@@ -360,6 +360,151 @@ export default function useBingoController() {
           resolvedCardNumbers ||
           (result.card?.length === 25 ? normalizeFlat(result.card) : null);
 
+        // Client-side late-call fallback: infer if the last call wasn't the completing number
+        // Build a row-major grid [r][c] from the panel {B,I,N,G,O}
+        const inferRowGrid = (card) => {
+          if (!card) return null;
+          if (Array.isArray(card) && Array.isArray(card[0])) return card;
+          if (card && card.B && card.I && card.N && card.G && card.O) {
+            const letters = ["B", "I", "N", "G", "O"];
+            const grid = Array.from({ length: 5 }, (_, r) =>
+              Array.from({ length: 5 }, (_, c) => card[letters[c]][r])
+            );
+            grid[2][2] = "FREE";
+            return grid;
+          }
+          return null;
+        };
+
+        const grid = inferRowGrid(fallback);
+        const called = Array.isArray(gameState?.calledNumbers)
+          ? gameState.calledNumbers.map(Number)
+          : [];
+
+        const detectLocalLate = (grid, called) => {
+          if (!grid || grid.length !== 5 || called.length === 0) return null;
+          const isMarked = (v) => v === "FREE" || called.includes(Number(v));
+          const lastIdx = called.length - 1;
+
+          const buildInfo = (indices) => {
+            const nums = indices
+              .map((i) => grid[Math.floor(i / 5)][i % 5])
+              .filter((v) => v !== "FREE");
+            const pos = nums.map((n) => called.indexOf(Number(n)));
+            if (pos.some((p) => p < 0)) return null; // some numbers never called
+            const completingPos = Math.max(...pos);
+            const completingNumber = called[completingPos];
+            const isLate = completingPos < lastIdx;
+            return { isLate, completingNumber };
+          };
+
+          // Rows
+          for (let r = 0; r < 5; r++) {
+            const ok = [0, 1, 2, 3, 4].every((c) => isMarked(grid[r][c]));
+            if (ok) {
+              const indices = [0, 1, 2, 3, 4].map((c) => r * 5 + c);
+              const info = buildInfo(indices);
+              if (info && info.isLate) {
+                return {
+                  pattern: "horizontal_line",
+                  selectedIndices: indices,
+                  rowIndex: r,
+                  colIndex: null,
+                  completingNumber: info.completingNumber,
+                };
+              }
+            }
+          }
+          // Cols
+          for (let c = 0; c < 5; c++) {
+            const ok = [0, 1, 2, 3, 4].every((r) => isMarked(grid[r][c]));
+            if (ok) {
+              const indices = [0, 1, 2, 3, 4].map((r) => r * 5 + c);
+              const info = buildInfo(indices);
+              if (info && info.isLate) {
+                return {
+                  pattern: "vertical_line",
+                  selectedIndices: indices,
+                  rowIndex: null,
+                  colIndex: c,
+                  completingNumber: info.completingNumber,
+                };
+              }
+            }
+          }
+          // Main diagonal
+          if ([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][i]))) {
+            const indices = [0, 6, 12, 18, 24];
+            const info = buildInfo(indices);
+            if (info && info.isLate) {
+              return {
+                pattern: "main_diagonal",
+                selectedIndices: indices,
+                rowIndex: null,
+                colIndex: null,
+                completingNumber: info.completingNumber,
+              };
+            }
+          }
+          // Other diagonal
+          if ([0, 1, 2, 3, 4].every((i) => isMarked(grid[i][4 - i]))) {
+            const indices = [4, 8, 12, 16, 20];
+            const info = buildInfo(indices);
+            if (info && info.isLate) {
+              return {
+                pattern: "other_diagonal",
+                selectedIndices: indices,
+                rowIndex: null,
+                colIndex: null,
+                completingNumber: info.completingNumber,
+              };
+            }
+          }
+          // Four corners + center
+          const corners = [0, 4, 20, 24, 12];
+          const allMarked = corners.every((idx) =>
+            isMarked(grid[Math.floor(idx / 5)][idx % 5])
+          );
+          if (allMarked) {
+            const info = buildInfo(corners);
+            if (info && info.isLate) {
+              return {
+                pattern: "four_corners_center",
+                selectedIndices: corners,
+                rowIndex: null,
+                colIndex: null,
+                completingNumber: info.completingNumber,
+              };
+            }
+          }
+          return null;
+        };
+
+        const localLate = detectLocalLate(grid, called);
+        if (localLate) {
+          setNonWinnerCardData({
+            cardId: normalized,
+            lateCall: true,
+            lateCallMessage:
+              result?.message || "Late call detected (client fallback)",
+            cardNumbers: fallback,
+            pattern: localLate.pattern,
+            wouldHaveWon: {
+              pattern: localLate.pattern,
+              completingNumber: localLate.completingNumber,
+              callIndex: null,
+            },
+            patternInfo: {
+              selectedIndices: localLate.selectedIndices,
+              rowIndex: localLate.rowIndex,
+              colIndex: localLate.colIndex,
+            },
+          });
+          setIsNonWinnerModalOpen(true);
+          return false;
+        }
+
+        // Default: not winner
         setNonWinnerCardData({
           cardId: normalized,
           lateCall: false,
