@@ -454,6 +454,7 @@ export const callNumber = async (req, res, next) => {
           gameId,
           gameNumber: updatedGame?.gameNumber,
           calledNumber: nextNumber,
+          callSource, // include source so clients can decide whether to honor when auto-call is OFF
           playAtEpoch: playAtEpoch || undefined,
           game: {
             _id: gameId,

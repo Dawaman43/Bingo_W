@@ -141,6 +141,15 @@ export default function useBingoController() {
 
     const onNumberCalled = (payload) => {
       try {
+        // When auto-call is OFF, ignore background auto/forced calls from socket
+        // but still allow manual calls (e.g., moderator-triggered or local Next button).
+        if (!isAutoCallEnabled) {
+          const source = payload?.callSource || payload?.source || null;
+          if (source !== "manual") {
+            return; // drop auto/forced calls when auto-call is Off
+          }
+        }
+
         const called = payload?.calledNumber;
         if (called) {
           // Prefer server-provided epoch schedule if present; fallback to next local tick
