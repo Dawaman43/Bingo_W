@@ -184,9 +184,10 @@ const BingoModals = ({
   // Heuristic: ensure a 5x5 grid aligns with B-I-N-G-O column ranges. If rows/cols are swapped, transpose it.
   const normalizeGridOrientation = (grid) => {
     try {
-      if (!Array.isArray(grid) || grid.length !== 5) return grid;
+      if (!Array.isArray(grid) || grid.length !== 5)
+        return { grid, transposed: false };
       if (grid.some((row) => !Array.isArray(row) || row.length !== 5))
-        return grid;
+        return { grid, transposed: false };
 
       const inRange = (v, min, max) => {
         const n = typeof v === "number" ? v : Number(v);
@@ -229,16 +230,13 @@ const BingoModals = ({
         if (transposed[2][2] === undefined || transposed[2][2] === null) {
           transposed[2][2] = "FREE";
         }
-        return transposed;
+        return { grid: transposed, transposed: true };
       }
-      return grid;
+      return { grid, transposed: false };
     } catch {
-      return grid;
+      return { grid, transposed: false };
     }
   };
-
-  // Simple transpose helper for 5x5 grids
-  // Removed transposeGrid (no longer needed after orientation fix)
 
   // Robust integer parser: handles numbers, numeric strings, and trims extras
   const toInt = (v) => {
@@ -791,19 +789,25 @@ const BingoModals = ({
                 <div className="grid grid-cols-5 gap-1 pt-0.5 relative w-full max-w-[360px] mx-auto">
                   {(() => {
                     let cardGrid;
+                    let wasTransposed = false;
                     if (
                       Array.isArray(nonWinnerCardData.cardNumbers) &&
                       Array.isArray(nonWinnerCardData.cardNumbers[0])
                     ) {
-                      cardGrid = normalizeGridOrientation(
+                      const normalized = normalizeGridOrientation(
                         nonWinnerCardData.cardNumbers
                       );
+                      cardGrid = normalized.grid;
+                      wasTransposed = normalized.transposed;
                     } else if (
                       nonWinnerCardData.cardNumbers &&
                       typeof nonWinnerCardData.cardNumbers === "object"
                     ) {
                       // If it's {B,I,N,G,O}, build grid
-                      cardGrid = buildGrid(nonWinnerCardData.cardNumbers);
+                      const rawGrid = buildGrid(nonWinnerCardData.cardNumbers);
+                      const normalized = normalizeGridOrientation(rawGrid);
+                      cardGrid = normalized.grid;
+                      wasTransposed = normalized.transposed;
                     } else if (
                       Array.isArray(nonWinnerCardData.cardNumbers) &&
                       nonWinnerCardData.cardNumbers.length === 25
@@ -822,7 +826,9 @@ const BingoModals = ({
                               : Number(flatNumbers[index]);
                         }
                       }
-                      cardGrid = normalizeGridOrientation(cardGrid);
+                      const normalized = normalizeGridOrientation(cardGrid);
+                      cardGrid = normalized.grid;
+                      wasTransposed = normalized.transposed;
                     } else {
                       cardGrid = Array(5)
                         .fill()
@@ -834,7 +840,16 @@ const BingoModals = ({
                       nonWinnerCardData.patternInfo?.selectedIndices ||
                       nonWinnerCardData.patternInfo?.localSelectedIndices ||
                       [];
-                    const remappedPatternIndices = patternIndices; // no remap needed now
+                    let remappedPatternIndices = patternIndices.map(toInt);
+                    if (wasTransposed) {
+                      remappedPatternIndices = remappedPatternIndices
+                        .filter(Number.isFinite)
+                        .map((idx) => {
+                          const old_r = Math.floor(idx / 5);
+                          const old_c = idx % 5;
+                          return old_c * 5 + old_r;
+                        });
+                    }
                     const calledInPattern =
                       nonWinnerCardData.calledNumbersInPattern || [];
                     const otherCalled =

@@ -226,6 +226,84 @@ export default function useBingoController() {
     autoCallSpeed,
   ]);
 
+  // Helper functions for flat array orientation detection
+  const buildRowMajorPanel = useCallback((flat) => {
+    const panel = { B: [], I: [], N: [], G: [], O: [] };
+    const letters = ["B", "I", "N", "G", "O"];
+    for (let col = 0; col < 5; col++) {
+      for (let row = 0; row < 5; row++) {
+        const idx = row * 5 + col;
+        let v = flat[idx];
+        panel[letters[col]][row] =
+          v === "FREE" || v == null || v === undefined ? "FREE" : Number(v);
+      }
+    }
+    if (panel.N && panel.N.length >= 3) panel.N[2] = "FREE";
+    return panel;
+  }, []);
+
+  const buildColMajorPanel = useCallback((flat) => {
+    const panel = { B: [], I: [], N: [], G: [], O: [] };
+    const letters = ["B", "I", "N", "G", "O"];
+    for (let col = 0; col < 5; col++) {
+      for (let row = 0; row < 5; row++) {
+        const idx = col * 5 + row;
+        let v = flat[idx];
+        panel[letters[col]][row] =
+          v === "FREE" || v == null || v === undefined ? "FREE" : Number(v);
+      }
+    }
+    if (panel.N && panel.N.length >= 3) panel.N[2] = "FREE";
+    return panel;
+  }, []);
+
+  const gridFromPanel = useCallback((panel) => {
+    const grid = [];
+    for (let row = 0; row < 5; row++) {
+      grid[row] = [
+        panel.B[row],
+        panel.I[row],
+        panel.N[row],
+        panel.G[row],
+        panel.O[row],
+      ];
+    }
+    return grid;
+  }, []);
+
+  const computeColScore = useCallback((grid) => {
+    let s = 0;
+    for (let c = 0; c < 5; c++) {
+      const min = c * 15 + 1;
+      const max = min + 14;
+      for (let r = 0; r < 5; r++) {
+        const v = grid[r][c];
+        if (v !== "FREE") {
+          const n = Number(v);
+          if (Number.isFinite(n) && n >= min && n <= max) s++;
+        }
+      }
+    }
+    return s;
+  }, []);
+
+  const resolveFlatNumbers = useCallback(
+    (flat) => {
+      if (!Array.isArray(flat) || flat.length !== 25) return null;
+
+      const rowMajorPanel = buildRowMajorPanel(flat);
+      const rowGrid = gridFromPanel(rowMajorPanel);
+      const rowScore = computeColScore(rowGrid);
+
+      const colMajorPanel = buildColMajorPanel(flat);
+      const colGrid = gridFromPanel(colMajorPanel);
+      const colScore = computeColScore(colGrid);
+
+      return colScore > rowScore ? colMajorPanel : rowMajorPanel;
+    },
+    [buildRowMajorPanel, buildColMajorPanel, gridFromPanel, computeColScore]
+  );
+
   /* ------------------------------------------------------------------ *
    *  CHECK CARD – fully async, returns true/false
    * ------------------------------------------------------------------ */
@@ -285,25 +363,6 @@ export default function useBingoController() {
           : null;
 
         /* ---------- Resolve card numbers fast (no extra fetch) ---------- */
-        // Convert a flat 25 row-major array (5 rows x 5 cols) into {B,I,N,G,O} columns
-        const normalizeFlat = (flat) => {
-          const panel = { B: [], I: [], N: [], G: [], O: [] };
-          ["B", "I", "N", "G", "O"].forEach((letter, col) => {
-            const colVals = [];
-            for (let row = 0; row < 5; row++) {
-              const v = flat[row * 5 + col];
-              if (v === "FREE" || v === null) colVals.push("FREE");
-              else {
-                const n = Number(v);
-                colVals.push(Number.isFinite(n) ? n : v);
-              }
-            }
-            panel[letter] = colVals;
-          });
-          if (panel.N && panel.N.length >= 3) panel.N[2] = "FREE";
-          return panel;
-        };
-
         let resolvedCardNumbers = winner?.numbers || null;
 
         const extract = (cards) =>
@@ -312,14 +371,15 @@ export default function useBingoController() {
             : null;
 
         if (!resolvedCardNumbers) resolvedCardNumbers = extract(cardMgmt.cards);
+
+        // Handle flat 25 with orientation detection
         if (
           !resolvedCardNumbers &&
           Array.isArray(result?.card) &&
           result.card.length === 25
         ) {
-          resolvedCardNumbers = normalizeFlat(result.card);
+          resolvedCardNumbers = resolveFlatNumbers(result.card);
         }
-        // Avoid extra network fetches to keep check fast
 
         /* --------------------- WINNER --------------------- */
         if (result?.isBingo && winner && !winner.disqualified) {
@@ -350,7 +410,9 @@ export default function useBingoController() {
         if (winner?.lateCall) {
           const fallback =
             resolvedCardNumbers ||
-            (result.card?.length === 25 ? normalizeFlat(result.card) : null);
+            (result.card?.length === 25
+              ? resolveFlatNumbers(result.card)
+              : null);
 
           setNonWinnerCardData({
             cardId: normalized,
@@ -373,7 +435,7 @@ export default function useBingoController() {
         /* --------------------- NO BINGO --------------------- */
         const fallback =
           resolvedCardNumbers ||
-          (result.card?.length === 25 ? normalizeFlat(result.card) : null);
+          (result.card?.length === 25 ? resolveFlatNumbers(result.card) : null);
 
         // Client-side late-call fallback: infer if the last call wasn't the completing number
         // Build a row-major grid [r][c] from the panel {B,I,N,G,O}
@@ -556,6 +618,7 @@ export default function useBingoController() {
       setIsInvalidCardModalOpen,
       setIsWinnerModalOpen,
       setIsNonWinnerModalOpen,
+      resolveFlatNumbers,
     ]
   );
 
