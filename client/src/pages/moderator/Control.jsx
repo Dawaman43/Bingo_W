@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 // import { useNavigate } from "react-router-dom";
 import ModeratorLayout from "../../components/moderator/ModeratorLayout";
 import moderatorService from "../../services/moderator";
@@ -51,33 +51,97 @@ export default function ModeratorDashboard() {
     } catch (err) {
       console.error("[fetchCashierInfo] Error:", err);
       setError("Failed to fetch cashier information. Please try again.");
-      throw err;
+      throw err; // propagate so caller can decide to abort fetchGames
     }
   };
 
-  const fetchGames = async (background = false) => {
-    if (!background) {
-      setLoading(true);
-    }
-    setError(null);
+  // Lightweight deep compare via stable JSON; memoize last snapshot to avoid stringifying on every poll
+  const lastSnapshotRef = useRef({
+    active: null,
+    finished: null,
+    pending: null,
+    configured: null,
+  });
+  const stableStringify = (obj) => {
     try {
-      if (background && fetchingRef.current) {
-        // Skip if a background fetch is still in-flight
-        return;
+      return JSON.stringify(obj);
+    } catch {
+      return "";
+    }
+  };
+
+  const applyGameLists = useCallback((allGames, futureWinnersResp) => {
+    const nextActive = allGames.filter((g) => g.status === "active");
+    const nextFinished = allGames.filter(
+      (g) => g.status === "finished" || g.status === "completed"
+    );
+    const nextPending = allGames.filter((g) => g.status === "pending");
+
+    const futureWinners = Array.isArray(futureWinnersResp)
+      ? futureWinnersResp
+      : [];
+    const configuredFutureWinners = futureWinners.filter((winner) => {
+      const game = allGames.find((g) => g.gameNumber === winner.gameNumber);
+      return !game || game.status === "pending";
+    });
+    const nextConfigured = configuredFutureWinners.map((winner) => ({
+      _id: winner._id,
+      gameNumber: winner.gameNumber,
+      cardId: winner.cardId,
+      pattern: winner.pattern || "Not set",
+      jackpotEnabled: winner.jackpotEnabled,
+      status: allGames.find((g) => g.gameNumber === winner.gameNumber)
+        ? "pending"
+        : "not created",
+    }));
+
+    const snapshot = {
+      active: stableStringify(nextActive),
+      finished: stableStringify(nextFinished),
+      pending: stableStringify(nextPending),
+      configured: stableStringify(nextConfigured),
+    };
+    const last = lastSnapshotRef.current;
+    if (last.active !== snapshot.active) setActiveGames(nextActive);
+    if (last.finished !== snapshot.finished) setFinishedGames(nextFinished);
+    if (last.pending !== snapshot.pending) setPendingGames(nextPending);
+    if (last.configured !== snapshot.configured)
+      setConfiguredWinnerGames(nextConfigured);
+    lastSnapshotRef.current = snapshot;
+  }, []);
+
+  const fetchGames = useCallback(
+    async (background = false) => {
+      if (!background) {
+        setLoading(true);
       }
-      fetchingRef.current = true;
-      // Only fetch cashier once; reuse cached id afterwards
-      let cId = cashierId;
-      if (!cId) {
-        cId = await fetchCashierInfo();
-      }
-      if (!cId) {
-        throw new Error("No cashierId returned from fetchCashierInfo");
-      }
-      // Fetch report and future winners concurrently for speed
-      const [report, futureWinnersResp] = await Promise.all([
-        moderatorService.getCashierReport(cId),
-        (async () => {
+      setError(null);
+      try {
+        if (background && fetchingRef.current) {
+          // Skip if a background fetch is still in-flight
+          return;
+        }
+        fetchingRef.current = true;
+        // Only fetch cashier once; reuse cached id afterwards
+        let cId = cashierId;
+        if (!cId) {
+          cId = await fetchCashierInfo();
+        }
+        if (!cId) {
+          throw new Error("No cashierId returned from fetchCashierInfo");
+        }
+        // Abort controller to cancel slow overlapping polls
+        if (!fetchGames.abortRef) fetchGames.abortRef = { controller: null };
+        try {
+          fetchGames.abortRef.controller?.abort?.();
+        } catch (e) {
+          // ignore abort errors
+        }
+        const controller = new AbortController();
+        fetchGames.abortRef.controller = controller;
+
+        const reportPromise = moderatorService.getCashierReport(cId);
+        const futurePromise = (async () => {
           try {
             return await moderatorService.getFutureWinners(cId);
           } catch (err) {
@@ -87,96 +151,75 @@ export default function ModeratorDashboard() {
             );
             return [];
           }
-        })(),
-      ]);
+        })();
+        const [report, futureWinnersResp] = await Promise.all([
+          reportPromise,
+          futurePromise,
+        ]);
 
-      const allGames = report.games || [];
-      if (!Array.isArray(allGames)) {
-        throw new Error("No valid games data returned from service");
+        const allGames = report.games || [];
+        if (!Array.isArray(allGames)) {
+          throw new Error("No valid games data returned from service");
+        }
+        applyGameLists(allGames, futureWinnersResp);
+      } catch (err) {
+        const errorMessage =
+          err.message ||
+          "Failed to fetch games or future winners. Please try again.";
+        setError(errorMessage);
+        console.error("[fetchGames] Detailed Error:", {
+          message: err.message,
+          stack: err.stack,
+          response: err.response
+            ? { status: err.response.status, data: err.response.data }
+            : null,
+        });
+      } finally {
+        if (!background) {
+          setLoading(false);
+        }
       }
-
-      // Update state only if changed to reduce re-renders
-      const nextActive = allGames.filter((g) => g.status === "active");
-      const nextFinished = allGames.filter(
-        (g) => g.status === "finished" || g.status === "completed"
-      );
-      const nextPending = allGames.filter((g) => g.status === "pending");
-
-      setActiveGames((prev) =>
-        JSON.stringify(prev) !== JSON.stringify(nextActive) ? nextActive : prev
-      );
-      setFinishedGames((prev) =>
-        JSON.stringify(prev) !== JSON.stringify(nextFinished)
-          ? nextFinished
-          : prev
-      );
-      setPendingGames((prev) =>
-        JSON.stringify(prev) !== JSON.stringify(nextPending)
-          ? nextPending
-          : prev
-      );
-
-      const futureWinners = Array.isArray(futureWinnersResp)
-        ? futureWinnersResp
-        : [];
-
-      const configuredFutureWinners = futureWinners.filter((winner) => {
-        const game = allGames.find((g) => g.gameNumber === winner.gameNumber);
-        return !game || game.status === "pending";
-      });
-
-      const nextConfigured = configuredFutureWinners.map((winner) => ({
-        _id: winner._id,
-        gameNumber: winner.gameNumber,
-        cardId: winner.cardId,
-        pattern: winner.pattern || "Not set",
-        jackpotEnabled: winner.jackpotEnabled,
-        status: allGames.find((g) => g.gameNumber === winner.gameNumber)
-          ? "pending"
-          : "not created",
-      }));
-      setConfiguredWinnerGames((prev) =>
-        JSON.stringify(prev) !== JSON.stringify(nextConfigured)
-          ? nextConfigured
-          : prev
-      );
-    } catch (err) {
-      const errorMessage =
-        err.message ||
-        "Failed to fetch games or future winners. Please try again.";
-      setError(errorMessage);
-      console.error("[fetchGames] Detailed Error:", {
-        message: err.message,
-        stack: err.stack,
-        response: err.response
-          ? { status: err.response.status, data: err.response.data }
-          : null,
-      });
-    } finally {
-      if (!background) {
-        setLoading(false);
-      }
-    }
-    fetchingRef.current = false;
-  };
+      fetchingRef.current = false;
+    },
+    [cashierId, applyGameLists]
+  );
 
   useEffect(() => {
+    let mounted = true;
     // initial load
     fetchGames(false);
-    const intervalId = setInterval(() => {
-      // Only poll when tab is visible to reduce contention
+    // Adaptive polling: slow when hidden, fast when focused
+    const baseInterval = 5000;
+    let intervalMs = baseInterval;
+    const tick = () => {
+      if (!mounted) return;
       if (!document.hidden) {
         fetchGames(true);
+        intervalMs = baseInterval; // reset to normal when visible
+      } else {
+        intervalMs = 15000; // slow polling in background
       }
-    }, 5000);
+      schedule();
+    };
+    let intervalId;
+    const schedule = () => {
+      clearTimeout(intervalId);
+      intervalId = setTimeout(tick, intervalMs);
+    };
+    schedule();
     const onVisible = () => {
-      if (!document.hidden) fetchGames(true);
+      if (!document.hidden) {
+        intervalMs = baseInterval;
+        fetchGames(true);
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => clearInterval(intervalId);
-    // fetchGames intentionally not added to deps to avoid resetting interval on each render
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      mounted = false;
+      clearTimeout(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [fetchGames]);
 
   const handleToggleJackpot = async (gameId, currentEnabled) => {
     setLoading(true);
